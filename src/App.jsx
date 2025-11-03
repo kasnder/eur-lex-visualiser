@@ -225,7 +225,7 @@ function TopBar({ lawPath, setLawPath, lists, selected, onPrevNext }) {
 
   return (
     <header className="sticky top-0 z-20 border-b bg-white/80 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="mx-auto w-full px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="text-base font-semibold">EU Law Visualiser</div>
           <span className="hidden rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 md:inline">
@@ -371,7 +371,7 @@ export default function App() {
         onPrevNext={onPrevNext}
       />
 
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="w-full px-6 py-6">
         {/* Top grid: TOC | Annexes | Recitals */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {/* TOC */}
