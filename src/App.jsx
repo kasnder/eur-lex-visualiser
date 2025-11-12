@@ -15,7 +15,7 @@ const LAWS = [
   { label: "DSA (EU 2022/2065)", value: "data/dsa.xhtml" },
   { label: "Data Act (EU 2023/2854)", value: "data/da.xhtml" },
   { label: "Data Governance Act (EU 2022/868)", value: "data/dga.html" },
-  { label: "ePrivacy - Consolidated, no recitals", value: "data/eprivacy_consolidated.html" },
+  //{ label: "ePrivacy - Consolidated, no recitals", value: "data/eprivacy_consolidated.html" },
 ];
 
 // ---------------- Minimal UI primitives ----------------
@@ -60,17 +60,42 @@ function parseSingleXHTMLToCombined(xhtmlText) {
   const annexes = [];
   let currentDivNum, currentDivTitle;
 
+  const norm = (s = "") => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  let currentChapter = { number: "", title: "" };
+  let currentSection = { number: "", title: "" };
+  let pendingHeader = null; // "chapter" | "section" | null
+
   const walker = doc.createTreeWalker(doc.body || doc, NodeFilter.SHOW_ELEMENT);
   while (walker.nextNode()) {
     const el = walker.currentNode;
     if (!(el instanceof Element)) continue;
 
-    // Division headings
+    // "Division headings"
     if (el.tagName === "P" && (el.classList.contains("title-division-1") || el.classList.contains("oj-ti-section-1"))) {
-      currentDivNum = getText(el);
+      const txt = norm(getText(el));
+      const upper = txt.toUpperCase();
+
+      if (/^\s*CHAPTER\b/.test(upper)) {
+        currentChapter = { number: txt, title: "" };
+        currentSection = { number: "", title: "" }; // reset section when a new chapter starts
+        pendingHeader = "chapter";
+      } else if (/^\s*SECTION\b/.test(upper)) {
+        currentSection = { number: txt, title: "" };
+        pendingHeader = "section";
+      } else {
+        // If neither keyword appears, treat as a chapter-level number
+        currentChapter = { number: txt, title: "" };
+        currentSection = { number: "", title: "" };
+        pendingHeader = "chapter";
+      }
     }
+
     if (el.tagName === "P" && (el.classList.contains("title-division-2") || el.classList.contains("oj-ti-section-2"))) {
-      currentDivTitle = getText(el);
+      const txt = norm(getText(el));
+      if (pendingHeader === "chapter") currentChapter.title = txt;
+      else if (pendingHeader === "section") currentSection.title = txt;
+      pendingHeader = null;
     }
 
     // Recitals (OJ typical layout: DIV.eli-subdivision#rct_*)
@@ -104,10 +129,14 @@ function parseSingleXHTMLToCombined(xhtmlText) {
       const article_number = n ? n[1] : getText(el);
       const titleBlock = container ? container.querySelector("div.eli-title p.oj-sti-art") : null;
       const article_title = titleBlock ? getText(titleBlock) : "";
+      console.log({ number: currentDivNum, title: currentDivTitle });
       articles.push({
         article_number,
         article_title,
-        division: { number: currentDivNum, title: currentDivTitle },
+        division: {
+          chapter: { number: currentChapter.number, title: currentChapter.title },
+          section: currentSection.number ? { number: currentSection.number, title: currentSection.title } : null,
+        },
         article_html: innerHTML(container || el.parentElement),
       });
       continue;
@@ -121,10 +150,14 @@ function parseSingleXHTMLToCombined(xhtmlText) {
         const article_number = m ? m[1] : numP.textContent.trim();
         const titleP = el.querySelector("p.stitle-article-norm");
         const article_title = titleP ? getText(titleP) : "";
+        console.log({ number: currentDivNum, title: currentDivTitle });
         articles.push({
           article_number,
           article_title,
-          division: { number: currentDivNum, title: currentDivTitle },
+          division: {
+            chapter: { number: currentChapter.number, title: currentChapter.title },
+            section: currentSection.number ? { number: currentSection.number, title: currentSection.title } : null,
+          },
           article_html: innerHTML(el),
         });
       }
@@ -325,13 +358,38 @@ export default function App() {
 
   // Group articles by chapter for TOC
   const toc = useMemo(() => {
-    const map = new Map();
+    const chapters = [];
+    const chMap = new Map(); // chapterLabel -> chapterObj
+
+    const label = (d) => (d ? [d.number, d.title].filter(Boolean).join(" — ").trim() : "");
+
     for (const a of data.articles) {
-      const key = `${a?.division?.number || ""} — ${a?.division?.title || ""}`.trim();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(a);
+      const chLabel = label(a?.division?.chapter) || "(Untitled Chapter)";
+      const scLabel = label(a?.division?.section) || null;
+
+      let ch = chMap.get(chLabel);
+      if (!ch) {
+        ch = { label: chLabel, items: [], sections: [], secMap: new Map() };
+        chMap.set(chLabel, ch);
+        chapters.push(ch);
+      }
+
+      if (scLabel) {
+        let sec = ch.secMap.get(scLabel);
+        if (!sec) {
+          sec = { label: scLabel, items: [] };
+          ch.secMap.set(scLabel, sec);
+          ch.sections.push(sec);
+        }
+        sec.items.push(a);
+      } else {
+        ch.items.push(a);
+      }
     }
-    return Array.from(map.entries());
+
+    // drop helper maps before rendering
+    chapters.forEach((c) => delete c.secMap);
+    return chapters;
   }, [data.articles]);
 
   // --- Selection helpers ---
@@ -384,24 +442,38 @@ export default function App() {
             <h2 className="text-base font-semibold">Table of Contents</h2>
             <p className="mt-1 text-sm text-gray-600">Chapters and Articles.</p>
             <div className="mt-3 space-y-2">
-              {toc.map(([chapter, items]) => (
-                <Accordion key={chapter} title={chapter || "(Untitled)"}>
-                  <ul className="space-y-1">
-                    {items.map((a) => (
-                      <li key={`toc-${a.article_number}`}>
-                        <Button
-                          variant="ghost"
-                          className="w-full justify-between"
-                          onClick={() => onClickArticle(a)}
-                        >
-                          <span className="truncate text-left">
-                            Article {a.article_number}: {a.article_title}
-                          </span>
-                          <span className="text-xs text-gray-500">›</span>
-                        </Button>
-                      </li>
-                    ))}   {/* ✅ closed the inner .map() */}
-                  </ul>
+              {toc.map((ch) => (
+                <Accordion key={ch.label} title={ch.label || "(Untitled Chapter)"}>
+                  {ch.items?.length > 0 && (
+                    <ul className="space-y-1">
+                      {ch.items.map((a) => (
+                        <li key={`toc-${a.article_number}`}>
+                          <Button variant="ghost" className="w-full justify-start text-left" onClick={() => onClickArticle(a)}>
+                            <span className="truncate text-left">Article {a.article_number}: {a.article_title}</span>
+                            <span className="text-xs text-gray-500">›</span>
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {ch.sections?.map((sec) => (
+                    <div key={sec.label} className="mt-3">
+                      <div className="text-sm font-semibold text-gray-700 text-center border-t border-gray-100 pt-2">
+                        {sec.label}
+                      </div>
+                      <ul className="mt-1 space-y-1">
+                        {sec.items.map((a) => (
+                          <li key={`toc-${a.article_number}`}>
+                            <Button variant="ghost" className="w-full justify-start text-left" onClick={() => onClickArticle(a)}>
+                              <span className="truncate text-left">Article {a.article_number}: {a.article_title}</span>
+                              <span className="text-xs text-gray-500">›</span>
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </Accordion>
               ))}
               {toc.length === 0 && <div className="text-sm text-gray-600">No articles detected.</div>}
