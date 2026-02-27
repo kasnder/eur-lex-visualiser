@@ -23,12 +23,29 @@ function escapeHtml(str) {
 }
 
 /**
+ * Build a stem-based regex pattern for inflected languages (e.g. Polish).
+ * Truncates each word to a stem and allows flexible endings.
+ * "dane osobowe" → /dan\S+ osobow\S+/i  (matches "danych osobowych", "danymi osobowymi", etc.)
+ */
+function buildStemPattern(term) {
+    const words = term.split(/\s+/);
+    const stemmed = words.map(w => {
+        // Keep at least 3 chars, truncate up to 3 chars from the end
+        const minLen = Math.max(3, w.length - 3);
+        const stem = escapeRegex(w.substring(0, minLen));
+        return stem + '\\S*';
+    });
+    return stemmed.join('\\s+');
+}
+
+/**
  * Inject tooltips for defined terms into HTML content.
- * 
+ *
  * @param {string} html - The HTML content to process
  * @param {Array<{term: string, definition: string}>} definitions - Array of definitions
  * @param {Object} options - Options
  * @param {boolean} options.skipDefinitionsArticle - If true, don't highlight terms in the definitions article itself
+ * @param {string} options.langCode - Language code (e.g. "PL") for inflection-aware matching
  * @returns {string} - HTML with definition tooltips injected
  */
 export function injectDefinitionTooltips(html, definitions, options = {}) {
@@ -36,9 +53,11 @@ export function injectDefinitionTooltips(html, definitions, options = {}) {
         return html;
     }
 
-    // Check if this is the definitions article (contains "Definitions" heading)
+    const useInflection = options.langCode === "PL";
+
+    // Check if this is the definitions article (contains "Definitions" heading in any supported language)
     if (options.skipDefinitionsArticle) {
-        const isDefinitionsArticle = /<p[^>]*class="[^"]*oj-sti-art[^"]*"[^>]*>\s*Definitions?\s*<\/p>/i.test(html);
+        const isDefinitionsArticle = /<p[^>]*class="[^"]*oj-sti-art[^"]*"[^>]*>\s*(?:Definitions?|Definicj[ea]|Begriffsbestimmungen?|D[eé]finitions?|Definicion[e]?s?|Definizion[ei])\s*<\/p>/i.test(html);
         if (isDefinitionsArticle) {
             return html;
         }
@@ -50,12 +69,12 @@ export function injectDefinitionTooltips(html, definitions, options = {}) {
     const sortedDefs = [...definitions].sort((a, b) => b.term.length - a.term.length);
 
     for (const { term, definition } of sortedDefs) {
-        // Create a regex that matches the term as a whole word, case-insensitive
+        // Create a regex that matches the term (with optional inflection for Polish)
         // But NOT inside HTML tags or already-wrapped spans
-        const termPattern = new RegExp(
-            `(?<![\\w-])${escapeRegex(term)}(?![\\w-])`,
-            'gi'
-        );
+        const pattern = useInflection
+            ? buildStemPattern(term)
+            : `(?<![\\w-])${escapeRegex(term)}(?![\\w-])`;
+        const termPattern = new RegExp(pattern, 'gi');
 
         // We need to be careful not to replace inside HTML tags
         // Split by tags, process text nodes only

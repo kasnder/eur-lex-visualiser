@@ -634,12 +634,15 @@ export function LawViewer() {
   const processedHtml = useMemo(() => {
     if (!selected.html) return "";
     // Skip injection for the definitions article itself
-    const skipDefinitions = selected.kind === "article" &&
-      data.articles.find(a => a.article_number === selected.id)?.article_title?.toLowerCase().includes('definition');
+    const defArticle = selected.kind === "article" &&
+      data.articles.find(a => a.article_number === selected.id);
+    const skipDefinitions = defArticle?.article_title &&
+      /definitions?|definicj/i.test(defArticle.article_title);
     return injectDefinitionTooltips(selected.html, data.definitions, {
-      skipDefinitionsArticle: skipDefinitions
+      skipDefinitionsArticle: skipDefinitions,
+      langCode: data.langCode
     });
-  }, [selected.html, selected.kind, selected.id, data.definitions, data.articles]);
+  }, [selected.html, selected.kind, selected.id, data.definitions, data.articles, data.langCode]);
 
   // Handle printing
   useEffect(() => {

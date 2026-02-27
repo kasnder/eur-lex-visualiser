@@ -1,46 +1,25 @@
 // NLP Algorithm Version - bump this when algorithm changes to invalidate cache
-export const NLP_VERSION = 10;
+export const NLP_VERSION = 11;
 
-// Stop words for EU law TF-IDF analysis
-// Only truly generic terms that don't indicate semantic relevance
-const STOP_WORDS = new Set([
-  // Basic English stop words
-  "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "at", "by", "for", "with",
-  "about", "against", "between", "into", "through", "during", "before", "after", "above", "below",
-  "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further", "once",
-  "here", "there", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most",
-  "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-  "can", "will", "just", "should", "now", "also", "therefore", "upon", "within", "without",
-  // EU legal structure terms (appear everywhere, don't differentiate content)
-  "union", "member", "states", "commission", "article", "paragraph", "eu", "european",
-  "regulation", "regulations", "directive", "directives", "decision", "decisions",
-  "law", "act", "provisions", "measures",
-  "shall", "may", "whereas", "pursuant", "accordance", "hereof", "thereof",
-  // Common legal verbs/procedural language
-  "apply", "applicable", "applied", "applies", "provide", "provided", "provides", "providing",
-  "ensure", "ensures", "ensuring", "establish", "establishing", "regard", "regarding",
-  "refer", "referred", "include", "including", "included", "follow", "following", "follows",
-  "make", "made", "take", "taken", "taking", "set", "given", "lay", "laying",
-  // Generic filler terms
-  "relevant", "appropriate", "necessary", "competent", "concerned", "particular",
-  "respect", "account", "case", "cases", "order", "view", "way", "ways", "manner",
-  "point", "points", "subject", "meaning", "need", "needs", "effect", "effects",
-  // Additional boilerplate/transition words
-  "however", "furthermore", "especially", "certain", "inter", "alia"
-]);
+import { getStopWords } from "./languages.js";
+
+// Default (English) stop words — used when no language code is provided
+const DEFAULT_STOP_WORDS = getStopWords("EN");
 
 /**
  * Tokenize text into an array of words, removing punctuation and stop words.
- * @param {string} text 
+ * @param {string} text
+ * @param {string} [langCode] - Optional language code (e.g. "PL") for language-specific stop words
  * @returns {string[]}
  */
-export function tokenize(text) {
+export function tokenize(text, langCode) {
   if (!text) return [];
+  const stopWords = langCode ? getStopWords(langCode) : DEFAULT_STOP_WORDS;
   return text
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ") // replace punctuation with space
+    .replace(/[^\w\s\u00C0-\u024F]/g, " ") // replace punctuation with space (keep accented/Polish chars)
     .split(/\s+/)
-    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    .filter(w => w.length > 2 && !stopWords.has(w));
 }
 
 /**

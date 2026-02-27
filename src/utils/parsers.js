@@ -1,7 +1,14 @@
 // ---------------- Parser (best-effort for OJ & consolidated) ----------------
+import { detectLanguage, getLangConfig, buildMeansRegex } from "./languages.js";
+
 export function parseSingleXHTMLToCombined(xhtmlText) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xhtmlText, "text/html");
+
+  // Detect document language and load matching patterns
+  const langCode = detectLanguage(doc);
+  const lang = getLangConfig(langCode);
+  const meansRegex = buildMeansRegex(lang);
 
   const getText = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : "");
   const innerHTML = (el) =>
@@ -16,19 +23,19 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
   const annexes = [];
   let title = "";
 
-  // Helper to format title (cut after "of" and Title Case)
+  // Helper to format title (cut after language-specific preposition and Title Case)
   const formatTitle = (t) => {
     if (!t) return "";
-    // Cut after " of " (case insensitive)
-    let short = t.split(/\s+of\s+/i)[0];
+    // Cut after language-specific preposition (e.g. "of" for EN, "z dnia" for PL)
+    let short = t.split(lang.titleSplit)[0];
 
     // Convert to Title Case logic
     // 1. Lowercase everything
     // 2. Capitalize first letter of each word
-    // 3. Fix specific acronyms like (EU), (EC)
+    // 3. Fix specific acronyms like (EU), (EC), (UE), (WE)
     return short.toLowerCase()
       .replace(/(?:^|\s)\S/g, (a) => a.toUpperCase())
-      .replace(/\b(Eu|Ec|Eec|Euratom)\b/gi, (match) => match.toUpperCase());
+      .replace(/\b(Eu|Ec|Eec|Euratom|Ue|We)\b/gi, (match) => match.toUpperCase());
   };
 
   // Extract title (first occurrence of title classes)
@@ -49,7 +56,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
       const candidate = match[1].trim();
       // Heuristic: Short titles are usually Capitalized Words, not "Text with EEA relevance"
       if (
-        !candidate.toLowerCase().includes("text with eea relevance") &&
+        !lang.eea.test(candidate) &&
         !candidate.match(/^\d{4}\/\d+$/) && // not just a number
         candidate.length > 3 &&
         candidate.length < 100
@@ -87,13 +94,12 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
       (el.classList.contains("title-division-1") || el.classList.contains("oj-ti-section-1"))
     ) {
       const txt = norm(getText(el));
-      const upper = txt.toUpperCase();
 
-      if (/^\s*CHAPTER\b/.test(upper)) {
+      if (lang.chapter.test(txt)) {
         currentChapter = { number: txt, title: "" };
         currentSection = { number: "", title: "" }; // reset section when a new chapter starts
         pendingHeader = "chapter";
-      } else if (/^\s*SECTION\b/.test(upper)) {
+      } else if (lang.section.test(txt)) {
         currentSection = { number: txt, title: "" };
         pendingHeader = "section";
       } else {
@@ -141,7 +147,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
       while (container && !(container.tagName === "DIV" && container.classList.contains("eli-subdivision"))) {
         container = container.parentElement;
       }
-      const n = getText(el).match(/Article\s+(\d+)/i);
+      const n = getText(el).match(lang.article);
       const article_number = n ? n[1] : getText(el);
       const titleBlock = container ? container.querySelector("div.eli-title p.oj-sti-art") : null;
       const article_title = titleBlock ? getText(titleBlock) : "";
@@ -161,7 +167,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
     if (el.tagName === "DIV" && el.classList.contains("eli-subdivision")) {
       const numP = el.querySelector("p.title-article-norm");
       if (numP) {
-        const m = numP.textContent.match(/Article\s+(\d+)/i);
+        const m = numP.textContent.match(lang.article);
         const article_number = m ? m[1] : numP.textContent.trim();
         const titleP = el.querySelector("p.stitle-article-norm");
         const article_title = titleP ? getText(titleP) : "";
@@ -181,7 +187,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
     if (el.tagName === "P") {
       const t = getText(el);
       const looksLikeAnnex =
-        /^ANNEX(\s+[IVXLC]+|\s+\d+)?/i.test(t) ||
+        lang.annex.test(t) ||
         el.classList.contains("oj-ti-annex") ||
         el.classList.contains("oj-ti-annex-1") ||
         el.classList.contains("title-annex-norm");
@@ -229,7 +235,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
         const annex_html = innerHTML(clone);
 
         // Id/number if present
-        const m = t.match(/^ANNEX\s*([IVXLC]+|\d+)?/i);
+        const m = t.match(lang.annexCapture);
         const annex_id = (m && (m[1] || "").trim()) || title;
         annexes.push({ annex_id, annex_title: title, annex_html });
       }
@@ -239,7 +245,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
   // Extract definitions from the "Definitions" article
   const definitions = [];
   const definitionsArticle = articles.find(a =>
-    a.article_title && a.article_title.toLowerCase().includes('definition')
+    a.article_title && lang.definition.test(a.article_title)
   );
 
   if (definitionsArticle) {
@@ -253,12 +259,11 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
         const textCell = cells[1];
         const text = getText(textCell);
 
-        // Match pattern: 'term' means ...
-        // EUR-Lex uses Unicode curly quotes: ' (U+2018) and ' (U+2019)
-        const termMatch = text.match(/^[\u2018\u2019'"]([^''\u2018\u2019""]+)[\u2018\u2019'"]\s+means\s+/i);
+        // Match pattern: 'term' means … (language-specific quotes and verb)
+        const termMatch = text.match(meansRegex);
         if (termMatch) {
           const term = termMatch[1].trim();
-          // Definition is everything after "means "
+          // Definition is everything after the matched prefix
           const definition = text.replace(termMatch[0], '').trim();
           definitions.push({ term, definition });
         }
@@ -270,7 +275,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
   const asNum = (s) => (s == null ? NaN : parseInt(String(s).replace(/\D+/g, ""), 10));
   recitals.sort((a, b) => (asNum(a.recital_number) || 0) - (asNum(b.recital_number) || 0));
 
-  return { title, articles, recitals, annexes, definitions };
+  return { title, articles, recitals, annexes, definitions, langCode };
 }
 
 export function parseAnyToCombined(text) {
@@ -282,7 +287,8 @@ export function parseAnyToCombined(text) {
         articles: obj.articles || [],
         recitals: obj.recitals || [],
         annexes: obj.annexes || [],
-        definitions: obj.definitions || []
+        definitions: obj.definitions || [],
+        langCode: obj.langCode || "EN"
       };
     }
   } catch {

@@ -363,7 +363,7 @@ export function TopBar({
           {title && (
             <div className="flex items-center gap-2 min-w-0 max-w-full">
               <span
-                className="truncate text-sm font-medium text-gray-700 dark:text-gray-300"
+                className="line-clamp-2 text-sm font-medium text-gray-700 dark:text-gray-300 text-center"
                 title={title}
               >
                 {title}
