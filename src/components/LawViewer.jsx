@@ -19,6 +19,7 @@ import { PrintView } from "./PrintView.jsx";
 import { SEO } from "./SEO.jsx";
 import { NumberSelector } from "./NumberSelector.jsx";
 import { RelatedRecitals } from "./RelatedRecitals.jsx";
+import { CrossReferences } from "./CrossReferences.jsx";
 
 export function LawViewer() {
   const { key, kind, id } = useParams();
@@ -589,6 +590,12 @@ export function LawViewer() {
     selectAnnexIdx(data.annexes.findIndex((x) => x.annex_id === ax.annex_id));
   };
 
+  // Navigate to article by number (for cross-reference clicks)
+  const onCrossRefArticle = useCallback((articleNumber) => {
+    const idx = data.articles.findIndex(a => a.article_number === articleNumber);
+    if (idx !== -1) selectArticleIdx(idx);
+  }, [data.articles, selectArticleIdx]);
+
   // Determine SEO metadata
   const seoData = useMemo(() => {
     // Determine the base name of the law:
@@ -742,15 +749,32 @@ export function LawViewer() {
                     processedHtml ||
                     "<div class='text-center text-gray-400 py-10'>Select an article, recital, or annex from the menu to begin reading.</div>",
                 }}
+                onClick={(e) => {
+                  // Handle clicks on inline cross-reference links
+                  const link = e.target.closest("a.cross-ref");
+                  if (link) {
+                    e.preventDefault();
+                    const artNum = link.getAttribute("data-ref-article");
+                    if (artNum) onCrossRefArticle(artNum);
+                  }
+                }}
               />
             </section>
 
             {selected.kind === "article" && (
-              <RelatedRecitals
-                recitals={recitalMap.get(selected.id) || []}
-                allRecitals={data.recitals}
-                onSelectRecital={(r) => onClickRecital(r, selected.id)}
-              />
+              <>
+                <CrossReferences
+                  articleNumber={selected.id}
+                  crossReferences={data.crossReferences}
+                  articles={data.articles}
+                  onSelectArticle={onCrossRefArticle}
+                />
+                <RelatedRecitals
+                  recitals={recitalMap.get(selected.id) || []}
+                  allRecitals={data.recitals}
+                  onSelectRecital={(r) => onClickRecital(r, selected.id)}
+                />
+              </>
             )}
 
             {error && (
