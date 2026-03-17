@@ -1,5 +1,7 @@
 export const LAWS = [
   { key: "aia", label: "AI Act (EU 2024/1689)", value: "data/aia.xhtml", eurlex: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32024R1689", articles: 113, recitals: 180, annexes: 13 },
+  { key: "aia-fmx-en", label: "AI Act (EU 2024/1689) – Formex EN", value: "data/aia_fmx_en.xml", eurlex: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32024R1689", articles: 113, recitals: 180, annexes: 13 },
+  { key: "aia-fmx-pl", label: "AI Act (EU 2024/1689) – Formex PL", value: "data/aia_fmx_pl.xml", eurlex: "https://eur-lex.europa.eu/legal-content/PL/TXT/?uri=CELEX:32024R1689", articles: 113, recitals: 180, annexes: 13 },
   { key: "gdpr", label: "GDPR (EU 2016/679) – Unconsolidated", value: "data/gdpr.xml", eurlex: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679", articles: 99, recitals: 173, annexes: 0 },
   { key: "gdpr-fmx", label: "GDPR (EU 2016/679) – Formex", value: "data/gdpr_fmx.xml", eurlex: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679", articles: 99, recitals: 173, annexes: 0 },
   { key: "dma", label: "DMA (EU 2022/1925) – Unconsolidated", value: "data/dma.xhtml", eurlex: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32022R1925", articles: 54, recitals: 109, annexes: 0 },

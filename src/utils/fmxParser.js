@@ -66,7 +66,46 @@ function fmxToHtml(el) {
   if (tag === "DATE") return childrenHtml(el);
 
   // External OJ reference
-  if (tag === "REF.DOC.OJ") return `<span class="oj-ref">${childrenHtml(el)}</span>`;
+  if (tag === "REF.DOC.OJ" || tag === "REF.DOC") return `<span class="oj-ref">${childrenHtml(el)}</span>`;
+
+  // FT — formatted text (e.g. numbers with spaces)
+  if (tag === "FT") return childrenHtml(el);
+
+  // QUOT.S — quoted block
+  if (tag === "QUOT.S") return childrenHtml(el);
+
+  // GR.SEQ — grouped sequence (used in annexes)
+  // NP children may appear without a LIST wrapper; group them into tables
+  if (tag === "GR.SEQ") {
+    let html = "";
+    let npBuffer = "";
+    for (const c of el.childNodes) {
+      if (c.nodeType === Node.ELEMENT_NODE && c.tagName === "NP") {
+        npBuffer += fmxToHtml(c);
+      } else {
+        if (npBuffer) { html += `<table class="fmx-list">${npBuffer}</table>`; npBuffer = ""; }
+        html += fmxToHtml(c);
+      }
+    }
+    if (npBuffer) html += `<table class="fmx-list">${npBuffer}</table>`;
+    return `<div class="fmx-gr-seq">${html}</div>`;
+  }
+
+  // TITLE within body content — render as heading (use allText to avoid nested <p>)
+  if (tag === "TITLE") {
+    const ti = el.querySelector("TI");
+    const sti = el.querySelector("STI");
+    const tiText = ti ? escapeHtml(allText(ti)) : "";
+    const stiText = sti ? escapeHtml(allText(sti)) : "";
+    return (tiText ? `<p class="oj-ti-section"><strong>${tiText}</strong></p>` : "")
+         + (stiText ? `<p class="oj-sti-art">${stiText}</p>` : "");
+  }
+
+  // STI — subtitle (within TITLE blocks)
+  if (tag === "STI") return `<p class="oj-sti-art">${escapeHtml(allText(el))}</p>`;
+
+  // CONTENTS — annex body content
+  if (tag === "CONTENTS") return childrenHtml(el);
 
   // Footnotes
   if (tag === "NOTE") {
@@ -121,8 +160,8 @@ function fmxToHtml(el) {
   // TI.ART — handled outside (rendered as h2 heading by viewer), skip
   if (tag === "TI.ART") return "";
 
-  // STI.ART — article subtitle, render as heading
-  if (tag === "STI.ART") return `<p class="oj-sti-art">${childrenHtml(el)}</p>`;
+  // STI.ART — article subtitle, render as heading (use allText to avoid nested <p>)
+  if (tag === "STI.ART") return `<p class="oj-sti-art">${escapeHtml(allText(el))}</p>`;
 
   // Default: just recurse
   return childrenHtml(el);
@@ -238,8 +277,10 @@ function injectCrossRefLinks(html) {
 
 /**
  * Detect whether text looks like Formex XML.
+ * Supports single ACT documents and combined (ACT + ANNEX) documents.
  */
 export function isFmxDocument(text) {
+  if (text.includes("<COMBINED.FMX")) return true;
   return text.includes("<ACT") && text.includes("formex") && text.includes("<ENACTING.TERMS");
 }
 
@@ -260,7 +301,12 @@ export function parseFmxToCombined(xmlText) {
     throw new Error("FMX XML parse error: " + parseError.textContent.slice(0, 200));
   }
 
-  const root = doc.documentElement; // <ACT>
+  const docRoot = doc.documentElement; // <ACT> or <COMBINED.FMX>
+
+  // For combined documents, the ACT is a child element
+  const root = docRoot.tagName === "COMBINED.FMX"
+    ? docRoot.querySelector("ACT") || docRoot
+    : docRoot;
 
   // --- Language ---
   const lgDoc = root.querySelector("BIB\\.INSTANCE > LG\\.DOC");
@@ -284,15 +330,19 @@ export function parseFmxToCombined(xmlText) {
   let shortTitle = "";
   for (const part of titleParts) {
     const m = part.match(/\(([^)]{5,80})\)/);
-    if (m && !/text with eea relevance/i.test(m[1])) {
+    if (m && !lang.eea.test(m[1])) {
       shortTitle = m[1];
       break;
     }
   }
 
-  // Format main title: cut after "of the European Parliament" or "of <date>"
-  let mainTitle = titleText.split(/\s+of the European Parliament/i)[0].trim();
-  if (mainTitle === titleText) mainTitle = titleText.split(/\s+of\s+\d/i)[0].trim();
+  // Format main title: cut after "of the European Parliament" / "Parlamentu Europejskiego"
+  // or use the language-specific titleSplit pattern
+  const parliamentRe = langCode === "PL"
+    ? /\s+Parlamentu Europejskiego/i
+    : /\s+of the European Parliament/i;
+  let mainTitle = titleText.split(parliamentRe)[0].trim();
+  if (mainTitle === titleText && lang.titleSplit) mainTitle = titleText.split(lang.titleSplit)[0].trim();
   mainTitle = mainTitle.toLowerCase()
     .replace(/(?:^|\s)\S/g, a => a.toUpperCase())
     .replace(/\b(Eu|Ec|Eec|Euratom)\b/gi, m => m.toUpperCase());
@@ -429,5 +479,31 @@ export function parseFmxToCombined(xmlText) {
     }
   }
 
-  return { title, articles, recitals, annexes: [], definitions, langCode, crossReferences };
+  // --- Annexes ---
+  const annexes = [];
+  // In combined documents, ANNEX elements are siblings of ACT
+  const annexContainer = docRoot.tagName === "COMBINED.FMX" ? docRoot : root;
+  for (const annexEl of annexContainer.querySelectorAll("ANNEX")) {
+    const annexTi = annexEl.querySelector("TITLE > TI");
+    const annexSti = annexEl.querySelector("TITLE > STI");
+    const tiText = annexTi ? allText(annexTi) : "";
+    const stiText = annexSti ? allText(annexSti) : "";
+
+    // Extract annex ID (e.g. "I", "II", "III") from title
+    const idMatch = tiText.match(lang.annexCapture);
+    const annex_id = idMatch ? (idMatch[1] || "").trim() : tiText;
+
+    const annex_title = stiText ? `${tiText} — ${stiText}` : tiText;
+
+    // Build HTML from annex contents
+    const contents = annexEl.querySelector("CONTENTS");
+    let annex_html = "";
+    if (contents) {
+      annex_html = injectCrossRefLinks(fmxToHtml(contents));
+    }
+
+    annexes.push({ annex_id, annex_title, annex_html });
+  }
+
+  return { title, articles, recitals, annexes, definitions, langCode, crossReferences };
 }
