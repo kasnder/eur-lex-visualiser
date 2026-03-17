@@ -91,16 +91,26 @@ function fmxToHtml(el) {
   // List item
   if (tag === "ITEM") return childrenHtml(el);
 
-  // Paragraph
+  // Paragraph — render inline like the old XHTML format: "1.   Text here"
   if (tag === "PARAG") {
     const noP = el.querySelector("NO\\.PARAG");
     const num = noP ? allText(noP) : "";
     const body = childrenHtmlExcept(el, "NO.PARAG");
-    return `<table class="fmx-parag"><tr><td class="fmx-parag-num">${escapeHtml(num)}</td><td>${body}</td></tr></table>`;
+    if (num) {
+      const numPrefix = `${escapeHtml(num)}\u00a0\u00a0\u00a0`;
+      // If body starts with <p>, inject number inside the first <p>
+      const injected = body.replace(/^(\s*<p[^>]*>)/, `$1${numPrefix}`);
+      if (injected !== body) {
+        return injected;
+      }
+      // Plain text body — wrap in a paragraph with the number
+      return `<p class="oj-normal">${numPrefix}${body}</p>`;
+    }
+    return body;
   }
 
-  // ALINEA — unnumbered paragraph block
-  if (tag === "ALINEA") return `<div class="fmx-alinea">${childrenHtml(el)}</div>`;
+  // ALINEA — unnumbered paragraph block, render children directly
+  if (tag === "ALINEA") return childrenHtml(el);
 
   // P — plain paragraph
   if (tag === "P") return `<p>${childrenHtml(el)}</p>`;

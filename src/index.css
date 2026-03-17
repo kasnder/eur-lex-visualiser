@@ -139,8 +139,7 @@
   border-bottom-color: #f59e0b;
 }
 
-/* FMX paragraph/list formatting */
-.prose .fmx-parag,
+/* FMX list formatting */
 .prose .fmx-list {
   width: 100%;
   border-collapse: separate;
@@ -148,7 +147,6 @@
   margin: 0.25rem 0;
 }
 
-.prose .fmx-parag-num,
 .prose .fmx-np-num {
   width: 3rem;
   vertical-align: top;
@@ -156,10 +154,6 @@
   padding-right: 0.5rem;
   white-space: nowrap;
   text-align: left;
-}
-
-.prose .fmx-alinea {
-  margin: 0.5rem 0;
 }
 
 .prose .fmx-footnote {
