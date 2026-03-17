@@ -1,5 +1,6 @@
 // ---------------- Parser (best-effort for OJ & consolidated) ----------------
 import { detectLanguage, getLangConfig, buildMeansRegex } from "./languages.js";
+import { isFmxDocument, parseFmxToCombined } from "./fmxParser.js";
 
 export function parseSingleXHTMLToCombined(xhtmlText) {
   const parser = new DOMParser();
@@ -275,7 +276,54 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
   const asNum = (s) => (s == null ? NaN : parseInt(String(s).replace(/\D+/g, ""), 10));
   recitals.sort((a, b) => (asNum(a.recital_number) || 0) - (asNum(b.recital_number) || 0));
 
-  return { title, articles, recitals, annexes, definitions, langCode };
+  // Extract cross-references from article text
+  const crossReferences = extractCrossReferencesFromArticles(articles);
+
+  return { title, articles, recitals, annexes, definitions, langCode, crossReferences };
+}
+
+/**
+ * Extract cross-references between articles by scanning article HTML for
+ * "Article N" patterns.  Returns { articleNumber: [{ type, target, ... }] }.
+ */
+function extractCrossReferencesFromArticles(articles) {
+  const ARTICLE_REF_RE = /Articles?\s+(\d+[a-z]?)(?:\((\d+)\))?(?:\(([a-z])\))?(?:\s+(?:to|and)\s+(\d+[a-z]?))?/gi;
+
+  const crossReferences = {};
+  for (const art of articles) {
+    const text = (art.article_html || "").replace(/<[^>]+>/g, " ");
+    const refs = [];
+    const seen = new Set();
+    let m;
+    ARTICLE_REF_RE.lastIndex = 0;
+    while ((m = ARTICLE_REF_RE.exec(text)) !== null) {
+      const artNum = m[1];
+      const para = m[2] || null;
+      const point = m[3] || null;
+      const rangeTo = m[4] || null;
+
+      if (rangeTo) {
+        const from = parseInt(artNum, 10);
+        const to = parseInt(rangeTo, 10);
+        for (let i = from; i <= to; i++) {
+          const t = String(i);
+          if (t === art.article_number) continue;
+          const key = `article:${t}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          refs.push({ type: "article", target: t, paragraph: null, point: null, raw: m[0] });
+        }
+      } else {
+        if (artNum === art.article_number) continue;
+        const key = `article:${artNum}:${para || ""}:${point || ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        refs.push({ type: "article", target: artNum, paragraph: para, point, raw: m[0] });
+      }
+    }
+    if (refs.length > 0) crossReferences[art.article_number] = refs;
+  }
+  return crossReferences;
 }
 
 export function parseAnyToCombined(text) {
@@ -294,6 +342,12 @@ export function parseAnyToCombined(text) {
   } catch {
     /* not JSON */
   }
+
+  // Detect Formex XML format and use specialised parser
+  if (isFmxDocument(text)) {
+    return parseFmxToCombined(text);
+  }
+
   return parseSingleXHTMLToCombined(text);
 }
 
