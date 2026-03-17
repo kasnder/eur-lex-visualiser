@@ -24,7 +24,12 @@ function allText(el) {
   let out = "";
   for (const n of el.childNodes) {
     if (n.nodeType === Node.TEXT_NODE) out += n.textContent;
-    else if (n.nodeType === Node.ELEMENT_NODE) out += allText(n);
+    else if (n.nodeType === Node.ELEMENT_NODE) {
+      // Preserve FMX quote marks as actual characters
+      if (n.tagName === "QUOT.START") { out += "\u2018"; continue; }
+      if (n.tagName === "QUOT.END") { out += "\u2019"; continue; }
+      out += allText(n);
+    }
   }
   return out.replace(/\s+/g, " ").trim();
 }
@@ -148,7 +153,7 @@ function escapeHtml(s) {
  *   "Regulation (EU) 2016/679"
  */
 const ARTICLE_REF_RE =
-  /Articles?\s+(\d+[a-z]?)(?:\((\d+)\))?(?:\(([a-z])\))?(?:\s+(?:to|and)\s+(\d+[a-z]?))?/gi;
+  /Articles?\s+(\d+[a-z]?\b)(?:\((\d+)\))?(?:\(([a-z])\))?(?:\s+(?:to|and)\s+(\d+[a-z]?\b))?/gi;
 
 const DIRECTIVE_REF_RE =
   /(?:Directive|Regulation|Decision)\s+(?:\([A-Z]+\)\s+)?(?:No\s+)?(\d{2,4}\/\d+(?:\/[A-Z]+)?)/gi;
@@ -207,7 +212,7 @@ function extractCrossRefsFromText(text) {
 function injectCrossRefLinks(html) {
   // Only link Article references (internal navigation)
   return html.replace(
-    /\b(Articles?\s+(\d+[a-z]?)(?:\((\d+)\))?(?:\(([a-z])\))?)/gi,
+    /\b(Articles?\s+(\d+[a-z]?\b)(?:\((\d+)\))?(?:\(([a-z])\))?)/gi,
     (match, full, artNum) => {
       return `<a class="cross-ref" data-ref-article="${artNum}" href="#article-${artNum}" title="Go to Article ${artNum}">${full}</a>`;
     }
@@ -251,19 +256,30 @@ export function parseFmxToCombined(xmlText) {
   const meansRegex = buildMeansRegex(lang);
 
   // --- Title ---
+  // FMX <TI> contains multiple <P> elements; join them with spaces
   const titleEl = root.querySelector("TITLE > TI");
-  const titleText = titleEl ? allText(titleEl) : "";
-  // Extract short title from parentheses (e.g. "General Data Protection Regulation")
-  const shortMatch = titleText.match(/\(([^)]{5,80})\)\s*$/);
-  let shortTitle = "";
-  if (shortMatch) {
-    const candidate = shortMatch[1];
-    if (!/text with eea relevance/i.test(candidate)) {
-      shortTitle = candidate;
+  let titleParts = [];
+  if (titleEl) {
+    for (const p of titleEl.querySelectorAll("P")) {
+      const t = allText(p).trim();
+      if (t) titleParts.push(t);
     }
   }
-  // Format main title: cut after "of <date>"
-  let mainTitle = titleText.split(/\s+of\s+\d/i)[0].trim();
+  const titleText = titleParts.join(" ");
+
+  // Extract short title from parentheses (e.g. "General Data Protection Regulation")
+  let shortTitle = "";
+  for (const part of titleParts) {
+    const m = part.match(/\(([^)]{5,80})\)/);
+    if (m && !/text with eea relevance/i.test(m[1])) {
+      shortTitle = m[1];
+      break;
+    }
+  }
+
+  // Format main title: cut after "of the European Parliament" or "of <date>"
+  let mainTitle = titleText.split(/\s+of the European Parliament/i)[0].trim();
+  if (mainTitle === titleText) mainTitle = titleText.split(/\s+of\s+\d/i)[0].trim();
   mainTitle = mainTitle.toLowerCase()
     .replace(/(?:^|\s)\S/g, a => a.toUpperCase())
     .replace(/\b(Eu|Ec|Eec|Euratom)\b/gi, m => m.toUpperCase());
