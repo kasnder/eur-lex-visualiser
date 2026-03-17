@@ -80,7 +80,7 @@ function fmxToHtml(el) {
 
   // Numbered paragraph (e.g. NP = numbered point)
   if (tag === "NP") {
-    return `<tr class="fmx-np"><td class="fmx-np-num">${fmxToHtml(el.querySelector("NO.P"))}</td><td>${childrenHtmlExcept(el, "NO.P")}</td></tr>`;
+    return `<tr class="fmx-np"><td class="fmx-np-num">${fmxToHtml(el.querySelector("NO\\.P"))}</td><td>${childrenHtmlExcept(el, "NO.P")}</td></tr>`;
   }
 
   // Lists
@@ -93,7 +93,7 @@ function fmxToHtml(el) {
 
   // Paragraph
   if (tag === "PARAG") {
-    const noP = el.querySelector("NO.PARAG");
+    const noP = el.querySelector("NO\\.PARAG");
     const num = noP ? allText(noP) : "";
     const body = childrenHtmlExcept(el, "NO.PARAG");
     return `<table class="fmx-parag"><tr><td class="fmx-parag-num">${escapeHtml(num)}</td><td>${body}</td></tr></table>`;
@@ -108,8 +108,11 @@ function fmxToHtml(el) {
   // TXT — inline text wrapper
   if (tag === "TXT") return childrenHtml(el);
 
-  // TI.ART, STI.ART — handled outside, skip
-  if (tag === "TI.ART" || tag === "STI.ART") return "";
+  // TI.ART — handled outside (rendered as h2 heading by viewer), skip
+  if (tag === "TI.ART") return "";
+
+  // STI.ART — article subtitle, render as heading
+  if (tag === "STI.ART") return `<p class="oj-sti-art">${childrenHtml(el)}</p>`;
 
   // Default: just recurse
   return childrenHtml(el);
@@ -333,10 +336,10 @@ export function parseFmxToCombined(xmlText) {
         const article_number = m ? m[1] : idAttr.replace(/^0+/, "") || String(articles.length + 1);
         const article_title = stiArt ? allText(stiArt) : "";
 
-        // Build HTML from article body (skip TI.ART and STI.ART)
+        // Build HTML from article body (skip TI.ART, keep STI.ART as subtitle)
         let bodyHtml = "";
         for (const c of child.children) {
-          if (c.tagName === "TI.ART" || c.tagName === "STI.ART") continue;
+          if (c.tagName === "TI.ART") continue;
           bodyHtml += fmxToHtml(c);
         }
         bodyHtml = injectCrossRefLinks(bodyHtml);
