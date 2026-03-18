@@ -2,6 +2,14 @@ import { useState, useRef, useEffect } from "react";
 import { Globe } from "lucide-react";
 import { EU_LANGUAGES } from "../utils/formexApi.js";
 
+const LANG_FLAGS = {
+  BG: "🇧🇬", CS: "🇨🇿", DA: "🇩🇰", DE: "🇩🇪", EL: "🇬🇷",
+  EN: "🇬🇧", ET: "🇪🇪", FI: "🇫🇮", FR: "🇫🇷", GA: "🇮🇪",
+  HR: "🇭🇷", HU: "🇭🇺", IT: "🇮🇹", LV: "🇱🇻", LT: "🇱🇹",
+  MT: "🇲🇹", NL: "🇳🇱", PL: "🇵🇱", PT: "🇵🇹", RO: "🇷🇴",
+  SK: "🇸🇰", SL: "🇸🇮", ES: "🇪🇸", SV: "🇸🇪",
+};
+
 /**
  * Dropdown language selector for Formex laws.
  * Shows only when the current law supports Formex API (has celex).
@@ -76,6 +84,7 @@ export function LanguageSelector({ currentLang, onChangeLang, useFormex, onToggl
                       : "text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-800"
                   }`}
                 >
+                  <span className="mr-2">{LANG_FLAGS[code]}</span>
                   <span className="font-mono text-xs text-gray-400 mr-2 dark:text-gray-500">{code}</span>
                   {name}
                 </button>
