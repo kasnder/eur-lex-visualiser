@@ -693,6 +693,60 @@ export function LawViewer() {
     return law ? law.eurlex : null;
   }, [key, isExtensionMode, data.eurlex]);
 
+  const externalLawOverview = useMemo(() => {
+    if (!data.crossReferences) return [];
+
+    const items = new Map();
+
+    const buildExternalHref = (ref) => {
+      if (ref.type === "oj_ref" && ref.ojColl && ref.ojNo && ref.ojYear) {
+        return `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=OJ:${ref.ojColl}:${ref.ojYear}:${ref.ojNo}:TOC`;
+      }
+
+      const label = ref.raw || ref.target;
+      if (!label) return null;
+
+      const searchParams = new URLSearchParams({
+        scope: "EURLEX",
+        text: label,
+        lang: "en",
+        type: "quick",
+        qid: String(Date.now()),
+      });
+      return `https://eur-lex.europa.eu/search.html?${searchParams.toString()}`;
+    };
+
+    for (const refs of Object.values(data.crossReferences)) {
+      for (const ref of refs || []) {
+        if (ref.type !== "external" && ref.type !== "oj_ref") continue;
+
+        const label = ref.raw || ref.target;
+        if (!label) continue;
+
+        const key = ref.type === "oj_ref"
+          ? `oj:${ref.ojColl || ""}:${ref.ojYear || ""}:${ref.ojNo || ""}`
+          : `external:${ref.target || label}`;
+
+        const existing = items.get(key);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          items.set(key, {
+            key,
+            label,
+            href: buildExternalHref(ref),
+            count: 1,
+          });
+        }
+      }
+    }
+
+    return Array.from(items.values()).sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label);
+    });
+  }, [data.crossReferences]);
+
   // Whether this law can be loaded via the Formex API
   const hasCelex = useMemo(() => {
     if (currentCelex) return true;
@@ -1024,6 +1078,30 @@ export function LawViewer() {
                   <div className="p-4 text-sm text-gray-500 text-center">No articles available.</div>
                 )}
               </div>
+
+              {externalLawOverview.length > 0 && (
+                <div className="pt-4">
+                  <div className="px-1 mb-2 text-sm font-semibold text-gray-900 dark:text-gray-200">
+                    Linked Legislation
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {externalLawOverview.map((item) => (
+                      <a
+                        key={item.key}
+                        href={item.href || undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-900 transition hover:border-blue-400 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100 dark:hover:border-blue-700 dark:hover:bg-blue-950/70"
+                      >
+                        <span className="max-w-[220px] truncate">{item.label}</span>
+                        <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] text-blue-700 dark:bg-blue-900/70 dark:text-blue-200">
+                          {item.count}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
         </main>
