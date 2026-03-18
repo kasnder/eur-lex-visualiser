@@ -1,7 +1,8 @@
 import React, { useMemo } from "react";
-import { Info } from "lucide-react";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
+  const { t } = useI18n();
   if (!recitals || recitals.length === 0) return null;
 
   // Create a lookup map for full recital data (including HTML)
@@ -33,7 +34,7 @@ export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
   return (
     <div className="mt-8">
       <div className="flex items-center gap-2 text-blue-900 mb-4 px-6 md:px-12 dark:text-blue-300">
-        <span className="font-semibold text-xl">Related Recitals</span>
+        <span className="font-semibold text-xl">{t("relatedRecitals.title")}</span>
         <span className="bg-blue-100 text-blue-800 text-sm px-2.5 py-0.5 rounded-full font-medium dark:bg-blue-900/40 dark:text-blue-200">
           {recitals.length}
         </span>
@@ -42,7 +43,7 @@ export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
       <div className="space-y-6">
         <div className="flex flex-col gap-4 px-6 md:px-12">
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            These recitals appear to be related to this article based on text analysis using simple AI (known as <a href="https://ebooks.iospress.nl/volumearticle/56169" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">TF-IDF similarity</a>). Sorted by relevance score.
+            {t("relatedRecitals.description")}
           </p>
         </div>
 
@@ -61,16 +62,16 @@ export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="font-serif font-bold text-gray-900 dark:text-gray-100">
-                      Recital {r.recital_number}
+                      {t("common.recital")} {r.recital_number}
                     </span>
                     {r.relevanceScore && (
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getScoreColor(r.relevanceScore)}`}>
-                        {formatScore(r.relevanceScore)}% match
+                        {t("relatedRecitals.match", { score: formatScore(r.relevanceScore) })}
                       </span>
                     )}
                   </div>
                   <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-blue-600 font-medium dark:text-blue-400">
-                    Read →
+                    {t("relatedRecitals.read")}
                   </span>
                 </div>
                 {r.keywords && r.keywords.length > 0 && (
@@ -99,4 +100,3 @@ export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
     </div>
   );
 }
-

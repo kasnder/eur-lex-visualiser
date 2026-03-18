@@ -1,16 +1,20 @@
+import { useI18n } from "../i18n/I18nProvider.jsx";
+
 export function SEO({ 
   title, 
   description, 
   keywords, 
   canonical,
+  alternates = [],
   type = 'website',
   image = '/preview.png'
 }) {
-  const siteTitle = 'LegalViz.EU';
+  const { t } = useI18n();
+  const siteTitle = t("app.name");
   const fullTitle = title ? `${title} | ${siteTitle}` : siteTitle;
-  const metaDescription = description || 'Interactive visualisation of EU laws (e.g.GDPR, AI Act, DMA, DSA, Data Act). Navigate articles, recitals, and annexes with ease.';
-  const metaKeywords = keywords || 'EU law, GDPR, AI Act, DMA, DSA, Data Act, visualisation, legal tech, interactive law';
-  const siteUrl = 'https://legalviz.eu'; // Replace with actual domain if different
+  const metaDescription = description || t("seo.defaultDescription");
+  const metaKeywords = keywords || t("seo.defaultKeywords");
+  const siteUrl = 'https://legalviz.eu';
   const currentUrl = canonical || (typeof window !== 'undefined' ? window.location.href : siteUrl);
   const imageUrl = image.startsWith('http') ? image : `${siteUrl}${image}`;
 
@@ -20,6 +24,9 @@ export function SEO({
       <meta name="description" content={metaDescription} />
       <meta name="keywords" content={metaKeywords} />
       <link rel="canonical" href={currentUrl} />
+      {alternates.map((alternate) => (
+        <link key={alternate.hrefLang} rel="alternate" hrefLang={alternate.hrefLang} href={alternate.href} />
+      ))}
 
       {/* Open Graph / Facebook */}
       <meta property="og:type" content={type} />

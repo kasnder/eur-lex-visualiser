@@ -1,6 +1,8 @@
 import React, { useState } from "react";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 export function NumberSelector({ label, total, onSelect }) {
+  const { t } = useI18n();
   const [val, setVal] = useState("");
   const [error, setError] = useState(false);
 
@@ -40,12 +42,11 @@ export function NumberSelector({ label, total, onSelect }) {
             disabled={!val}
             className="absolute right-1.5 top-1.5 bottom-1.5 px-3 bg-white hover:bg-gray-100 text-gray-600 text-xs font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200 shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600"
           >
-            Go
+            {t("common.go")}
           </button>
         </div>
-        {error && <p className="absolute top-full left-0 mt-1 text-[10px] text-red-600 dark:text-red-400">Invalid range</p>}
+        {error && <p className="absolute top-full left-0 mt-1 text-[10px] text-red-600 dark:text-red-400">{t("numberSelector.invalidRange")}</p>}
       </form>
     </div>
   );
 }
-

@@ -1,4 +1,5 @@
 import { LAWS } from "../constants/laws.js";
+import { normalizeUiLocale } from "../i18n/localeMeta.js";
 
 const VALID_ACT_TYPES = new Set(["regulation", "directive", "decision"]);
 
@@ -80,11 +81,12 @@ export function findBundledLawBySlug(slug) {
   return slug ? LAWS_BY_SLUG.get(slug) || null : null;
 }
 
-export function getCanonicalLawRoute(law, kind = null, id = null) {
+export function getCanonicalLawRoute(law, kind = null, id = null, locale = "en") {
   const slug = getLawSlug(law);
   if (!slug) return "/";
-  if (kind && id != null) return `/${slug}/${kind}/${encodeURIComponent(String(id))}`;
-  return `/${slug}`;
+  const base = normalizeUiLocale(locale) === "en" ? `/${slug}` : `/${normalizeUiLocale(locale)}/${slug}`;
+  if (kind && id != null) return `${base}/${kind}/${encodeURIComponent(String(id))}`;
+  return base;
 }
 
 export function buildImportedLawCandidate(entry = {}) {

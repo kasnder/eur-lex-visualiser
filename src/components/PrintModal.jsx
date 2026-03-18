@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Printer, Check, Info } from "lucide-react";
+import { X, Printer, Check } from "lucide-react";
 import { Button } from "./Button.jsx";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 export function PrintModal({ isOpen, onClose, onPrint, counts }) {
+  const { t } = useI18n();
   const [options, setOptions] = useState({
     recitals: false,
     articles: true,
@@ -39,9 +41,9 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
           <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-4">
             <Printer size={24} />
           </div>
-          <h2 className="text-xl font-bold text-gray-900">Print Options</h2>
+          <h2 className="text-xl font-bold text-gray-900">{t("printModal.title")}</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Customize what you want to include in your print-ready view or PDF.
+            {t("printModal.description")}
           </p>
         </div>
 
@@ -56,8 +58,8 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
                   {options.recitals && <Check size={12} className="text-white" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-medium text-gray-900">Recitals</span>
-                  <span className="text-xs text-gray-500">{counts.recitals} items available</span>
+                  <span className="font-medium text-gray-900">{t("common.recitals")}</span>
+                  <span className="text-xs text-gray-500">{t("printModal.itemsAvailable", { count: counts.recitals })}</span>
                 </div>
               </div>
               <input 
@@ -76,8 +78,8 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
                   {options.articles && <Check size={12} className="text-white" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-medium text-gray-900">Articles</span>
-                  <span className="text-xs text-gray-500">{counts.articles} items available</span>
+                  <span className="font-medium text-gray-900">{t("common.articles")}</span>
+                  <span className="text-xs text-gray-500">{t("printModal.itemsAvailable", { count: counts.articles })}</span>
                 </div>
               </div>
               <input 
@@ -96,8 +98,8 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
                   {options.annexes && <Check size={12} className="text-white" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-medium text-gray-900">Annexes</span>
-                  <span className="text-xs text-gray-500">{counts.annexes} items available</span>
+                  <span className="font-medium text-gray-900">{t("common.annexes")}</span>
+                  <span className="text-xs text-gray-500">{t("printModal.itemsAvailable", { count: counts.annexes })}</span>
                 </div>
               </div>
               <input 
@@ -112,7 +114,7 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
           {/* Advanced Options */}
           {options.articles && (
             <div className="pt-4 border-t border-gray-100">
-               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Layout</p>
+               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">{t("printModal.layout")}</p>
                
                <label className="flex items-start gap-3 cursor-pointer group">
                   <div className={`w-5 h-5 mt-0.5 rounded border flex items-center justify-center shrink-0 transition-colors ${
@@ -122,10 +124,10 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
                   </div>
                   <div className="flex-1">
                     <span className="block text-sm font-medium text-gray-900 group-hover:text-blue-700">
-                      Include related recitals inline
+                      {t("printModal.includeRelatedRecitals")}
                     </span>
                     <span className="block text-xs text-gray-500 mt-0.5 leading-relaxed">
-                      Automatically inserts relevant recitals next to articles based on AI analysis. Useful for understanding context.
+                      {t("printModal.includeRelatedRecitalsHelp")}
                     </span>
                   </div>
                   <input 
@@ -141,10 +143,10 @@ export function PrintModal({ isOpen, onClose, onPrint, counts }) {
 
         <div className="flex gap-3 pt-2">
           <Button variant="ghost" onClick={onClose} className="flex-1 justify-center">
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button onClick={handlePrint} className="flex-1 justify-center bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200">
-            Generate View
+            {t("printModal.generateView")}
           </Button>
         </div>
       </div>

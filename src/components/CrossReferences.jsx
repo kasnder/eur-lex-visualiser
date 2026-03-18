@@ -1,5 +1,6 @@
 import React from "react";
 import { buildEurlexOjUrl, buildEurlexSearchUrl } from "../utils/url.js";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 /**
  * Displays cross-references for the currently selected article.
@@ -18,6 +19,7 @@ export function CrossReferences({
   currentLang = "EN",
   onOpenExternalReference,
 }) {
+  const { t } = useI18n();
   const referenceKey = entryKey || articleNumber;
   if (!crossReferences || !referenceKey) return null;
 
@@ -55,7 +57,7 @@ export function CrossReferences({
   return (
     <div className="mt-8">
       <div className="flex items-center gap-2 text-amber-900 mb-4 px-6 md:px-12 dark:text-amber-300">
-        <span className="font-semibold text-xl">Cross-References</span>
+        <span className="font-semibold text-xl">{t("crossReferences.title")}</span>
         <span className="bg-amber-100 text-amber-800 text-sm px-2.5 py-0.5 rounded-full font-medium dark:bg-amber-900/40 dark:text-amber-200">
           {forwardRefs.length + backRefs.length + externalRefs.length}
         </span>
@@ -65,7 +67,7 @@ export function CrossReferences({
         {forwardRefs.length > 0 && (
           <div>
             <p className="text-sm text-gray-500 mb-3 dark:text-gray-400">
-              This {itemLabel} references:
+              {t("crossReferences.references", { itemLabel })}
             </p>
             <div className="flex flex-wrap gap-2">
               {forwardRefs.map((ref, i) => {
@@ -100,7 +102,7 @@ export function CrossReferences({
         {backRefs.length > 0 && (
           <div>
             <p className="text-sm text-gray-500 mb-3 dark:text-gray-400">
-              Referenced by:
+              {t("crossReferences.referencedBy")}
             </p>
             <div className="flex flex-wrap gap-2">
               {backRefs.map((artNum) => {
@@ -130,7 +132,7 @@ export function CrossReferences({
         {externalRefs.length > 0 && (
           <div>
             <p className="text-sm text-gray-500 mb-3 dark:text-gray-400">
-              References to other legislation:
+              {t("crossReferences.external")}
             </p>
             <div className="flex flex-wrap gap-2">
               {externalRefs.map((ref, i) => {

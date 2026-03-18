@@ -22,6 +22,7 @@ import { SEO } from "./SEO.jsx";
 import { NumberSelector } from "./NumberSelector.jsx";
 import { RelatedRecitals } from "./RelatedRecitals.jsx";
 import { CrossReferences } from "./CrossReferences.jsx";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 const EMPTY_LAW_DATA = { title: "", articles: [], recitals: [], annexes: [], definitions: [] };
 
@@ -40,11 +41,11 @@ function isMissingStructuredLawText(error) {
   );
 }
 
-function getLoadErrorDetails(error) {
+function getLoadErrorDetails(error, t) {
   if (isMissingStructuredLawText(error)) {
     return {
-      title: "This law is not available here yet",
-      message: "We couldn't find the structured text version we use to display this law in LegalViz. The law itself may still be available on EUR-Lex.",
+      title: t("lawViewer.notAvailableTitle"),
+      message: t("lawViewer.notAvailableMessage"),
       fallbackUrl: error.fallback?.url || error.details?.fallback?.url || null,
       status: error.status || null,
       tone: "notice",
@@ -53,8 +54,8 @@ function getLoadErrorDetails(error) {
 
   if (error instanceof FormexApiError) {
     return {
-      title: "Law could not be loaded",
-      message: error.message || "The law could not be loaded from the Formex service.",
+      title: t("lawViewer.lawLoadFailed"),
+      message: error.message || t("lawViewer.lawLoadServiceFailed"),
       fallbackUrl: error.fallback?.url || error.details?.fallback?.url || null,
       status: error.status || null,
       tone: "error",
@@ -62,8 +63,8 @@ function getLoadErrorDetails(error) {
   }
 
   return {
-    title: "Law could not be loaded",
-    message: String(error?.message || error || "The law could not be loaded."),
+    title: t("lawViewer.lawLoadFailed"),
+    message: String(error?.message || error || t("lawViewer.lawLoadFailed")),
     fallbackUrl: null,
     status: null,
     tone: "error",
@@ -71,9 +72,10 @@ function getLoadErrorDetails(error) {
 }
 
 export function LawViewer() {
-  const { slug, key, kind, id } = useParams();
+  const { locale: routeLocale, slug, key, kind, id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { locale, localizePath, t } = useI18n();
   const [searchParams] = useSearchParams();
   const importCelex = searchParams.get("celex");
   const sourceUrl = searchParams.get("sourceUrl");
@@ -170,13 +172,13 @@ export function LawViewer() {
   const currentLawSlug = currentLaw?.slug || null;
   const canonicalRoute = useMemo(() => {
     if (isLegacyExtensionRoute || !currentLawSlug) return null;
-    return getCanonicalLawRoute(currentLaw, kind, id);
-  }, [currentLaw, currentLawSlug, kind, id, isLegacyExtensionRoute]);
+    return getCanonicalLawRoute(currentLaw, kind, id, routeLocale || locale);
+  }, [currentLaw, currentLawSlug, kind, id, isLegacyExtensionRoute, routeLocale, locale]);
 
   const navigateToCanonical = useCallback((kindName, targetId, options = {}) => {
     if (!currentLawSlug) return;
-    navigate(getCanonicalLawRoute(currentLaw, kindName, targetId), options);
-  }, [currentLaw, currentLawSlug, navigate]);
+    navigate(getCanonicalLawRoute(currentLaw, kindName, targetId, routeLocale || locale), options);
+  }, [currentLaw, currentLawSlug, navigate, routeLocale, locale]);
 
   // Map scale to prose class and percentage for display
   const getProseClass = (s) => {
@@ -224,12 +226,12 @@ export function LawViewer() {
       const combined = parseFormexToCombined(text);
       setData(combined);
     } catch (e) {
-      setLoadError(getLoadErrorDetails(e));
+      setLoadError(getLoadErrorDetails(e, t));
       setData(EMPTY_LAW_DATA);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (data.articles?.length > 0 && data.recitals?.length > 0) {
@@ -310,7 +312,8 @@ export function LawViewer() {
         const resolvedCelex = result?.resolved?.celex;
         if (!resolvedCelex) {
           setLoadError({
-            message: "This EUR-Lex page could not be resolved to an importable CELEX document.",
+            title: t("lawViewer.lawLoadFailed"),
+            message: t("lawViewer.importResolveFailed"),
             fallbackUrl: sourceUrl,
             status: result?.status || null,
           });
@@ -326,14 +329,14 @@ export function LawViewer() {
             celex: resolvedCelex,
             officialReference: resolvedReference,
           });
-          navigate(getCanonicalLawRoute(target), { replace: true });
+          navigate(getCanonicalLawRoute(target, null, null, locale), { replace: true });
           return;
         }
         navigate(`/import?${params.toString()}`, { replace: true });
       })
       .catch((error) => {
         if (cancelled) return;
-        const details = getLoadErrorDetails(error);
+        const details = getLoadErrorDetails(error, t);
         setLoadError({
           ...details,
           fallbackUrl: details.fallbackUrl || sourceUrl,
@@ -366,7 +369,8 @@ export function LawViewer() {
         const resolvedCelex = result?.resolved?.celex;
         if (!resolvedCelex) {
           setLoadError({
-            message: "This law reference could not be resolved automatically.",
+            title: t("lawViewer.lawLoadFailed"),
+            message: t("lawViewer.referenceResolveFailed"),
             fallbackUrl: result?.fallback?.url || buildEurlexSearchUrl(`${slugReference.actType} ${slugReference.year}/${slugReference.number}`, formexLang),
             status: result?.status || null,
           });
@@ -377,14 +381,14 @@ export function LawViewer() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setLoadError(getLoadErrorDetails(error));
+        setLoadError(getLoadErrorDetails(error, t));
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [slugReference, currentCelex, formexLang, loadLaw, isLegacyExtensionRoute]);
+  }, [slugReference, currentCelex, formexLang, loadLaw, isLegacyExtensionRoute, t]);
 
   // Load law when path/formex settings change
   useEffect(() => {
@@ -395,9 +399,9 @@ export function LawViewer() {
     if (currentCelex) {
       loadLaw(currentCelex, formexLang);
     } else if (key || slug) {
-      navigate("/", { replace: true });
+      navigate(localizePath("/", locale), { replace: true });
     }
-  }, [key, slug, loadLaw, navigate, isLegacyExtensionRoute, currentCelex, formexLang, loadAttempt, sourceUrl, slugReference]);
+  }, [key, slug, loadLaw, navigate, isLegacyExtensionRoute, currentCelex, formexLang, loadAttempt, sourceUrl, slugReference, localizePath, locale]);
 
   // Update selection from URL params when data is loaded or URL params change
   useEffect(() => {
@@ -652,29 +656,29 @@ export function LawViewer() {
       if (currentLaw?.label) {
         lawName = currentLaw.label;
       } else {
-        lawName = "LegalViz.EU";
+        lawName = t("app.name");
       }
     }
 
     let title = lawName;
-    let description = "Interactive visualisation of EU laws. Navigate articles, recitals, and annexes with ease.";
+    let description = t("seo.defaultDescription");
 
     if (selected.id) {
       const kindLabel =
         selected.kind === "article"
-          ? "Article"
+          ? t("common.article")
           : selected.kind === "recital"
-            ? "Recital"
-            : "Annex";
+            ? t("common.recital")
+            : t("common.annex");
       title = `${kindLabel} ${selected.id} - ${lawName}`;
-      description = `Read ${kindLabel} ${selected.id} of ${lawName} on LegalViz.EU.`;
+      description = `Read ${kindLabel} ${selected.id} of ${lawName} on ${t("app.name")}.`;
 
       // Try to add a bit of content preview to description if available
       // Note: HTML might need stripping, but keeping it simple for now
     }
 
     return { title, description };
-  }, [currentLaw, selected.kind, selected.id, data.title]);
+  }, [currentLaw, selected.kind, selected.id, data.title, t]);
 
   const eurlexUrl = useMemo(() => {
     if (sourceUrl) return sourceUrl;
@@ -700,7 +704,7 @@ export function LawViewer() {
       celex: currentCelex,
       raw: rawReference,
       officialReference,
-      label: rawReference || data.title || currentLaw?.label || "Imported law",
+      label: rawReference || data.title || currentLaw?.label || t("landing.importLaw"),
       eurlex: buildEurlexCelexUrl(currentCelex, formexLang),
     });
 
@@ -836,7 +840,7 @@ export function LawViewer() {
           celex: result.resolved.celex,
           officialReference: reference,
         });
-        navigate(getCanonicalLawRoute(targetLaw));
+        navigate(getCanonicalLawRoute(targetLaw, null, null, locale));
         return;
       }
       openFallbackReference(result?.fallback?.url || fallbackUrl);
@@ -870,7 +874,7 @@ export function LawViewer() {
         // Create new window
         const printWindow = window.open("", "_blank");
         if (!printWindow) {
-          alert("Please allow popups to print");
+          alert(t("lawViewer.popupBlocked"));
           setPrintOptions(null);
           return;
         }
@@ -899,7 +903,23 @@ export function LawViewer() {
         // Wrap in a promise to wait for render? 
         // React 18 createRoot is async-ish but text rendering is usually fast.
         // We'll use a small timeout to ensure styles are applied.
-        root.render(<PrintView data={data} options={printOptions} />);
+        root.render(
+          <PrintView
+            data={data}
+            options={printOptions}
+            uiLocale={locale}
+            labels={{
+              article: t("common.article"),
+              recitals: t("common.recitals"),
+              articles: t("common.articles"),
+              annexes: t("common.annexes"),
+              relatedRecitals: t("relatedRecitals.title"),
+              documentTitle: t("printView.documentTitle"),
+              generatedOn: t("printView.generatedOn"),
+              printedFrom: t("printView.printedFrom"),
+            }}
+          />
+        );
 
         // Wait for styles and content
         setTimeout(() => {
@@ -911,7 +931,7 @@ export function LawViewer() {
 
       handlePrint();
     }
-  }, [printOptions, data]);
+  }, [printOptions, data, t, locale]);
 
   // --------- Main visualiser UI ----------
   return (
@@ -954,7 +974,7 @@ export function LawViewer() {
                     <Loader2 size={28} className="animate-spin" />
                   </div>
                   <h2 className="text-2xl font-bold font-serif text-gray-900 tracking-tight dark:text-gray-100">
-                    Loading law
+                    {t("lawViewer.loadingLaw")}
                   </h2>
                   <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600 dark:text-gray-400">
                     {loadingMessage}
@@ -970,15 +990,15 @@ export function LawViewer() {
                 <div className="flex min-h-[30vh] flex-col items-center justify-center text-center">
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 px-6 py-8 dark:border-amber-900 dark:bg-amber-950/30">
                     <h2 className="text-2xl font-bold font-serif text-amber-900 dark:text-amber-200">
-                      Extension update needed
+                      {t("lawViewer.legacyExtensionTitle")}
                     </h2>
                     <p className="mt-3 max-w-xl text-sm leading-6 text-amber-800 dark:text-amber-300">
-                      LegalViz now imports laws through a new Formex-based flow. This older extension entrypoint is no longer supported, so please update your browser extension and try again.
+                      {t("lawViewer.legacyExtensionMessage")}
                     </p>
                     <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                       {sourceUrl && (
                         <Button type="button" onClick={handleRetrySupportedImport}>
-                          Retry import
+                          {t("lawViewer.retryImport")}
                         </Button>
                       )}
                       {eurlexUrl && (
@@ -987,15 +1007,15 @@ export function LawViewer() {
                           variant="outline"
                           onClick={() => window.open(eurlexUrl, "_blank", "noopener,noreferrer")}
                         >
-                          Open on EUR-Lex
+                          {t("common.openOnEurlex")}
                         </Button>
                       )}
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => navigate("/", { replace: true })}
+                        onClick={() => navigate(localizePath("/", locale), { replace: true })}
                       >
-                        Go to homepage
+                        {t("app.home")}
                       </Button>
                     </div>
                   </div>
@@ -1019,7 +1039,7 @@ export function LawViewer() {
                           className={loadErrorTone === "notice" ? "border border-sky-700 bg-sky-700 text-white hover:bg-sky-800 dark:border-sky-300 dark:bg-sky-300 dark:text-sky-950 dark:hover:bg-sky-200" : ""}
                           onClick={() => window.open(loadError.fallbackUrl || eurlexUrl, "_blank", "noopener,noreferrer")}
                         >
-                          Try on EUR-Lex
+                          {t("common.openOnEurlex")}
                         </Button>
                       )}
                       <Button
@@ -1029,7 +1049,7 @@ export function LawViewer() {
                         onClick={retryLoad}
                       >
                         <RefreshCw size={16} />
-                        Reload here
+                        {t("common.reloadPage")}
                       </Button>
                     </div>
                   </div>
@@ -1038,10 +1058,10 @@ export function LawViewer() {
                 <>
                   <div className="flex items-center justify-between mb-4 gap-4">
                     <h2 className="text-2xl font-bold font-serif text-gray-900 tracking-tight truncate min-w-0 dark:text-gray-100">
-                      {selected.kind === "article" && `Article ${selected.id || ""}`}
-                      {selected.kind === "recital" && `Recital ${selected.id || ""}`}
-                      {selected.kind === "annex" && `Annex ${selected.id || ""}`}
-                      {!selected.id && "No selection"}
+                      {selected.kind === "article" && `${t("common.article")} ${selected.id || ""}`}
+                      {selected.kind === "recital" && `${t("common.recital")} ${selected.id || ""}`}
+                      {selected.kind === "annex" && `${t("common.annex")} ${selected.id || ""}`}
+                      {!selected.id && t("common.noSelection")}
                     </h2>
                   </div>
 
@@ -1050,7 +1070,7 @@ export function LawViewer() {
                     dangerouslySetInnerHTML={{
                       __html:
                         processedHtml ||
-                        "<div class='text-center text-gray-400 py-10'>Select an article, recital, or annex from the menu to begin reading.</div>",
+                        `<div class='text-center text-gray-400 py-10'>${t("lawViewer.selectPrompt")}</div>`,
                     }}
                     onClick={(e) => {
                       // Handle clicks on inline cross-reference links
@@ -1116,7 +1136,7 @@ export function LawViewer() {
                   <span>{loadError.message}</span>
                   <Button type="button" variant="outline" size="sm" onClick={retryLoad}>
                     <RefreshCw size={14} />
-                    Retry
+                    {t("common.retry")}
                   </Button>
                 </div>
               </div>
@@ -1130,7 +1150,7 @@ export function LawViewer() {
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="flex items-center justify-center p-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors flex-shrink-0 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
-                title="Toggle Contents"
+                title={t("lawViewer.toggleContents")}
               >
                 <Menu size={20} />
               </button>
@@ -1149,11 +1169,11 @@ export function LawViewer() {
               {/* Quick Navigation */}
               <div>
                 <div className="px-1 mb-2 flex items-center gap-2">
-                  <span className="text-sm font-semibold text-gray-900 dark:text-gray-200">Quick Navigation</span>
+                  <span className="text-sm font-semibold text-gray-900 dark:text-gray-200">{t("lawViewer.quickNavigation")}</span>
                   <div className="group relative">
                     <Info size={14} className="text-gray-400 cursor-help" />
                     <div className="absolute left-0 top-full mt-2 w-48 p-2 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
-                      Use arrow keys (←/→) or swipe on mobile to navigate between articles/recitals/annexes.
+                      {t("lawViewer.quickNavigationHelp")}
                     </div>
                   </div>
                 </div>
@@ -1171,7 +1191,7 @@ export function LawViewer() {
                 <div className="flex flex-col gap-3">
                   {data.articles?.length > 0 && (
                     <NumberSelector
-                      label="Article"
+                      label={t("common.article")}
                       total={data.articles.length}
                       onSelect={(n) => {
                         const idx = data.articles.findIndex(a => parseInt(a.article_number) === n);
@@ -1184,7 +1204,7 @@ export function LawViewer() {
 
                   {data.recitals?.length > 0 && (
                     <NumberSelector
-                      label="Recital"
+                      label={t("common.recital")}
                       total={data.recitals.length}
                       onSelect={(n) => {
                         selectRecitalIdx(n - 1);
@@ -1195,7 +1215,7 @@ export function LawViewer() {
 
                   {data.annexes?.length > 0 && (
                     <NumberSelector
-                      label="Annex"
+                      label={t("common.annex")}
                       total={data.annexes.length}
                       onSelect={(n) => {
                         selectAnnexIdx(n - 1);
@@ -1209,17 +1229,17 @@ export function LawViewer() {
               {/* TOC */}
               <div className="pt-2">
                 <div className="px-1 mb-2 text-sm font-semibold text-gray-900">
-                  Table of Contents
+                  {t("lawViewer.tableOfContents")}
                 </div>
                 {loading ? (
                   <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
-                    Loading the table of contents...
+                    {t("lawViewer.loadingLaw")}
                   </div>
                 ) : loadError && !hasLoadedContent ? (
                   <div className={`rounded-2xl border p-4 text-sm ${loadErrorTone === "notice" ? "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/20 dark:text-sky-200" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"}`}>
                     {loadErrorTone === "notice"
-                      ? "The structured LegalViz version of this law is not available right now."
-                      : "The law content is unavailable right now."}
+                      ? t("lawViewer.structuredVersionUnavailable")
+                      : t("lawViewer.lawContentUnavailable")}
                   </div>
                 ) : toc.length > 0 ? (
                   <div className="space-y-2">
@@ -1299,7 +1319,7 @@ export function LawViewer() {
                     })}
                   </div>
                 ) : (
-                  <div className="p-4 text-sm text-gray-500 text-center">No articles available.</div>
+                  <div className="p-4 text-sm text-gray-500 text-center">{t("lawViewer.noArticles")}</div>
                 )}
               </div>
 

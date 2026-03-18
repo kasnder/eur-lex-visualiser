@@ -5,9 +5,12 @@ import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose,
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
+import { UiLanguageSelector } from "./UiLanguageSelector.jsx";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
 function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLanguage = "EN", searchableLawCount = 0 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -142,7 +145,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
             type="text"
             readOnly
             onClick={() => setIsOpen(true)}
-            placeholder="Search (Cmd+K)..."
+            placeholder={t("search.trigger")}
             className="w-full cursor-pointer rounded-xl border border-gray-200 bg-gray-50 py-1.5 pl-9 pr-4 text-sm outline-none hover:bg-white hover:border-blue-300 focus:ring-0 transition-all text-gray-500 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:placeholder:text-gray-500"
           />
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
@@ -181,7 +184,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                   type="text"
                   value={query}
                   onChange={handleSearch}
-                  placeholder={isBuilding || isSearchLoading ? "Initializing search..." : "Search..."}
+                  placeholder={isBuilding || isSearchLoading ? t("search.initializing") : t("search.placeholder")}
                   disabled={isBuilding || isSearchLoading}
                   className="w-full text-lg text-gray-900 placeholder:text-gray-400 outline-none bg-transparent pr-8 disabled:opacity-50 dark:text-white dark:placeholder:text-gray-600"
                 />
@@ -193,7 +196,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                   <button
                     onClick={() => { setQuery(""); setResults([]); inputRef.current?.focus(); }}
                     className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
-                    title="Clear search"
+                    title={t("search.clear")}
                   >
                     <X size={16} />
                   </button>
@@ -204,13 +207,17 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                 onClick={() => setIsOpen(false)}
                 className="hidden md:block text-sm font-medium text-gray-500 hover:text-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-800"
               >
-                Close
+                {t("common.close")}
               </button>
             </div>
 
             {isGlobalLibrarySearch && (
               <div className="flex-none border-b border-gray-100 px-4 py-2.5 text-xs text-gray-500 bg-gray-50/80 dark:bg-gray-950/60 dark:border-gray-800 dark:text-gray-400">
-                Searching {searchableLawCount} cached {searchableLawCount === 1 ? "law" : "laws"} in {activeLanguage}. Open a law in this language to make it searchable.
+                {t("search.searchingCached", {
+                  count: searchableLawCount,
+                  lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
+                  language: activeLanguage,
+                })}
               </div>
             )}
 
@@ -238,7 +245,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                           {item.title}
                         </span>
                         {item.score > 100 && (
-                          <span className="flex-shrink-0 text-[10px] bg-green-100 text-green-700 px-1.5 rounded-full font-medium">Best Match</span>
+                          <span className="flex-shrink-0 text-[10px] bg-green-100 text-green-700 px-1.5 rounded-full font-medium">{t("search.bestMatch")}</span>
                         )}
                         {item.law_label && (
                           <span className="flex-shrink-0 text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium dark:bg-gray-800 dark:text-gray-400">
@@ -260,32 +267,41 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
-                        No cached laws are searchable in {activeLanguage} yet. Open a law in this language to add it to search.
+                        {t("search.noCached", { language: activeLanguage })}
                       </p>
                     </>
                   ) : isGlobalLibrarySearch && query.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
-                        Type to search across {searchableLawCount} cached {searchableLawCount === 1 ? "law" : "laws"} in {activeLanguage}.
+                        {t("search.typeCached", {
+                          count: searchableLawCount,
+                          lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
+                          language: activeLanguage,
+                        })}
                       </p>
                     </>
                   ) : query.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
-                      <p className="text-sm">Type to start searching...</p>
+                      <p className="text-sm">{t("search.typeToStart")}</p>
                     </>
                   ) : isGlobalLibrarySearch ? (
                     <>
                       <Search size={48} className="opacity-20 mb-4" />
                       <p className="text-sm text-center max-w-sm">
-                        No results found for "{query}" in {searchableLawCount} cached {searchableLawCount === 1 ? "law" : "laws"} in {activeLanguage}.
+                        {t("search.noResultsCached", {
+                          query,
+                          count: searchableLawCount,
+                          lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
+                          language: activeLanguage,
+                        })}
                       </p>
                     </>
                   ) : (
                     <>
                       <Search size={48} className="opacity-20 mb-4" />
-                      <p className="text-sm">No results found for "{query}"</p>
+                      <p className="text-sm">{t("search.noResults", { query })}</p>
                     </>
                   )}
                 </div>
@@ -293,8 +309,8 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
             </div>
 
             <div className="hidden md:flex flex-none border-t border-gray-100 px-4 py-2 bg-gray-50 text-[10px] text-gray-400 justify-between dark:bg-gray-900 dark:border-gray-800 dark:text-gray-500">
-              <span>Select to navigate</span>
-              <span>ESC to close</span>
+              <span>{t("search.selectToNavigate")}</span>
+              <span>{t("search.escToClose")}</span>
             </div>
           </div>
 
@@ -328,6 +344,7 @@ export function TopBar({
   hasCelex,
 }) {
   const navigate = useNavigate();
+  const { locale, localizePath, t } = useI18n();
 
   const onNavigate = (item) => {
     const extensionParams = isExtensionMode && lawKey === 'extension'
@@ -341,7 +358,7 @@ export function TopBar({
     if (isExtensionMode) {
       navigate(`/extension/${item.type}/${safeId}${extensionParams}`);
     } else if (targetLawSlug) {
-      navigate(`/${targetLawSlug}/${item.type}/${safeId}`);
+      navigate(localizePath(`/${targetLawSlug}/${item.type}/${safeId}`, locale));
     }
   };
 
@@ -351,41 +368,24 @@ export function TopBar({
         {/* Left: Branding */}
         <div className="flex-shrink-0 flex items-center gap-3">
           <button
-            onClick={() => navigate("/")}
+            onClick={() => navigate(localizePath("/", locale))}
             className="flex items-center justify-center transition-opacity hover:opacity-80"
           >
             <img
               src={`${import.meta.env.BASE_URL}wizard.png`}
-              alt="LegalViz Wizard"
+              alt={t("app.name")}
               className="h-10 w-auto dark:invert dark:hue-rotate-180"
             />
           </button>
           <div className="hidden md:flex flex-col">
             <button
-              onClick={() => navigate("/")}
+              onClick={() => navigate(localizePath("/", locale))}
               className="text-left text-lg font-bold tracking-tight text-gray-900 leading-none transition-opacity hover:opacity-80 dark:text-white"
             >
-              LegalViz.EU
+              {t("app.name")}
             </button>
             <span className="text-[10px] text-gray-500 leading-tight mt-0.5">
-              By{" "}
-              <a
-                href="https://kollnig.net"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-blue-700 hover:underline"
-              >
-                Konrad Kollnig
-              </a>
-              ,{" "}
-              <a
-                href="https://www.maastrichtuniversity.nl/law-tech-lab"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-blue-700 hover:underline"
-              >
-                Law & Tech Lab Maastricht
-              </a>
+              {t("topBar.byline")}
             </span>
           </div>
         </div>
@@ -407,15 +407,12 @@ export function TopBar({
 
         {/* Right: Navigation Controls */}
         <div className="flex-shrink-0 flex items-center gap-2 md:gap-3">
-
-          {/* Language Selector */}
           <LanguageSelector
             currentLang={formexLang}
             onChangeLang={onFormexLangChange}
             hasCelex={hasCelex}
           />
 
-          {/* Tools Group (Unified Menu) */}
           <div className="relative flex items-center">
             <ToolsMenu
               onPrint={onPrint}
@@ -445,6 +442,7 @@ export function TopBar({
 }
 
 function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSize, eurlexUrl, onToggleSidebar, isSidebarOpen }) {
+  const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -465,7 +463,7 @@ function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSiz
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={`p-2 rounded-lg transition-colors ${isOpen ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
-        title="More tools"
+        title={t("topBar.moreTools")}
       >
         <MoreVertical size={20} />
       </button>
@@ -473,29 +471,26 @@ function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSiz
       {isOpen && (
         <div className="absolute right-0 top-full mt-2 w-56 p-2 bg-white rounded-xl shadow-xl ring-1 ring-black/5 dark:bg-gray-900 dark:ring-white/10 flex flex-col gap-1 z-50 animate-in fade-in zoom-in-95 duration-100">
 
-          {/* Sidebar Toggle (Desktop Only) */}
           {onToggleSidebar && (
             <button
               onClick={() => { onToggleSidebar(); setIsOpen(false); }}
               className="hidden md:flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
             >
               {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-              <span>{isSidebarOpen ? "Hide sidebar" : "Show sidebar"}</span>
+              <span>{isSidebarOpen ? t("topBar.hideSidebar") : t("topBar.showSidebar")}</span>
             </button>
           )}
 
-          {/* Print */}
           {showPrint && (
             <button
               onClick={() => { onPrint(); setIsOpen(false); }}
               className="flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
             >
               <Printer size={18} />
-              <span>Print / PDF</span>
+              <span>{t("topBar.printPdf")}</span>
             </button>
           )}
 
-          {/* EUR-Lex Link */}
           {eurlexUrl && (
             <a
               href={eurlexUrl}
@@ -505,33 +500,44 @@ function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSiz
               className="flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
             >
               <ExternalLink size={18} />
-              <span>View on EUR-Lex</span>
+              <span>{t("topBar.viewOnEurlex")}</span>
             </a>
           )}
 
-          {/* Theme */}
           <div className="px-3 py-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-700 dark:text-gray-200">Theme</span>
+              <span className="text-sm text-gray-700 dark:text-gray-200">{t("common.theme")}</span>
               <ThemeToggle />
             </div>
           </div>
 
-          {/* Font Size */}
-          {onIncreaseFont && (
-            <div className="px-3 py-2 border-t border-gray-100 dark:border-gray-800">
-              <div className="mb-1.5 text-xs text-gray-500 uppercase font-semibold dark:text-gray-400">Text Size</div>
-              <div className="flex items-center justify-between gap-2 bg-gray-50 rounded-lg p-1 dark:bg-gray-800">
-                <button onClick={onDecreaseFont} className="p-1 hover:bg-white rounded-md shadow-sm transition-all dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400">
-                  <Minus size={16} />
-                </button>
-                <span className="text-xs font-mono w-8 text-center text-gray-900 dark:text-gray-200">{fontSize}%</span>
-                <button onClick={onIncreaseFont} className="p-1 hover:bg-white rounded-md shadow-sm transition-all dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400">
-                  <Plus size={16} />
-                </button>
-              </div>
+          <div className="px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-700 dark:text-gray-200">{t("uiLanguage.label")}</span>
+              <UiLanguageSelector />
             </div>
-          )}
+          </div>
+
+          {/* Font Size */}
+          <div className="px-3 py-2">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={onDecreaseFont}
+                className="rounded-lg p-1 text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+              >
+                <Minus size={16} />
+              </button>
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400">{fontSize}%</span>
+              <button
+                type="button"
+                onClick={onIncreaseFont}
+                className="rounded-lg p-1 text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

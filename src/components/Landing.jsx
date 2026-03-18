@@ -9,9 +9,11 @@ import { parseFormexToCombined } from "../utils/parsers.js";
 import { FormexApiError, getCachedFormex, resolveOfficialReference } from "../utils/formexApi.js";
 import { getImportedLaws, getLibraryLaws } from "../utils/library.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute } from "../utils/lawRouting.js";
+import { useI18n } from "../i18n/I18nProvider.jsx";
 
-export function Landing() {
+export function Landing({ forcedLocale = null }) {
   const navigate = useNavigate();
+  const { locale, setLocale, localizePath, t } = useI18n();
   const [instructionsDismissed, setInstructionsDismissed] = useState(() => {
     try {
       return localStorage.getItem('eurlex_instructions_dismissed') === 'true';
@@ -73,6 +75,12 @@ export function Landing() {
   const [referenceNumber, setReferenceNumber] = useState("");
   const [importError, setImportError] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+
+  useEffect(() => {
+    if (forcedLocale && forcedLocale !== locale) {
+      setLocale(forcedLocale);
+    }
+  }, [forcedLocale, locale, setLocale]);
 
   const handleSearchOpen = useCallback(async () => {
     if (searchLoadInFlightRef.current) return;
@@ -163,7 +171,7 @@ export function Landing() {
 
   const handleDelete = (e, key) => {
     e.stopPropagation();
-    if (window.confirm("Are you sure you want to delete this law?")) {
+    if (window.confirm(t("landing.deleteConfirm"))) {
       const newHidden = [...hiddenLaws, key];
       setHiddenLaws(newHidden);
       localStorage.setItem('eurlex_hidden_laws', JSON.stringify(newHidden));
@@ -210,8 +218,8 @@ export function Landing() {
   }, [hiddenLaws, importedLawsVersion, formexLang]);
 
   const formatDate = (ts) => {
-    if (!ts) return "Never";
-    return new Date(ts).toLocaleString(undefined, {
+    if (!ts) return t("landing.never");
+    return new Date(ts).toLocaleString(forcedLocale || locale, {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });
   };
@@ -223,7 +231,7 @@ export function Landing() {
     const year = referenceYear.trim();
     const number = referenceNumber.trim();
     if (!/^\d{4}$/.test(year) || !/^\d{1,4}$/.test(number)) {
-      setImportError("Enter a 4-digit year and a numeric law number.");
+      setImportError(t("landing.invalidReference"));
       return;
     }
 
@@ -242,18 +250,18 @@ export function Landing() {
           celex: result.resolved.celex,
           officialReference: parsed,
         });
-        navigate(getCanonicalLawRoute(importedLaw));
+        navigate(getCanonicalLawRoute(importedLaw, null, null, locale));
         return;
       }
 
       const fallbackUrl = result?.fallback?.url;
       if (fallbackUrl) {
         window.open(fallbackUrl, "_blank", "noopener,noreferrer");
-        setImportError("Automatic import was not available, so EUR-Lex search was opened in a new tab.");
+        setImportError(t("landing.automaticImportFallback"));
         return;
       }
 
-      setImportError("This reference could not be imported automatically.");
+      setImportError(t("landing.importUnavailable"));
     } catch (err) {
       const fallbackUrl = err instanceof FormexApiError
         ? err.fallback?.url || err.details?.fallback?.url
@@ -261,9 +269,9 @@ export function Landing() {
 
       if (fallbackUrl) {
         window.open(fallbackUrl, "_blank", "noopener,noreferrer");
-        setImportError("Automatic import failed, so EUR-Lex search was opened in a new tab.");
+        setImportError(t("landing.automaticImportFallback"));
       } else {
-        setImportError("Could not import this law right now.");
+        setImportError(t("landing.importUnavailable"));
       }
     } finally {
       setIsImporting(false);
@@ -275,7 +283,7 @@ export function Landing() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white dark:from-gray-950 dark:to-gray-900 transition-colors duration-500">
       <SEO
-        description="Read and navigate EU laws (GDPR, AI Act, DMA, DSA) efficiently with interactive visualisations. View articles and related recitals side-by-side."
+        description={t("seo.landingDescription")}
       />
       <TopBar
         lawKey=""
@@ -299,17 +307,16 @@ export function Landing() {
           className="text-center"
         >
           <span className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-medium tracking-tight text-gray-700 ring-1 ring-gray-200 mb-6 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700">
-            <span>LegalViz.EU</span>
+            <span>{t("app.name")}</span>
             <span className="mx-2 text-gray-400 dark:text-gray-500">|</span>
-            <span className="font-normal text-gray-500 dark:text-gray-400">EU Law Visualizer</span>
+            <span className="font-normal text-gray-500 dark:text-gray-400">{t("app.tagline")}</span>
           </span>
           <h1 className="text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl lg:text-5xl dark:text-white">
-            Read EU law beautifully,
-            <span className="block text-gray-600 dark:text-gray-400">and with ease.</span>
+            {t("landing.heroTitle")}
+            <span className="block text-gray-600 dark:text-gray-400">{t("landing.heroSubtitle")}</span>
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-sm text-gray-600 sm:text-base dark:text-gray-400">
-            Choose the instrument you are working with. You will then see an interactive view with
-            chapters, articles, recitals, and annexes side by side.
+            {t("landing.heroDescription")}
           </p>
         </Motion.div>
 
@@ -320,7 +327,7 @@ export function Landing() {
           className="mt-8 w-full"
         >
           <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-            Option 1 · Import by official reference
+            {t("landing.option1")}
           </h2>
           <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:bg-gray-900 dark:border-gray-800">
             <form onSubmit={handleReferenceImport} className="grid gap-3 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
@@ -329,16 +336,16 @@ export function Landing() {
                 onChange={(e) => setReferenceType(e.target.value)}
                 className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
               >
-                <option value="directive">Directive</option>
-                <option value="regulation">Regulation</option>
-                <option value="decision">Decision</option>
+                <option value="directive">{t("landing.directive")}</option>
+                <option value="regulation">{t("landing.regulation")}</option>
+                <option value="decision">{t("landing.decision")}</option>
               </select>
               <input
                 type="text"
                 inputMode="numeric"
                 value={referenceYear}
                 onChange={(e) => setReferenceYear(e.target.value)}
-                placeholder="Year"
+                placeholder={t("landing.year")}
                 className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
               />
               <input
@@ -346,7 +353,7 @@ export function Landing() {
                 inputMode="numeric"
                 value={referenceNumber}
                 onChange={(e) => setReferenceNumber(e.target.value)}
-                placeholder="Number"
+                placeholder={t("landing.number")}
                 className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
               />
               <button
@@ -354,14 +361,14 @@ export function Landing() {
                 disabled={isImporting}
                 className="rounded-xl bg-gray-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-600 dark:hover:bg-blue-500"
               >
-                {isImporting ? "Importing..." : "Import law"}
+                {isImporting ? t("landing.importing") : t("landing.importLaw")}
               </button>
             </form>
             <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-              Choose the act type, year, and number. If automatic import fails, LegalViz opens the corresponding EUR-Lex search page.
+              {t("landing.importHelper")}
             </p>
             <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-600 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-300">
-              Example for GDPR: choose <strong>Regulation</strong>, enter <strong>2016</strong> as the year, and <strong>679</strong> as the number.
+              {t("landing.example")}
             </div>
             {importError && (
               <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
@@ -378,7 +385,7 @@ export function Landing() {
           className="mt-8 w-full"
         >
           <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-            Option 2 · Open a law from your library
+            {t("landing.option2")}
           </h2>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -389,7 +396,7 @@ export function Landing() {
                 whileTap={{ scale: 0.99 }}
                 onClick={() => {
                   handleLawClick(law.id);
-                  navigate(law.route);
+                  navigate(localizePath(law.route, locale));
                 }}
 
                 className="group relative flex h-full flex-col rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-gray-300 hover:shadow-md cursor-pointer dark:bg-gray-900 dark:border-gray-800 dark:hover:border-gray-700 dark:hover:shadow-gray-900/50"
@@ -398,7 +405,7 @@ export function Landing() {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     handleLawClick(law.id);
-                    navigate(law.route);
+                    navigate(localizePath(law.route, locale));
                   }
                 }}
                 role="button"
@@ -412,14 +419,14 @@ export function Landing() {
 
                     <div className="mt-2 flex items-center gap-1 text-[10px] text-gray-400">
                       <Clock className="h-3 w-3" />
-                      <span>Last opened: {formatDate(law.timestamp)}</span>
+                      <span>{t("common.lastOpened", { date: formatDate(law.timestamp) })}</span>
                     </div>
                   </div>
 
                   <button
                     onClick={(e) => handleDelete(e, law.id)}
                     className="absolute top-4 right-4 p-1.5 rounded-full text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-red-50 hover:text-red-500 transition-all"
-                    title="Hide this law"
+                    title={t("common.hideLaw")}
                   >
                     <Trash className="h-4 w-4" />
                   </button>
@@ -437,8 +444,8 @@ export function Landing() {
               transition={{ delay: 0.15 }}
               className="mt-10 w-full"
             >
-              <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-                Option 3 · Visualise other EU laws
+                <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
+                {t("landing.option3")}
               </h2>
               <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm dark:bg-gray-900 dark:border-gray-800">
                 <div className="flex w-full items-center justify-between px-6 py-4 text-left">
@@ -448,7 +455,7 @@ export function Landing() {
                     className="flex flex-1 items-center justify-between mr-4"
                   >
                     <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                      Visualise other EU laws in 4 simple steps
+                      {t("landing.visualiseStepsTitle")}
                     </p>
                     <Motion.span
                       animate={{ rotate: showExtensionInfo ? 90 : 0 }}
@@ -462,9 +469,9 @@ export function Landing() {
                   <button
                     onClick={dismissInstructions}
                     className="text-xs text-gray-400 hover:text-red-500 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                    title="Dismiss these instructions permanently"
+                    title={t("landing.dismissInstructions")}
                   >
-                    Dismiss
+                    {t("common.dismiss")}
                   </button>
                 </div>
                 <AnimatePresence initial={false}>
@@ -482,11 +489,11 @@ export function Landing() {
                     >
                       <div className="space-y-4 border-t border-gray-100 px-6 pb-6 pt-4 text-xs dark:border-gray-800">
                         <p className="text-gray-700 dark:text-gray-300">
-                          Want to visualise a different EU law? Install our browser extension to open <strong>any recent EU law</strong> from EUR-Lex in this visualiser.
+                          {t("landing.extensionDescription")}
                         </p>
 
                         <div>
-                          <p className="mb-3 font-medium text-gray-700 dark:text-gray-300">Install the extension:</p>
+                          <p className="mb-3 font-medium text-gray-700 dark:text-gray-300">{t("landing.installExtension")}</p>
                           <div className="flex flex-wrap items-center gap-2">
                             <a
                               href="https://chrome.google.com/webstore/detail/eur-lex-visualiser/akkfdjadggheloggnfonppfkbifanpbc"
@@ -528,16 +535,16 @@ export function Landing() {
                         </div>
 
                         <div className="rounded-lg bg-white p-3 dark:bg-gray-800/50">
-                          <p className="font-medium text-gray-900 dark:text-white">How it works:</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{t("landing.howItWorks")}</p>
                           <ol className="mt-2 space-y-1.5 text-gray-700 dark:text-gray-300">
                             <li className="flex gap-2">
                               <span className="font-semibold text-gray-500">1.</span>
-                              <span>Install the extension for your browser (see links above)</span>
+                              <span>{t("landing.step1")}</span>
                             </li>
                             <li className="flex gap-2">
                               <span className="font-semibold text-gray-500">2.</span>
                               <span>
-                                Visit a EU law page on EUR-Lex{" "}
+                                {t("landing.step2")}{" "}
                                 (e.g.{" "}
                                 <a
                                   href="https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng"
@@ -552,18 +559,18 @@ export function Landing() {
                             </li>
                             <li className="flex gap-2">
                               <span className="font-semibold text-gray-500">3.</span>
-                              <span>Open the law in the <strong>English</strong> language using the language selector on EUR-Lex</span>
+                              <span>{t("landing.step3")}</span>
                             </li>
                             <li className="mt-2">
                               <img
                                 src={`${import.meta.env.BASE_URL}language-selector.png`}
-                                alt="EUR-Lex language selector showing available languages"
+                                alt={t("landing.installExtension")}
                                 className="w-full rounded-lg border border-gray-200 shadow-sm"
                               />
                             </li>
                             <li className="flex gap-2">
                               <span className="font-semibold text-gray-500">4.</span>
-                              <span>Click the extension icon to open that law in LegalViz directly</span>
+                              <span>{t("landing.step4")}</span>
                             </li>
                           </ol>
                         </div>
@@ -584,25 +591,7 @@ export function Landing() {
           className="mt-8 flex flex-col items-center gap-2 text-xs text-gray-500"
         >
           <p>
-            Built by{" "}
-            <a
-              href="https://kollnig.net"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-700 hover:text-gray-900 underline"
-            >
-              Konrad Kollnig
-            </a>{" "}
-            at the{" "}
-            <a
-              href="https://www.maastrichtuniversity.nl/law-tech-lab"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-700 hover:text-gray-900 underline"
-            >
-              Law &amp; Tech Lab
-            </a>
-            , Maastricht University.
+            {t("landing.builtBy")}
           </p>
           <a
             href="https://github.com/maastrichtlawtech/eur-lex-visualiser"
@@ -611,7 +600,7 @@ export function Landing() {
             className="inline-flex items-center gap-1.5 text-gray-600 transition hover:text-gray-900 dark:text-gray-500 dark:hover:text-gray-300"
           >
             <Github className="h-4 w-4" />
-            <span>Source code and support on GitHub</span>
+            <span>{t("landing.sourceCode")}</span>
           </a>
         </Motion.div>
 
