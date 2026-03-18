@@ -2,8 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { execSync } = require('child_process');
+const AdmZip = require('adm-zip');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -220,59 +219,55 @@ function combineZipToXml(zipPath) {
   // Return cached combined file if it already exists
   if (fs.existsSync(combinedPath)) return combinedPath;
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fmx-'));
-  try {
-    execSync(`unzip -o "${zipPath}" -d "${tmp}"`, { stdio: 'pipe' });
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries();
+  const entryNames = entries.map(e => e.entryName);
 
-    const files = fs.readdirSync(tmp);
-
-    // Find the manifest (*.doc.fmx.xml)
-    const docFile = files.find(f => f.endsWith('.doc.fmx.xml'));
-    if (!docFile) {
-      throw new Error('No *.doc.fmx.xml manifest found in ZIP');
-    }
-    const manifest = fs.readFileSync(path.join(tmp, docFile), 'utf8');
-
-    // Extract file references from manifest
-    const refPattern = /FILE="([^"]+)"/g;
-    const physRefs = [];
-    let m;
-    while ((m = refPattern.exec(manifest)) !== null) {
-      const ref = m[1];
-      if (ref.endsWith('.fmx.xml') && ref !== docFile && files.includes(ref)) {
-        physRefs.push(ref);
-      }
-    }
-
-    if (physRefs.length === 0) {
-      // Fallback: include all .fmx.xml files except the manifest
-      for (const f of files) {
-        if (f.endsWith('.fmx.xml') && f !== docFile) {
-          physRefs.push(f);
-        }
-      }
-    }
-
-    // Build combined XML
-    const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
-    parts.push('<COMBINED.FMX>');
-
-    for (const ref of physRefs) {
-      let xml = fs.readFileSync(path.join(tmp, ref), 'utf8');
-      // Remove XML declaration from individual files
-      xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
-      parts.push(xml);
-    }
-
-    parts.push('</COMBINED.FMX>');
-
-    fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
-    console.log(`[ZIP] Combined ${physRefs.length} files from ${path.basename(zipPath)} → ${path.basename(combinedPath)}`);
-
-    return combinedPath;
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+  // Find the manifest (*.doc.fmx.xml)
+  const docEntry = entries.find(e => e.entryName.endsWith('.doc.fmx.xml'));
+  if (!docEntry) {
+    throw new Error('No *.doc.fmx.xml manifest found in ZIP');
   }
+  const manifest = docEntry.getData().toString('utf8');
+
+  // Extract file references from manifest
+  const refPattern = /FILE="([^"]+)"/g;
+  const physRefs = [];
+  let m;
+  while ((m = refPattern.exec(manifest)) !== null) {
+    const ref = m[1];
+    if (ref.endsWith('.fmx.xml') && ref !== docEntry.entryName && entryNames.includes(ref)) {
+      physRefs.push(ref);
+    }
+  }
+
+  if (physRefs.length === 0) {
+    // Fallback: include all .fmx.xml files except the manifest
+    for (const name of entryNames) {
+      if (name.endsWith('.fmx.xml') && name !== docEntry.entryName) {
+        physRefs.push(name);
+      }
+    }
+  }
+
+  // Build combined XML
+  const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
+  parts.push('<COMBINED.FMX>');
+
+  for (const ref of physRefs) {
+    const entry = zip.getEntry(ref);
+    let xml = entry.getData().toString('utf8');
+    // Remove XML declaration from individual files
+    xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
+    parts.push(xml);
+  }
+
+  parts.push('</COMBINED.FMX>');
+
+  fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
+  console.log(`[ZIP] Combined ${physRefs.length} files from ${path.basename(zipPath)} → ${path.basename(combinedPath)}`);
+
+  return combinedPath;
 }
 
 // Prevent concurrent duplicate downloads for the same celex+lang
