@@ -169,6 +169,39 @@
   border-left-color: #4b5563;
 }
 
+.prose .fmx-footnote-ref {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+.prose .fmx-footnote-ref a,
+.prose .fmx-footnote-backref {
+  text-decoration: none;
+}
+
+.prose .fmx-footnotes {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e7eb;
+  font-size: 0.9em;
+  color: #6b7280;
+}
+
+.prose .fmx-footnotes ol {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.prose .fmx-footnotes li + li {
+  margin-top: 0.5rem;
+}
+
+:root.dark .prose .fmx-footnotes {
+  color: #9ca3af;
+  border-top-color: #374151;
+}
+
 @media print {
 
   /* Hide everything by default */

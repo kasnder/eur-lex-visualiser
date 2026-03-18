@@ -42,7 +42,7 @@ function allText(el) {
  *          NOTE/FOOTNOTE, HT (highlight), QUOT.START/QUOT.END,
  *          REF.DOC.OJ, DATE, and nested structures.
  */
-function fmxToHtml(el) {
+function fmxToHtml(el, ctx = null) {
   if (!el) return "";
   if (el.nodeType === Node.TEXT_NODE) return escapeHtml(el.textContent);
 
@@ -55,16 +55,16 @@ function fmxToHtml(el) {
   // Highlighting
   if (tag === "HT") {
     const type = el.getAttribute("TYPE");
-    if (type === "UC") return `<span class="uppercase">${childrenHtml(el)}</span>`;
-    if (type === "BOLD") return `<strong>${childrenHtml(el)}</strong>`;
-    if (type === "ITALIC") return `<em>${childrenHtml(el)}</em>`;
-    if (type === "SUB") return `<sub>${childrenHtml(el)}</sub>`;
-    if (type === "SUP") return `<sup>${childrenHtml(el)}</sup>`;
-    return childrenHtml(el);
+    if (type === "UC") return `<span class="uppercase">${childrenHtml(el, ctx)}</span>`;
+    if (type === "BOLD") return `<strong>${childrenHtml(el, ctx)}</strong>`;
+    if (type === "ITALIC") return `<em>${childrenHtml(el, ctx)}</em>`;
+    if (type === "SUB") return `<sub>${childrenHtml(el, ctx)}</sub>`;
+    if (type === "SUP") return `<sup>${childrenHtml(el, ctx)}</sup>`;
+    return childrenHtml(el, ctx);
   }
 
   // Date
-  if (tag === "DATE") return childrenHtml(el);
+  if (tag === "DATE") return childrenHtml(el, ctx);
 
   // External OJ reference — render as a styled span with OJ citation text
   if (tag === "REF.DOC.OJ" || tag === "REF.DOC") {
@@ -75,16 +75,16 @@ function fmxToHtml(el) {
     // Build EUR-Lex OJ link if we have enough data
     if (coll && no && date) {
       const year = date.slice(0, 4);
-      return `<span class="oj-ref" data-oj-coll="${escapeHtml(coll)}" data-oj-no="${escapeHtml(no)}" data-oj-year="${escapeHtml(year)}" data-oj-page="${escapeHtml(page)}">${childrenHtml(el)}</span>`;
+      return `<span class="oj-ref" data-oj-coll="${escapeHtml(coll)}" data-oj-no="${escapeHtml(no)}" data-oj-year="${escapeHtml(year)}" data-oj-page="${escapeHtml(page)}">${childrenHtml(el, ctx)}</span>`;
     }
-    return `<span class="oj-ref">${childrenHtml(el)}</span>`;
+    return `<span class="oj-ref">${childrenHtml(el, ctx)}</span>`;
   }
 
   // FT — formatted text (e.g. numbers with spaces)
-  if (tag === "FT") return childrenHtml(el);
+  if (tag === "FT") return childrenHtml(el, ctx);
 
   // QUOT.S — quoted block
-  if (tag === "QUOT.S") return childrenHtml(el);
+  if (tag === "QUOT.S") return childrenHtml(el, ctx);
 
   // GR.SEQ — grouped sequence (used in annexes)
   // NP children may appear without a LIST wrapper; group them into tables
@@ -93,10 +93,10 @@ function fmxToHtml(el) {
     let npBuffer = "";
     for (const c of el.childNodes) {
       if (c.nodeType === Node.ELEMENT_NODE && c.tagName === "NP") {
-        npBuffer += fmxToHtml(c);
+        npBuffer += fmxToHtml(c, ctx);
       } else {
         if (npBuffer) { html += `<table class="fmx-list">${npBuffer}</table>`; npBuffer = ""; }
-        html += fmxToHtml(c);
+        html += fmxToHtml(c, ctx);
       }
     }
     if (npBuffer) html += `<table class="fmx-list">${npBuffer}</table>`;
@@ -117,36 +117,50 @@ function fmxToHtml(el) {
   if (tag === "STI") return `<p class="oj-sti-art">${escapeHtml(allText(el))}</p>`;
 
   // CONTENTS — annex body content
-  if (tag === "CONTENTS") return childrenHtml(el);
+  if (tag === "CONTENTS") return childrenHtml(el, ctx);
 
   // Footnotes
   if (tag === "NOTE") {
-    return `<aside class="fmx-footnote">${childrenHtml(el)}</aside>`;
+    if (!ctx) {
+      return `<aside class="fmx-footnote">${childrenHtml(el, ctx)}</aside>`;
+    }
+
+    const footnoteNumber = ctx.footnotes.length + 1;
+    const footnoteId = `fmx-footnote-${ctx.idPrefix}-${footnoteNumber}`;
+    const refId = `fmx-footnote-ref-${ctx.idPrefix}-${footnoteNumber}`;
+    ctx.footnotes.push({
+      number: footnoteNumber,
+      id: footnoteId,
+      refId,
+      html: childrenHtml(el, ctx),
+    });
+
+    return `<sup class="fmx-footnote-ref"><a href="#${footnoteId}" id="${refId}">${footnoteNumber}</a></sup>`;
   }
 
   // Paragraph number
   if (tag === "NO.PARAG" || tag === "NO.P") {
-    return `<span class="fmx-num">${childrenHtml(el)}</span>`;
+    return `<span class="fmx-num">${childrenHtml(el, ctx)}</span>`;
   }
 
   // Numbered paragraph (e.g. NP = numbered point)
   if (tag === "NP") {
-    return `<tr class="fmx-np"><td class="fmx-np-num">${fmxToHtml(el.querySelector("NO\\.P"))}</td><td>${childrenHtmlExcept(el, "NO.P")}</td></tr>`;
+    return `<tr class="fmx-np"><td class="fmx-np-num">${fmxToHtml(el.querySelector("NO\\.P"), ctx)}</td><td>${childrenHtmlExcept(el, "NO.P", ctx)}</td></tr>`;
   }
 
   // Lists
   if (tag === "LIST") {
-    return `<table class="fmx-list">${childrenHtml(el)}</table>`;
+    return `<table class="fmx-list">${childrenHtml(el, ctx)}</table>`;
   }
 
   // List item
-  if (tag === "ITEM") return childrenHtml(el);
+  if (tag === "ITEM") return childrenHtml(el, ctx);
 
   // Paragraph — render inline like the old XHTML format: "1.   Text here"
   if (tag === "PARAG") {
     const noP = el.querySelector("NO\\.PARAG");
     const num = noP ? allText(noP) : "";
-    const body = childrenHtmlExcept(el, "NO.PARAG");
+    const body = childrenHtmlExcept(el, "NO.PARAG", ctx);
     if (num) {
       const numPrefix = `${escapeHtml(num)}\u00a0\u00a0\u00a0`;
       // If body starts with <p>, inject number inside the first <p>
@@ -161,13 +175,13 @@ function fmxToHtml(el) {
   }
 
   // ALINEA — unnumbered paragraph block, render children directly
-  if (tag === "ALINEA") return childrenHtml(el);
+  if (tag === "ALINEA") return childrenHtml(el, ctx);
 
   // P — plain paragraph
-  if (tag === "P") return `<p>${childrenHtml(el)}</p>`;
+  if (tag === "P") return `<p>${childrenHtml(el, ctx)}</p>`;
 
   // TXT — inline text wrapper
-  if (tag === "TXT") return childrenHtml(el);
+  if (tag === "TXT") return childrenHtml(el, ctx);
 
   // TI.ART — handled outside (rendered as h2 heading by viewer), skip
   if (tag === "TI.ART") return "";
@@ -176,22 +190,48 @@ function fmxToHtml(el) {
   if (tag === "STI.ART") return `<p class="oj-sti-art">${escapeHtml(allText(el))}</p>`;
 
   // Default: just recurse
-  return childrenHtml(el);
+  return childrenHtml(el, ctx);
 }
 
-function childrenHtml(el) {
+function childrenHtml(el, ctx = null) {
   let out = "";
-  for (const c of el.childNodes) out += fmxToHtml(c);
+  for (const c of el.childNodes) out += fmxToHtml(c, ctx);
   return out;
 }
 
-function childrenHtmlExcept(el, skipTag) {
+function childrenHtmlExcept(el, skipTag, ctx = null) {
   let out = "";
   for (const c of el.childNodes) {
     if (c.nodeType === Node.ELEMENT_NODE && c.tagName === skipTag) continue;
-    out += fmxToHtml(c);
+    out += fmxToHtml(c, ctx);
   }
   return out;
+}
+
+function renderWithFootnotes(el, idPrefix) {
+  const ctx = { idPrefix, footnotes: [] };
+  const html = fmxToHtml(el, ctx);
+  return appendFootnotes(html, ctx);
+}
+
+function renderChildrenWithFootnotes(el, idPrefix, shouldSkip = () => false) {
+  const ctx = { idPrefix, footnotes: [] };
+  let html = "";
+  for (const child of el.childNodes) {
+    if (shouldSkip(child)) continue;
+    html += fmxToHtml(child, ctx);
+  }
+  return appendFootnotes(html, ctx);
+}
+
+function appendFootnotes(html, ctx) {
+  if (ctx.footnotes.length === 0) return html;
+
+  const footnotesHtml = ctx.footnotes.map((footnote) =>
+    `<li id="${footnote.id}">${footnote.html} <a href="#${footnote.refId}" class="fmx-footnote-backref" aria-label="Back to reference">↩</a></li>`
+  ).join("");
+
+  return `${html}<section class="fmx-footnotes"><ol>${footnotesHtml}</ol></section>`;
 }
 
 function escapeHtml(s) {
@@ -484,7 +524,7 @@ export function parseFmxToCombined(xmlText) {
     const num = noP ? allText(noP).replace(/[()]/g, "").trim() : String(recitals.length + 1);
     const txtEl = consid.querySelector("NP > TXT") || consid.querySelector("NP");
     const recitalText = txtEl ? allText(txtEl) : "";
-    const recitalHtmlRaw = txtEl ? fmxToHtml(txtEl) : "";
+    const recitalHtmlRaw = txtEl ? renderWithFootnotes(txtEl, `recital-${num}`) : "";
     recitals.push({
       recital_number: num,
       recital_text: recitalText,
@@ -539,11 +579,11 @@ export function parseFmxToCombined(xmlText) {
         const article_title = stiArt ? allText(stiArt) : "";
 
         // Build HTML from article body (skip TI.ART, keep STI.ART as subtitle)
-        let bodyHtml = "";
-        for (const c of child.children) {
-          if (c.tagName === "TI.ART") continue;
-          bodyHtml += fmxToHtml(c);
-        }
+        let bodyHtml = renderChildrenWithFootnotes(
+          child,
+          `article-${article_number}`,
+          (node) => node.nodeType === Node.ELEMENT_NODE && node.tagName === "TI.ART"
+        );
         bodyHtml = injectCrossRefLinks(bodyHtml, lang);
 
         articles.push({
@@ -688,7 +728,7 @@ export function parseFmxToCombined(xmlText) {
     const contents = annexEl.querySelector("CONTENTS");
     let annex_html = "";
     if (contents) {
-      annex_html = injectCrossRefLinks(fmxToHtml(contents), lang);
+      annex_html = injectCrossRefLinks(renderWithFootnotes(contents, `annex-${annex_id || "body"}`), lang);
     }
 
     annexes.push({ annex_id, annex_title, annex_html });
