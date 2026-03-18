@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { execSync } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -203,6 +205,76 @@ async function findDownloadUrls(fmx4Uri) {
   throw new Error('No downloadable FMX files found');
 }
 
+// === ZIP → Combined XML ===
+
+/**
+ * Extract a Formex ZIP and combine its FMX files into a single
+ * <COMBINED.FMX> XML document, matching the logic in
+ * scripts/combine-fmx-zip.mjs.
+ *
+ * Returns the path to the combined XML file (cached alongside the ZIP).
+ */
+function combineZipToXml(zipPath) {
+  const combinedPath = zipPath.replace(/\.zip$/, '.combined.xml');
+
+  // Return cached combined file if it already exists
+  if (fs.existsSync(combinedPath)) return combinedPath;
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fmx-'));
+  try {
+    execSync(`unzip -o "${zipPath}" -d "${tmp}"`, { stdio: 'pipe' });
+
+    const files = fs.readdirSync(tmp);
+
+    // Find the manifest (*.doc.fmx.xml)
+    const docFile = files.find(f => f.endsWith('.doc.fmx.xml'));
+    if (!docFile) {
+      throw new Error('No *.doc.fmx.xml manifest found in ZIP');
+    }
+    const manifest = fs.readFileSync(path.join(tmp, docFile), 'utf8');
+
+    // Extract file references from manifest
+    const refPattern = /FILE="([^"]+)"/g;
+    const physRefs = [];
+    let m;
+    while ((m = refPattern.exec(manifest)) !== null) {
+      const ref = m[1];
+      if (ref.endsWith('.fmx.xml') && ref !== docFile && files.includes(ref)) {
+        physRefs.push(ref);
+      }
+    }
+
+    if (physRefs.length === 0) {
+      // Fallback: include all .fmx.xml files except the manifest
+      for (const f of files) {
+        if (f.endsWith('.fmx.xml') && f !== docFile) {
+          physRefs.push(f);
+        }
+      }
+    }
+
+    // Build combined XML
+    const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
+    parts.push('<COMBINED.FMX>');
+
+    for (const ref of physRefs) {
+      let xml = fs.readFileSync(path.join(tmp, ref), 'utf8');
+      // Remove XML declaration from individual files
+      xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
+      parts.push(xml);
+    }
+
+    parts.push('</COMBINED.FMX>');
+
+    fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
+    console.log(`[ZIP] Combined ${physRefs.length} files from ${path.basename(zipPath)} → ${path.basename(combinedPath)}`);
+
+    return combinedPath;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // Prevent concurrent duplicate downloads for the same celex+lang
 const inFlightDownloads = new Map(); // "celex_lang" -> Promise
 
@@ -320,19 +392,42 @@ app.get('/api/laws/:celex', rateLimitMiddleware, async (req, res) => {
       return res.status(404).json({ error: `No FMX files found for ${celex}` });
     }
 
-    const file = files[0];
+    // If the Cellar returned a ZIP, extract and combine into a single XML
+    let servePath;
+    if (type === 'zip') {
+      servePath = combineZipToXml(files[0].path);
+    } else if (files.length > 1) {
+      // Multiple XML files: combine them under <COMBINED.FMX>
+      const combinedPath = files[0].path.replace(/\.xml$/, '.combined.xml');
+      if (!fs.existsSync(combinedPath)) {
+        const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
+        parts.push('<COMBINED.FMX>');
+        for (const f of files) {
+          let xml = fs.readFileSync(f.path, 'utf8');
+          xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
+          parts.push(xml);
+        }
+        parts.push('</COMBINED.FMX>');
+        fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
+        console.log(`[API] Combined ${files.length} XML files → ${path.basename(combinedPath)}`);
+      }
+      servePath = combinedPath;
+    } else {
+      servePath = files[0].path;
+    }
 
-    if (!fs.existsSync(file.path)) {
+    if (!fs.existsSync(servePath)) {
       return res.status(404).json({ error: 'Cached file missing' });
     }
 
-    const stat = fs.statSync(file.path);
+    const stat = fs.statSync(servePath);
 
-    res.setHeader('Content-Type', type === 'zip' ? 'application/zip' : 'application/xml');
+    // Always serve XML to the client
+    res.setHeader('Content-Type', 'application/xml');
     res.setHeader('Content-Length', stat.size);
-    res.setHeader('X-Filename', file.filename);
+    res.setHeader('X-Filename', path.basename(servePath));
 
-    const stream = fs.createReadStream(file.path);
+    const stream = fs.createReadStream(servePath);
     stream.on('error', (err) => {
       console.error(`[API] Stream error: ${err.message}`);
       if (!res.headersSent) {
