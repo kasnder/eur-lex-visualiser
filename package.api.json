@@ -1,0 +1,10 @@
+{
+  "name": "eur-lex-visualiser-api",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "cd eur-lex-api && npm start"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

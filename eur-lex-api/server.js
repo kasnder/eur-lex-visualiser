@@ -273,7 +273,7 @@ app.get('/api/laws/:celex', rateLimitMiddleware, async (req, res) => {
     const { celex } = req.params;
     const { lang = 'ENG' } = req.query;
 
-    if (!/^\d{4}[A-Z]\d{4}$/.test(celex)) {
+    if (!/^\d{4,5}[A-Z]\d{4}$/.test(celex)) {
       return res.status(400).json({ error: 'Invalid CELEX format. Expected: 32016R0679' });
     }
 
@@ -304,7 +304,7 @@ app.get('/api/laws/:celex/info', rateLimitMiddleware, async (req, res) => {
     const { celex } = req.params;
     const { lang = 'ENG' } = req.query;
 
-    if (!/^\d{4}[A-Z]\d{4}$/.test(celex)) {
+    if (!/^\d{4,5}[A-Z]\d{4}$/.test(celex)) {
       return res.status(400).json({ error: 'Invalid CELEX format' });
     }
 
