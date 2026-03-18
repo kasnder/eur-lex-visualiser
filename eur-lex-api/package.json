@@ -7,12 +7,18 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["eur-lex", "fmx", "eu-law", "api"],
+  "keywords": [
+    "eur-lex",
+    "fmx",
+    "eu-law",
+    "api"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "adm-zip": "^0.5.16",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
   },
   "engines": {
     "node": ">=18.0.0"

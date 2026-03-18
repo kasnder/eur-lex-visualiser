@@ -2,8 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { execSync } = require('child_process');
+const AdmZip = require('adm-zip');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -124,6 +123,25 @@ function validateLang(lang) {
   return VALID_LANGS.has(upper) ? upper : null;
 }
 
+// === Safe Error Handling ===
+
+/** Error subclass for messages that are safe to show to API clients. */
+class ClientError extends Error {
+  constructor(message, statusCode = 500) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+/** Return a safe error message for the client; log the real one server-side. */
+function safeErrorResponse(res, err, fallbackMessage = 'Internal server error') {
+  if (err instanceof ClientError) {
+    return res.status(err.statusCode).json({ error: err.message });
+  }
+  console.error(`[API] ${fallbackMessage}:`, err.message);
+  return res.status(500).json({ error: fallbackMessage });
+}
+
 // === EUR-Lex Cellar Fetching Logic ===
 
 async function fetchWithTimeout(url, options = {}) {
@@ -148,6 +166,7 @@ async function getRdf(url) {
   const r = await fetchWithTimeout(url, {
     headers: { Accept: '*/*', 'Accept-Language': 'eng' }
   });
+  if (r.status === 404) throw new ClientError('Law not found in EUR-Lex Cellar', 404);
   if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
   return r.text();
 }
@@ -173,7 +192,7 @@ async function findFmx4Uri(celex, lang = 'ENG') {
     }
   }
 
-  if (!fmx4) throw new Error(`No fmx4 expression URI found for lang=${lang}`);
+  if (!fmx4) throw new ClientError(`No Formex data available for this law in language ${lang}`, 404);
   return fmx4;
 }
 
@@ -202,7 +221,7 @@ async function findDownloadUrls(fmx4Uri) {
   const docXmls = uris.filter(u => u.endsWith('.doc.xml'));
   if (docXmls.length) return { type: 'xml', urls: docXmls };
 
-  throw new Error('No downloadable FMX files found');
+  throw new ClientError('No downloadable Formex files found for this law', 404);
 }
 
 // === ZIP → Combined XML ===
@@ -220,59 +239,55 @@ function combineZipToXml(zipPath) {
   // Return cached combined file if it already exists
   if (fs.existsSync(combinedPath)) return combinedPath;
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fmx-'));
-  try {
-    execSync(`unzip -o "${zipPath}" -d "${tmp}"`, { stdio: 'pipe' });
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries();
+  const entryNames = entries.map(e => e.entryName);
 
-    const files = fs.readdirSync(tmp);
-
-    // Find the manifest (*.doc.fmx.xml)
-    const docFile = files.find(f => f.endsWith('.doc.fmx.xml'));
-    if (!docFile) {
-      throw new Error('No *.doc.fmx.xml manifest found in ZIP');
-    }
-    const manifest = fs.readFileSync(path.join(tmp, docFile), 'utf8');
-
-    // Extract file references from manifest
-    const refPattern = /FILE="([^"]+)"/g;
-    const physRefs = [];
-    let m;
-    while ((m = refPattern.exec(manifest)) !== null) {
-      const ref = m[1];
-      if (ref.endsWith('.fmx.xml') && ref !== docFile && files.includes(ref)) {
-        physRefs.push(ref);
-      }
-    }
-
-    if (physRefs.length === 0) {
-      // Fallback: include all .fmx.xml files except the manifest
-      for (const f of files) {
-        if (f.endsWith('.fmx.xml') && f !== docFile) {
-          physRefs.push(f);
-        }
-      }
-    }
-
-    // Build combined XML
-    const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
-    parts.push('<COMBINED.FMX>');
-
-    for (const ref of physRefs) {
-      let xml = fs.readFileSync(path.join(tmp, ref), 'utf8');
-      // Remove XML declaration from individual files
-      xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
-      parts.push(xml);
-    }
-
-    parts.push('</COMBINED.FMX>');
-
-    fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
-    console.log(`[ZIP] Combined ${physRefs.length} files from ${path.basename(zipPath)} → ${path.basename(combinedPath)}`);
-
-    return combinedPath;
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+  // Find the manifest (*.doc.fmx.xml)
+  const docEntry = entries.find(e => e.entryName.endsWith('.doc.fmx.xml'));
+  if (!docEntry) {
+    throw new Error('No *.doc.fmx.xml manifest found in ZIP');
   }
+  const manifest = docEntry.getData().toString('utf8');
+
+  // Extract file references from manifest
+  const refPattern = /FILE="([^"]+)"/g;
+  const physRefs = [];
+  let m;
+  while ((m = refPattern.exec(manifest)) !== null) {
+    const ref = m[1];
+    if (ref.endsWith('.fmx.xml') && ref !== docEntry.entryName && entryNames.includes(ref)) {
+      physRefs.push(ref);
+    }
+  }
+
+  if (physRefs.length === 0) {
+    // Fallback: include all .fmx.xml files except the manifest
+    for (const name of entryNames) {
+      if (name.endsWith('.fmx.xml') && name !== docEntry.entryName) {
+        physRefs.push(name);
+      }
+    }
+  }
+
+  // Build combined XML
+  const parts = ['<?xml version="1.0" encoding="UTF-8"?>'];
+  parts.push('<COMBINED.FMX>');
+
+  for (const ref of physRefs) {
+    const entry = zip.getEntry(ref);
+    let xml = entry.getData().toString('utf8');
+    // Remove XML declaration from individual files
+    xml = xml.replace(/<\?xml[^?]*\?>/, '').trim();
+    parts.push(xml);
+  }
+
+  parts.push('</COMBINED.FMX>');
+
+  fs.writeFileSync(combinedPath, parts.join('\n'), 'utf8');
+  console.log(`[ZIP] Combined ${physRefs.length} files from ${path.basename(zipPath)} → ${path.basename(combinedPath)}`);
+
+  return combinedPath;
 }
 
 // Prevent concurrent duplicate downloads for the same celex+lang
@@ -366,7 +381,7 @@ app.get('/api/laws', rateLimitMiddleware, (req, res) => {
     const laws = files.filter(f => f.endsWith('.xml') || f.endsWith('.zip'));
     res.json({ laws });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeErrorResponse(res, err, 'Failed to list cached laws');
   }
 });
 
@@ -438,9 +453,8 @@ app.get('/api/laws/:celex', rateLimitMiddleware, async (req, res) => {
     });
     stream.pipe(res);
   } catch (err) {
-    console.error(`[API] Error: ${err.message}`);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      safeErrorResponse(res, err, 'Failed to fetch law');
     }
   }
 });
@@ -470,7 +484,7 @@ app.get('/api/laws/:celex/info', rateLimitMiddleware, async (req, res) => {
       type
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeErrorResponse(res, err, 'Failed to fetch law metadata');
   }
 });
 
@@ -490,7 +504,7 @@ app.get('/api/search', rateLimitMiddleware, (req, res) => {
     
     res.json({ matches });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeErrorResponse(res, err, 'Search failed');
   }
 });
 
