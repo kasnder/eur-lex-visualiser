@@ -289,8 +289,6 @@ export function Landing() {
         formexLang={formexLang}
         searchableLawCount={searchableLawCount}
         onFormexLangChange={setFormexLang}
-        useFormex={true}
-        onToggleFormex={() => {}}
         hasCelex={true}
       />
 

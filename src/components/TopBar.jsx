@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical } from "lucide-react";
@@ -52,6 +52,13 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     }
   }, [isOpen, searchIndex, isBuilding, lists]);
 
+  const handleSelect = useCallback((item) => {
+    onNavigate(item);
+    // setQuery(""); // Keep search term
+    // setResults([]); // Keep results
+    setIsOpen(false);
+  }, [onNavigate]);
+
   // Close when pressing Escape
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -92,7 +99,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, results, selectedIndex]);
+  }, [handleSelect, isOpen, results, selectedIndex]);
 
   // Auto-scroll to selected item
   useEffect(() => {
@@ -122,13 +129,6 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     } else {
       setResults([]);
     }
-  };
-
-  const handleSelect = (item) => {
-    onNavigate(item);
-    // setQuery(""); // Keep search term
-    // setResults([]); // Keep results
-    setIsOpen(false);
   };
 
   return (
@@ -325,8 +325,6 @@ export function TopBar({
   formexLang,
   searchableLawCount = 0,
   onFormexLangChange,
-  useFormex,
-  onToggleFormex,
   hasCelex,
 }) {
   const navigate = useNavigate();
@@ -414,8 +412,6 @@ export function TopBar({
           <LanguageSelector
             currentLang={formexLang}
             onChangeLang={onFormexLangChange}
-            useFormex={useFormex}
-            onToggleFormex={onToggleFormex}
             hasCelex={hasCelex}
           />
 

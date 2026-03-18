@@ -271,57 +271,6 @@
   margin: 0;
 }
 
-.prose .legacy-list {
-  margin: 0.5rem 0 0.5rem 1.5rem;
-  padding-left: 0.5rem;
-}
-
-.prose .legacy-list.legacy-list-decimal {
-  list-style: decimal;
-}
-
-.prose .legacy-list.legacy-list-lower-alpha {
-  list-style: lower-alpha;
-}
-
-.prose .legacy-list.legacy-list-lower-roman {
-  list-style: lower-roman;
-}
-
-.prose .legacy-list-item {
-  margin: 0.35rem 0;
-}
-
-.prose .legacy-list-item[data-marker]::marker {
-  content: attr(data-marker) " ";
-}
-
-.prose .legacy-numbered-group {
-  margin: 0.5rem 0;
-}
-
-.prose .legacy-numbered-block {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  column-gap: 0.5rem;
-  align-items: start;
-  margin: 0.5rem 0;
-}
-
-.prose .legacy-numbered-block-num {
-  color: #6b7280;
-  white-space: nowrap;
-}
-
-.prose .legacy-list li > p,
-.prose .legacy-numbered-block-body > :first-child {
-  margin-top: 0;
-}
-
-.prose .legacy-numbered-block-body > :last-child {
-  margin-bottom: 0;
-}
-
 :root.dark .prose .fmx-footnotes {
   color: #9ca3af;
   border-top-color: #374151;

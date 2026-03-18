@@ -247,14 +247,3 @@ export async function fetchFormexByReference(reference, lang = "EN") {
 
   return res.text();
 }
-
-/**
- * Extract a CELEX number from a EUR-Lex URL.
- * e.g. "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679"
- *   → "32016R0679"
- */
-export function extractCelexFromUrl(url) {
-  if (!url) return null;
-  const m = url.match(/CELEX[:%]3A(\d{5}[A-Z]\d{4})/i) || url.match(/CELEX:(\d{5}[A-Z]\d{4})/i);
-  return m ? m[1] : null;
-}

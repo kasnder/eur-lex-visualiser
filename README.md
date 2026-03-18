@@ -76,13 +76,12 @@ The visualiser can open **any EU law** (at least newer ones) directly from EUR-L
 
 1. Install the extension for your browser (see links above).
 2. Visit any EU law page on [EUR-Lex](https://eur-lex.europa.eu) — for example, the [GDPR](https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng).
-3. Use the EUR-Lex language selector to open the law in **English** (the parser currently requires the English version).
-4. On supported EUR-Lex text pages, the extension opens LegalViz and passes the current EUR-Lex URL for server-side resolution.
-5. LegalViz resolves that URL to the canonical law URL for the act, while keeping the extension’s import entry URL compatible.
+3. On supported EUR-Lex text pages, the extension opens LegalViz and passes the current EUR-Lex URL for server-side resolution.
+4. LegalViz resolves that URL to a CELEX identifier, fetches the corresponding Formex document, and redirects to the canonical law URL for the act.
 
 ![EUR-Lex language selector showing available languages](public/language-selector.png)
 
-> 💡 **Note:** the extension no longer stores a separate local library. It delegates resolution to the backend via the compatible `/import?...` entrypoint, and LegalViz then redirects to the canonical clean law URL.
+> 💡 **Note:** LegalViz now uses a Formex-only import flow. If you still have an older extension version installed, update it before importing laws from EUR-Lex.
 
 ## Browser Support
 
@@ -131,23 +130,18 @@ npm run dev
 
 To add a new legal instrument to the pre-loaded list:
 
-1. Place the law file (XHTML, XML, or HTML) in the `public/data/` directory
+1. Obtain the Formex XML or a CELEX-backed source for the law you want to support
 2. Add an entry to `src/constants/laws.js`:
 ```javascript
-{ key: "law-key", label: "Law Name (EU YYYY/XXXX)", value: "data/law-file.xhtml" }
+{ key: "law-key", label: "Law Name (EU YYYY/XXXX)", celex: "32016R0679", shortname: "gdpr" }
 ```
 
-The parser automatically handles:
-- Official Journal (OJ) format
-- Consolidated format
-- JSON format (if pre-processed)
+LegalViz now loads supported laws through CELEX/Formex-backed routes rather than generic runtime XHTML/HTML parsing.
 
 ### Project Structure
 
 ```
 legalviz.eu/
-├── public/
-│   └── data/              # Legal instrument files (XHTML, XML, HTML)
 ├── src/
 │   ├── components/        # React components
 │   │   ├── Accordion.jsx   # Collapsible accordion component
@@ -159,8 +153,8 @@ legalviz.eu/
 │   ├── constants/
 │   │   └── laws.js         # Supported laws configuration
 │   ├── utils/
+│   │   ├── fmxParser.js    # Formex XML parsing logic
 │   │   ├── nlp.js          # TF-IDF & Search logic
-│   │   ├── parsers.js      # XHTML/XML parsing logic
 │   │   └── url.js          # URL state management
 │   ├── App.jsx             # Main application component
 │   └── main.jsx            # Application entry point
@@ -179,12 +173,12 @@ legalviz.eu/
 
 ### How It Works
 
-1. **Parsing**: The application parses EU legal documents (typically in XHTML format from EUR-Lex) to extract structure (Articles, Chapters, Sections), Recitals, and Annexes.
+1. **Parsing**: The application fetches Formex XML for CELEX-backed EU laws and parses that structure into Articles, Chapters, Sections, Recitals, and Annexes.
 2. **Indexing**: A client-side inverted index is built on the fly to enable instant full-text search.
 3. **Analysis**: The `nlp.js` module computes TF-IDF vectors for all articles and recitals to find semantic similarities, linking recitals to relevant articles automatically.
 4. **State Management**: The selected law and current view are synchronized with the URL, allowing for bookmarkable links and browser back/forward navigation.
-5. **Extension Integration**: The browser extension detects supported EUR-Lex pages and opens LegalViz with the full EUR-Lex `sourceUrl`.
-6. **URL Resolution**: The backend resolves the EUR-Lex URL to a canonical CELEX identifier, and the app redirects from the compatible `/import?...` entrypoint to the canonical public law URL.
+5. **Extension Integration**: The browser extension detects supported EUR-Lex pages and opens LegalViz with the current EUR-Lex `sourceUrl`.
+6. **URL Resolution**: The backend resolves the EUR-Lex URL to a canonical CELEX identifier, and the app redirects from `/import?...` to the canonical public law URL.
 
 ## Contributing
 
