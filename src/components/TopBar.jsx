@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical } from "lucide-react";
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
@@ -341,8 +341,11 @@ export function TopBar({
   searchableLawCount = 0,
   onFormexLangChange,
   hasCelex,
+  onToggleSecondLanguage,
+  isSideBySide = false,
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { locale, localizePath, t } = useI18n();
 
   const onNavigate = (item) => {
@@ -357,7 +360,7 @@ export function TopBar({
     if (isExtensionMode) {
       navigate(`/extension/${item.type}/${safeId}${extensionParams}`);
     } else if (targetLawSlug) {
-      navigate(localizePath(`/${targetLawSlug}/${item.type}/${safeId}`, locale));
+      navigate(`${localizePath(`/${targetLawSlug}/${item.type}/${safeId}`, locale)}${location.search}`);
     }
   };
 
@@ -422,6 +425,8 @@ export function TopBar({
               eurlexUrl={eurlexUrl}
               onToggleSidebar={onToggleSidebar}
               isSidebarOpen={isSidebarOpen}
+              onToggleSecondLanguage={onToggleSecondLanguage}
+              isSideBySide={isSideBySide}
             />
           </div>
 
@@ -440,7 +445,18 @@ export function TopBar({
   );
 }
 
-function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSize, eurlexUrl, onToggleSidebar, isSidebarOpen }) {
+function ToolsMenu({
+  onPrint,
+  showPrint,
+  onIncreaseFont,
+  onDecreaseFont,
+  fontSize,
+  eurlexUrl,
+  onToggleSidebar,
+  isSidebarOpen,
+  onToggleSecondLanguage,
+  isSideBySide,
+}) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
@@ -487,6 +503,24 @@ function ToolsMenu({ onPrint, showPrint, onIncreaseFont, onDecreaseFont, fontSiz
             >
               <Printer size={18} />
               <span>{t("topBar.printPdf")}</span>
+            </button>
+          )}
+
+          {onToggleSecondLanguage && (
+            <button
+              type="button"
+              onClick={() => {
+                onToggleSecondLanguage();
+                setIsOpen(false);
+              }}
+              className="flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              <PanelLeftOpen size={18} />
+              <span>
+                {isSideBySide
+                  ? t("topBar.closeSideBySide")
+                  : t("topBar.openSideBySide")}
+              </span>
             </button>
           )}
 

@@ -7,7 +7,7 @@ import { parseFormexToCombined } from "../utils/parsers.js";
 import { buildEurlexCelexUrl, buildEurlexOjUrl, buildEurlexSearchUrl } from "../utils/url.js";
 import { mapRecitalsToArticles, NLP_VERSION } from "../utils/nlp.js";
 import { injectDefinitionTooltips } from "../utils/definitions.js";
-import { fetchFormex, FormexApiError, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
+import { EU_LANGUAGES, fetchFormex, FormexApiError, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
 import { parseOfficialReference } from "../utils/officialReferences.js";
 import { getImportedLaws, upsertImportedLaw } from "../utils/library.js";
 import { buildImportedLawCandidate, findBundledLawByCelex, findBundledLawByKey, findBundledLawBySlug, getCanonicalLawRoute, parseOfficialReferenceSlug } from "../utils/lawRouting.js";
@@ -22,10 +22,46 @@ import { SEO } from "./SEO.jsx";
 import { NumberSelector } from "./NumberSelector.jsx";
 import { RelatedRecitals } from "./RelatedRecitals.jsx";
 import { CrossReferences } from "./CrossReferences.jsx";
+import { LanguageSelector } from "./LanguageSelector.jsx";
 import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
 
 const EMPTY_LAW_DATA = { title: "", articles: [], recitals: [], annexes: [], definitions: [] };
+const SECONDARY_LANGUAGE_STORAGE_KEY = "legalviz-secondary-formex-lang";
+
+function normalizeExtraLanguage(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  return Object.prototype.hasOwnProperty.call(EU_LANGUAGES, normalized) ? normalized : null;
+}
+
+function getPreferredSecondaryLanguage(primaryLang) {
+  const stored = normalizeExtraLanguage(
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(SECONDARY_LANGUAGE_STORAGE_KEY)
+      : null
+  );
+  if (stored && stored !== primaryLang) return stored;
+  if (primaryLang !== "EN") return "EN";
+  if (primaryLang !== "DE") return "DE";
+  if (primaryLang !== "FR") return "FR";
+  return "ES";
+}
+
+function getSelectedEntry(data, selected) {
+  if (!selected?.id) return null;
+
+  if (selected.kind === "article") {
+    return data.articles?.find((entry) => entry.article_number === selected.id) || null;
+  }
+  if (selected.kind === "recital") {
+    return data.recitals?.find((entry) => entry.recital_number === selected.id) || null;
+  }
+  if (selected.kind === "annex") {
+    return data.annexes?.find((entry) => entry.annex_id === selected.id) || null;
+  }
+
+  return null;
+}
 
 function isMissingStructuredLawText(error) {
   if (!(error instanceof FormexApiError)) return false;
@@ -72,19 +108,135 @@ function getLoadErrorDetails(error, t) {
   };
 }
 
+function LawContentPane({
+  label,
+  lang,
+  hasCelex,
+  selected,
+  loading,
+  loadError,
+  processedHtml,
+  onContentClick,
+  getProseClass,
+  getTextClass,
+  fontScale,
+  t,
+  selector = null,
+  emptyMessage = null,
+}) {
+  const loadErrorTone = loadError?.tone === "notice" ? "notice" : "error";
+
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              {label}
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-gray-100">
+              <span>{lang}</span>
+            </div>
+          </div>
+          {selector}
+        </div>
+        <div className="flex min-h-[20rem] flex-col items-center justify-center text-center">
+          <Loader2 size={24} className="animate-spin text-blue-600" />
+          <p className="mt-4 text-sm text-gray-600 dark:text-gray-400">
+            {t("lawViewer.loadingLanguage", { lang })}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              {label}
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-gray-100">
+              <span>{lang}</span>
+            </div>
+          </div>
+          {selector}
+        </div>
+        <div className={`rounded-2xl border px-4 py-5 text-sm ${
+          loadErrorTone === "notice"
+            ? "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/20 dark:text-sky-200"
+            : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+        }`}>
+          <p className="font-semibold">{loadError.title}</p>
+          <p className="mt-2 leading-6">{loadError.message}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            {label}
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-gray-100">
+            <span>{lang}</span>
+            {!hasCelex ? (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                {t("lawViewer.textOnly")}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {selector}
+      </div>
+
+      <article
+        className={`prose prose-slate mx-auto ${getProseClass(fontScale)} ${getTextClass(fontScale)} mt-4 transition-all duration-200`}
+        dangerouslySetInnerHTML={{
+          __html: processedHtml || `<div class='text-center text-gray-400 py-10'>${emptyMessage || t("lawViewer.selectPrompt")}</div>`,
+        }}
+        onClick={onContentClick}
+      />
+
+      {!processedHtml && selected.id ? (
+        <p className="mt-4 text-sm text-amber-700 dark:text-amber-300">
+          {t("lawViewer.languageItemUnavailable", {
+            label: selected.kind === "article"
+              ? t("common.article")
+              : selected.kind === "recital"
+                ? t("common.recital")
+                : t("common.annex"),
+            id: selected.id,
+            lang,
+          })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function LawViewer() {
   const { locale: routeLocale, slug, key, kind, id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const { locale, localizePath, setLocale, t } = useI18n();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const importCelex = searchParams.get("celex");
   const sourceUrl = searchParams.get("sourceUrl");
+  const secondaryLangParam = normalizeExtraLanguage(searchParams.get("lang2"));
   const isImportRoute = location.pathname === "/import" || location.pathname.startsWith("/import/");
   const isLegacyLawRoute = location.pathname.startsWith("/law/");
   const isLegacyExtensionRoute = location.pathname === "/extension" || location.pathname.startsWith("/extension/");
   const [data, setData] = useState(EMPTY_LAW_DATA);
   const [recitalMap, setRecitalMap] = useState(new Map());
+  const [secondaryData, setSecondaryData] = useState(EMPTY_LAW_DATA);
+  const [secondaryLoadError, setSecondaryLoadError] = useState(null);
+  const [secondaryLoading, setSecondaryLoading] = useState(false);
   const [selected, setSelected] = useState({ kind: "article", id: null, html: "" });
   const [_returnToArticle, setReturnToArticle] = useState(null); // { id: string, title: string } | null
   const [openChapter, setOpenChapter] = useState(null);
@@ -139,10 +291,45 @@ export function LawViewer() {
     }
   }, [locale, formexLang, isImportRoute, isLegacyLawRoute, isLegacyExtensionRoute]);
 
+  const updateViewerSearchParams = useCallback((mutate) => {
+    const nextParams = new URLSearchParams(searchParams);
+    mutate(nextParams);
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const setSecondaryLanguage = useCallback((nextLang) => {
+    updateViewerSearchParams((params) => {
+      const normalized = normalizeExtraLanguage(nextLang);
+      if (!normalized || normalized === formexLang) {
+        params.delete("lang2");
+      } else {
+        try {
+          localStorage.setItem(SECONDARY_LANGUAGE_STORAGE_KEY, normalized);
+        } catch {
+          // ignore persistence failures
+        }
+        params.set("lang2", normalized);
+      }
+    });
+  }, [formexLang, updateViewerSearchParams]);
+
   const handleUnifiedLanguageChange = useCallback((nextLang) => {
     setFormexLang(nextLang);
     setLocale(uiLocaleFromLawLang(nextLang));
-  }, [setLocale]);
+    if (normalizeExtraLanguage(searchParams.get("lang2")) === nextLang) {
+      updateViewerSearchParams((params) => {
+        params.delete("lang2");
+      });
+    }
+  }, [searchParams, setLocale, updateViewerSearchParams]);
+
+  const toggleSecondLanguage = useCallback(() => {
+    if (secondaryLangParam && secondaryLangParam !== formexLang) {
+      setSecondaryLanguage(null);
+      return;
+    }
+    setSecondaryLanguage(getPreferredSecondaryLanguage(formexLang));
+  }, [formexLang, secondaryLangParam, setSecondaryLanguage]);
 
   const onIncreaseFont = () => setFontScale(s => Math.min(s + 1, 5));
   const onDecreaseFont = () => setFontScale(s => Math.max(s - 1, 1));
@@ -182,7 +369,26 @@ export function LawViewer() {
     celexMatchedBundledLaw || bundledLaw || storedImportedLaw || derivedSlugLaw || null
   ), [celexMatchedBundledLaw, bundledLaw, storedImportedLaw, derivedSlugLaw]);
   const currentCelex = importCelex || currentLaw?.celex || null;
+  const secondaryLang = secondaryLangParam && secondaryLangParam !== formexLang ? secondaryLangParam : null;
+  const isSideBySide = !!secondaryLang && !!currentCelex;
   const currentLawSlug = currentLaw?.slug || null;
+
+  useEffect(() => {
+    if (!secondaryLang) return;
+    try {
+      localStorage.setItem(SECONDARY_LANGUAGE_STORAGE_KEY, secondaryLang);
+    } catch {
+      // ignore persistence failures
+    }
+  }, [secondaryLang]);
+
+  useEffect(() => {
+    if (!secondaryLangParam) return;
+    if (secondaryLangParam !== formexLang) return;
+    updateViewerSearchParams((params) => {
+      params.delete("lang2");
+    });
+  }, [formexLang, secondaryLangParam, updateViewerSearchParams]);
   const canonicalRoute = useMemo(() => {
     if (isLegacyExtensionRoute || !currentLawSlug) return null;
     return getCanonicalLawRoute(currentLaw, kind, id, routeLocale || locale);
@@ -190,8 +396,9 @@ export function LawViewer() {
 
   const navigateToCanonical = useCallback((kindName, targetId, options = {}) => {
     if (!currentLawSlug) return;
-    navigate(getCanonicalLawRoute(currentLaw, kindName, targetId, routeLocale || locale), options);
-  }, [currentLaw, currentLawSlug, navigate, routeLocale, locale]);
+    const nextPath = getCanonicalLawRoute(currentLaw, kindName, targetId, routeLocale || locale);
+    navigate(`${nextPath}${location.search}`, options);
+  }, [currentLaw, currentLawSlug, navigate, routeLocale, locale, location.search]);
 
   // Map scale to prose class and percentage for display
   const getProseClass = (s) => {
@@ -365,9 +572,9 @@ export function LawViewer() {
   useEffect(() => {
     if (isLegacyExtensionRoute || !canonicalRoute) return;
     if (isLegacyLawRoute || (isImportRoute && currentCelex && currentLawSlug)) {
-      navigate(canonicalRoute, { replace: true });
+      navigate(`${canonicalRoute}${location.search}`, { replace: true });
     }
-  }, [canonicalRoute, currentCelex, currentLawSlug, isLegacyExtensionRoute, isImportRoute, isLegacyLawRoute, navigate]);
+  }, [canonicalRoute, currentCelex, currentLawSlug, isLegacyExtensionRoute, isImportRoute, isLegacyLawRoute, navigate, location.search]);
 
   useEffect(() => {
     if (isLegacyExtensionRoute || currentCelex || !slugReference) return;
@@ -415,6 +622,41 @@ export function LawViewer() {
       navigate(localizePath("/", locale), { replace: true });
     }
   }, [key, slug, loadLaw, navigate, isLegacyExtensionRoute, currentCelex, formexLang, loadAttempt, sourceUrl, slugReference, localizePath, locale]);
+
+  useEffect(() => {
+    if (!currentCelex || !secondaryLang || isLegacyExtensionRoute) {
+      setSecondaryData(EMPTY_LAW_DATA);
+      setSecondaryLoadError(null);
+      setSecondaryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSecondaryLoading(true);
+    setSecondaryLoadError(null);
+    setSecondaryData(EMPTY_LAW_DATA);
+
+    fetchFormex(currentCelex, secondaryLang)
+      .then((text) => {
+        if (cancelled) return;
+        const combined = parseFormexToCombined(text);
+        setSecondaryData(combined);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSecondaryLoadError(getLoadErrorDetails(error, t));
+        setSecondaryData(EMPTY_LAW_DATA);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSecondaryLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCelex, secondaryLang, isLegacyExtensionRoute, t]);
 
   // Update selection from URL params when data is loaded or URL params change
   useEffect(() => {
@@ -880,6 +1122,49 @@ export function LawViewer() {
     });
   }, [selected.html, selected.kind, selected.id, data.definitions, data.articles, data.langCode]);
 
+  const secondarySelectedEntry = useMemo(() => (
+    getSelectedEntry(secondaryData, selected)
+  ), [secondaryData, selected]);
+
+  const secondaryProcessedHtml = useMemo(() => {
+    const selectedHtml = secondarySelectedEntry?.article_html
+      || secondarySelectedEntry?.recital_html
+      || secondarySelectedEntry?.annex_html
+      || "";
+    if (!selectedHtml) return "";
+
+    const defArticle = selected.kind === "article" && secondarySelectedEntry;
+    const skipDefinitions = defArticle?.article_title &&
+      /definitions?|definicj/i.test(defArticle.article_title);
+
+    return injectDefinitionTooltips(selectedHtml, secondaryData.definitions, {
+      skipDefinitionsArticle: skipDefinitions,
+      langCode: secondaryData.langCode,
+    });
+  }, [secondarySelectedEntry, selected.kind, secondaryData.definitions, secondaryData.langCode]);
+
+  const handleContentClick = useCallback((e) => {
+    const link = e.target.closest("a.cross-ref");
+    if (link) {
+      e.preventDefault();
+      const artNum = link.getAttribute("data-ref-article");
+      if (artNum) onCrossRefArticle(artNum);
+      return;
+    }
+
+    const externalLink = e.target.closest("a.external-ref");
+    if (externalLink) {
+      e.preventDefault();
+      handleOpenExternalLaw({
+        raw: externalLink.getAttribute("data-ref-raw") || externalLink.textContent,
+        actType: externalLink.getAttribute("data-ref-act-type") || null,
+        year: externalLink.getAttribute("data-ref-year") || null,
+        number: externalLink.getAttribute("data-ref-number") || null,
+        suffix: externalLink.getAttribute("data-ref-suffix") || null,
+      });
+    }
+  }, [handleOpenExternalLaw, onCrossRefArticle]);
+
   // Handle printing
   useEffect(() => {
     if (printOptions) {
@@ -946,6 +1231,18 @@ export function LawViewer() {
     }
   }, [printOptions, data, t, locale]);
 
+  const secondaryLanguageSelector = isSideBySide ? (
+    <LanguageSelector
+      currentLang={secondaryLang}
+      onChangeLang={setSecondaryLanguage}
+      hasCelex={hasCelex}
+      label={t("lawViewer.secondaryLanguage")}
+      excludeLanguages={[formexLang]}
+      align="right"
+      showCode={false}
+    />
+  ) : null;
+
   // --------- Main visualiser UI ----------
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white print:bg-white dark:from-gray-950 dark:to-gray-900 transition-colors duration-500">
@@ -962,6 +1259,7 @@ export function LawViewer() {
           isExtensionMode={false}
           eurlexUrl={eurlexUrl}
           onPrint={() => setPrintModalOpen(true)}
+          showPrint={!isSideBySide}
           onToggleSidebar={onToggleSidebar}
           isSidebarOpen={isSidebarOpen}
           onIncreaseFont={onIncreaseFont}
@@ -970,6 +1268,8 @@ export function LawViewer() {
           formexLang={formexLang}
           onFormexLangChange={handleUnifiedLanguageChange}
           hasCelex={hasCelex}
+          onToggleSecondLanguage={hasCelex ? toggleSecondLanguage : null}
+          isSideBySide={isSideBySide}
         />
 
         <main className={`mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-4 py-4 md:flex-row md:px-6 md:py-6 md:gap-6 justify-center`}>
@@ -1078,36 +1378,66 @@ export function LawViewer() {
                     </h2>
                   </div>
 
-                  <article
-                    className={`prose prose-slate mx-auto ${getProseClass(fontScale)} ${getTextClass(fontScale)} mt-4 transition-all duration-200`}
-                    dangerouslySetInnerHTML={{
-                      __html:
-                        processedHtml ||
-                        `<div class='text-center text-gray-400 py-10'>${t("lawViewer.selectPrompt")}</div>`,
-                    }}
-                    onClick={(e) => {
-                      // Handle clicks on inline cross-reference links
-                      const link = e.target.closest("a.cross-ref");
-                      if (link) {
-                        e.preventDefault();
-                        const artNum = link.getAttribute("data-ref-article");
-                        if (artNum) onCrossRefArticle(artNum);
-                        return;
-                      }
-
-                      const externalLink = e.target.closest("a.external-ref");
-                      if (externalLink) {
-                        e.preventDefault();
-                        handleOpenExternalLaw({
-                          raw: externalLink.getAttribute("data-ref-raw") || externalLink.textContent,
-                          actType: externalLink.getAttribute("data-ref-act-type") || null,
-                          year: externalLink.getAttribute("data-ref-year") || null,
-                          number: externalLink.getAttribute("data-ref-number") || null,
-                          suffix: externalLink.getAttribute("data-ref-suffix") || null,
-                        });
-                      }
-                    }}
-                  />
+                  {isSideBySide ? (
+                    <>
+                      <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 xl:hidden dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+                        {t("lawViewer.sideBySideDesktopOnly")}
+                      </div>
+                      <div className="space-y-6 xl:hidden">
+                        <article
+                          className={`prose prose-slate mx-auto ${getProseClass(fontScale)} ${getTextClass(fontScale)} mt-4 transition-all duration-200`}
+                          dangerouslySetInnerHTML={{
+                            __html:
+                              processedHtml ||
+                              `<div class='text-center text-gray-400 py-10'>${t("lawViewer.selectPrompt")}</div>`,
+                          }}
+                          onClick={handleContentClick}
+                        />
+                      </div>
+                      <div className="hidden gap-6 xl:grid xl:grid-cols-2">
+                        <LawContentPane
+                          label={t("lawViewer.primaryLanguage")}
+                          lang={formexLang}
+                          hasCelex={hasCelex}
+                          selected={selected}
+                          loading={false}
+                          loadError={null}
+                          processedHtml={processedHtml}
+                          onContentClick={handleContentClick}
+                          getProseClass={getProseClass}
+                          getTextClass={getTextClass}
+                          fontScale={fontScale}
+                          t={t}
+                        />
+                        <LawContentPane
+                          label={t("lawViewer.secondaryLanguage")}
+                          lang={secondaryLang}
+                          hasCelex={hasCelex}
+                          selected={selected}
+                          loading={secondaryLoading}
+                          loadError={secondaryLoadError}
+                          processedHtml={secondaryProcessedHtml}
+                          onContentClick={handleContentClick}
+                          getProseClass={getProseClass}
+                          getTextClass={getTextClass}
+                          fontScale={fontScale}
+                          t={t}
+                          selector={secondaryLanguageSelector}
+                          emptyMessage={t("lawViewer.selectPrompt")}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <article
+                      className={`prose prose-slate mx-auto ${getProseClass(fontScale)} ${getTextClass(fontScale)} mt-4 transition-all duration-200`}
+                      dangerouslySetInnerHTML={{
+                        __html:
+                          processedHtml ||
+                          `<div class='text-center text-gray-400 py-10'>${t("lawViewer.selectPrompt")}</div>`,
+                      }}
+                      onClick={handleContentClick}
+                    />
+                  )}
                 </>
               )}
             </section>
