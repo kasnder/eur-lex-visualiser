@@ -9,7 +9,7 @@ import { parseAnyToCombined } from "../utils/parsers.js";
 import { buildEurlexCelexUrl, buildEurlexOjUrl, buildEurlexSearchUrl, getLawPathFromKey } from "../utils/url.js";
 import { mapRecitalsToArticles, NLP_VERSION } from "../utils/nlp.js";
 import { injectDefinitionTooltips } from "../utils/definitions.js";
-import { fetchFormex, extractCelexFromUrl, FormexApiError, resolveOfficialReference } from "../utils/formexApi.js";
+import { fetchFormex, extractCelexFromUrl, FormexApiError, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
 import { parseOfficialReference } from "../utils/officialReferences.js";
 
 import { Button } from "./Button.jsx";
@@ -46,7 +46,8 @@ export function LawViewer() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const importCelex = searchParams.get("celex");
-  const isImportedMode = !!importCelex;
+  const sourceUrl = searchParams.get("sourceUrl");
+  const isImportedMode = !!(importCelex || sourceUrl);
   const lawPath = getLawPathFromKey(key);
   const [data, setData] = useState(EMPTY_LAW_DATA);
   const [recitalMap, setRecitalMap] = useState(new Map());
@@ -118,9 +119,10 @@ export function LawViewer() {
   const currentContentLang = useMemo(() => (useFormex ? formexLang : data.langCode || "EN"), [useFormex, formexLang, data.langCode]);
 
   const getImportParams = useCallback((overrides = {}) => {
-    if (!isImportedMode && !overrides.celex) return "";
+    const nextCelex = overrides.celex || importCelex;
+    if (!nextCelex) return "";
     const params = new URLSearchParams();
-    params.set("celex", overrides.celex || importCelex);
+    params.set("celex", nextCelex);
 
     const raw = overrides.raw || searchParams.get("raw");
     if (raw) params.set("raw", raw);
@@ -402,9 +404,51 @@ export function LawViewer() {
   const currentLaw = LAWS.find(l => l.key === key);
   const currentCelex = importCelex || currentLaw?.celex || null;
 
+  useEffect(() => {
+    if (!sourceUrl || importCelex) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+
+    resolveEurlexUrl(sourceUrl, formexLang)
+      .then((result) => {
+        if (cancelled) return;
+
+        const resolvedCelex = result?.resolved?.celex;
+        if (!resolvedCelex) {
+          setLoadError({
+            message: "This EUR-Lex page could not be resolved to an importable CELEX document.",
+            fallbackUrl: sourceUrl,
+            status: result?.status || null,
+          });
+          setLoading(false);
+          return;
+        }
+
+        const params = new URLSearchParams();
+        params.set("celex", resolvedCelex);
+        navigate(`/import?${params.toString()}`, { replace: true });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const details = getLoadErrorDetails(error);
+        setLoadError({
+          ...details,
+          fallbackUrl: details.fallbackUrl || sourceUrl,
+        });
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceUrl, importCelex, formexLang, navigate, loadAttempt]);
+
   // Load law when path/formex settings change
   useEffect(() => {
     if (isExtensionMode) return; // Don't load from file if we're in extension mode
+    if (sourceUrl && !currentCelex) return;
 
     if (useFormex && currentCelex) {
       loadLaw(lawPath, currentCelex, formexLang);
@@ -416,7 +460,7 @@ export function LawViewer() {
       // Only redirect if we have a key but no matching law path
       navigate("/", { replace: true });
     }
-  }, [lawPath, key, loadLaw, navigate, isExtensionMode, useFormex, currentCelex, formexLang, isImportedMode, loadAttempt]);
+  }, [lawPath, key, loadLaw, navigate, isExtensionMode, useFormex, currentCelex, formexLang, isImportedMode, loadAttempt, sourceUrl]);
 
   // Update selection from URL params when data is loaded or URL params change
   useEffect(() => {
@@ -752,10 +796,11 @@ export function LawViewer() {
 
   const eurlexUrl = useMemo(() => {
     if (isExtensionMode) return data.eurlex || null;
+    if (sourceUrl) return sourceUrl;
     if (isImportedMode && currentCelex) return buildEurlexCelexUrl(currentCelex, formexLang);
     const law = LAWS.find(l => l.key === key);
     return law ? law.eurlex : null;
-  }, [key, isExtensionMode, isImportedMode, data.eurlex, currentCelex, formexLang]);
+  }, [key, isExtensionMode, isImportedMode, data.eurlex, currentCelex, formexLang, sourceUrl]);
 
   const hasLoadedContent = data.articles.length > 0 || data.recitals.length > 0 || data.annexes.length > 0;
   const currentLawLabel = useMemo(() => {

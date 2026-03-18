@@ -19,55 +19,9 @@ function isSupportedEurlexPage(urlString) {
   try {
     const url = new URL(urlString);
     if (url.hostname !== 'eur-lex.europa.eu') return false;
-
     return url.pathname.includes('/legal-content/') || url.pathname.includes('/eli/');
   } catch {
     return false;
-  }
-}
-
-function padActNumber(value) {
-  const trimmed = String(value || '').trim();
-  if (!/^\d{1,4}$/.test(trimmed)) return null;
-  return trimmed.padStart(4, '0');
-}
-
-function extractCelexFromUrl(urlString) {
-  if (!urlString) return null;
-
-  try {
-    const url = new URL(urlString);
-    const uri = url.searchParams.get('uri') || '';
-    const celexMatch = uri.match(/CELEX:(\d{5}[A-Z]\d{4})/i);
-    if (celexMatch) {
-      return celexMatch[1].toUpperCase();
-    }
-
-    const segments = url.pathname.split('/').filter(Boolean);
-    const eliIndex = segments.indexOf('eli');
-    if (eliIndex === -1) return null;
-
-    const actType = segments[eliIndex + 1];
-    const year = segments[eliIndex + 2];
-    const number = segments[eliIndex + 3];
-
-    if (!/^\d{4}$/.test(year || '')) return null;
-
-    const normalizedNumber = padActNumber(number);
-    if (!normalizedNumber) return null;
-
-    const typeMap = {
-      reg: 'R',
-      dir: 'L',
-      dec: 'D',
-    };
-
-    const celexType = typeMap[actType];
-    if (!celexType) return null;
-
-    return `3${year}${celexType}${normalizedNumber}`;
-  } catch {
-    return null;
   }
 }
 
@@ -102,15 +56,9 @@ async function openInLegalViz(tab) {
     return;
   }
 
-  const celex = extractCelexFromUrl(pageUrl);
-  if (!celex) {
-    console.warn('Could not derive CELEX from EUR-Lex URL:', pageUrl);
-    return;
-  }
-
   const baseUrl = await detectBaseUrl();
   const targetUrl = new URL('/import', baseUrl);
-  targetUrl.searchParams.set('celex', celex);
+  targetUrl.searchParams.set('sourceUrl', pageUrl);
 
   chrome.tabs.create({ url: targetUrl.toString() });
 }

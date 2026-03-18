@@ -189,6 +189,22 @@ export async function resolveOfficialReference(reference, lang = "EN") {
   return res.json();
 }
 
+export async function resolveEurlexUrl(sourceUrl, lang = "EN") {
+  const apiLang = toApiLang(lang);
+  const params = new URLSearchParams({
+    url: sourceUrl,
+    lang: apiLang,
+  });
+  const url = `${API_BASE}/api/resolve-url?${params.toString()}`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    await readApiError(res, `EUR-Lex URL resolution failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function fetchFormexByReference(reference, lang = "EN") {
   const query = buildReferenceQuery(reference, lang);
   const url = `${API_BASE}/api/laws/by-reference?${query}`;

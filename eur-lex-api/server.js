@@ -235,6 +235,152 @@ function parseStructuredReference(input = {}) {
   };
 }
 
+function extractCelexFromText(text = '') {
+  const match = String(text).match(/CELEX[:%]3A(\d{5}[A-Z]\d{4}(?:\([0-9]+\))?)/i)
+    || String(text).match(/CELEX:(\d{5}[A-Z]\d{4}(?:\([0-9]+\))?)/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
+function parseEurlexUrl(inputUrl) {
+  let url;
+  try {
+    url = new URL(String(inputUrl));
+  } catch {
+    throw new ClientError('Invalid EUR-Lex URL', 400, 'invalid_url');
+  }
+
+  if (url.hostname !== 'eur-lex.europa.eu') {
+    throw new ClientError('URL must point to eur-lex.europa.eu', 400, 'invalid_url_host');
+  }
+
+  const directCelex = extractCelexFromText(url.toString());
+  if (directCelex) {
+    return { type: 'celex', celex: directCelex, url };
+  }
+
+  const segments = url.pathname.split('/').filter(Boolean);
+  const eliIndex = segments.indexOf('eli');
+  if (eliIndex !== -1) {
+    const actTypeMap = { reg: 'regulation', dir: 'directive', dec: 'decision' };
+    const actType = actTypeMap[segments[eliIndex + 1]] || null;
+    const year = segments[eliIndex + 2] || null;
+    const number = segments[eliIndex + 3] || null;
+
+    if (actType && /^\d{4}$/.test(year || '') && /^\d{1,4}$/.test(number || '')) {
+      return {
+        type: 'eli',
+        reference: parseStructuredReference({ actType, year, number }),
+        url,
+      };
+    }
+  }
+
+  const uri = url.searchParams.get('uri') || '';
+  const ojMatch = uri.match(/^OJ:([A-Z])[_:](\d{4})(\d{5})/i);
+  if (ojMatch) {
+    return {
+      type: 'oj',
+      oj: {
+        ojColl: ojMatch[1].toUpperCase(),
+        ojYear: ojMatch[2],
+        ojNo: String(parseInt(ojMatch[3], 10)),
+      },
+      url,
+    };
+  }
+
+  return { type: 'html', url };
+}
+
+function extractCelexCandidatesFromHtml(html = '') {
+  const candidates = [];
+  const linkPattern = /href="([^"]*CELEX(?::|%3A)\d{5}[A-Z]\d{4}(?:\([0-9]+\))?[^"]*)"/ig;
+  let match;
+  while ((match = linkPattern.exec(html))) {
+    const celex = extractCelexFromText(match[1]);
+    if (celex) candidates.push(celex);
+  }
+
+  const textPattern = /CELEX(?::|%3A)(\d{5}[A-Z]\d{4}(?:\([0-9]+\))?)/ig;
+  while ((match = textPattern.exec(html))) {
+    candidates.push(match[1].toUpperCase());
+  }
+
+  return [...new Set(candidates)].filter(validateCelex);
+}
+
+async function resolveEurlexUrl(inputUrl, lang = 'ENG') {
+  const parsed = parseEurlexUrl(inputUrl);
+  const cacheKey = JSON.stringify({ type: 'resolve-url', inputUrl, lang });
+  const cached = cacheGet(resolutionCache, cacheKey);
+  if (cached) return cached;
+
+  if (parsed.type === 'celex') {
+    const payload = {
+      sourceUrl: parsed.url.toString(),
+      parsed: { type: parsed.type },
+      resolved: {
+        celex: parsed.celex,
+        source: 'direct-url',
+      },
+      fallback: null,
+    };
+    cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+    return payload;
+  }
+
+  if (parsed.type === 'eli') {
+    const resolution = await resolveReferenceViaCellar(parsed.reference, lang);
+    const payload = {
+      sourceUrl: parsed.url.toString(),
+      parsed: { type: parsed.type, reference: parsed.reference },
+      resolved: resolution.resolved,
+      tried: resolution.tried,
+      fallback: resolution.fallback,
+    };
+    cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+    return payload;
+  }
+
+  const response = await fetchWithTimeout(parsed.url.toString(), {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': toSearchLang(lang),
+      'User-Agent': 'LegalViz Resolver/1.0 (+https://legalviz.eu)',
+    },
+  });
+
+  if (!response.ok) {
+    throw new ClientError(
+      `EUR-Lex page returned HTTP ${response.status}`,
+      response.status,
+      'eurlex_fetch_failed'
+    );
+  }
+
+  const html = await response.text();
+  const candidates = extractCelexCandidatesFromHtml(html);
+  const resolvedCelex = candidates[0] || null;
+  const payload = {
+    sourceUrl: parsed.url.toString(),
+    parsed: {
+      type: parsed.type,
+      ...(parsed.oj ? { oj: parsed.oj } : {}),
+      candidateCount: candidates.length,
+    },
+    resolved: resolvedCelex ? {
+      celex: resolvedCelex,
+      source: 'eurlex-html',
+    } : null,
+    fallback: {
+      type: 'open-source-url',
+      url: parsed.url.toString(),
+    },
+  };
+  cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+  return payload;
+}
+
 function buildEurlexSearchFallbackUrl(reference, lang = 'ENG') {
   const searchLang = toSearchLang(lang);
   const searchText = reference.raw || [reference.actType, reference.year && `${reference.year}/${reference.number}`].filter(Boolean).join(' ');
@@ -855,6 +1001,26 @@ app.get('/api/resolve-reference', rateLimitMiddleware, async (req, res) => {
   }
 });
 
+app.get('/api/resolve-url', rateLimitMiddleware, async (req, res) => {
+  try {
+    const rawLang = req.query.lang || 'ENG';
+    const lang = validateLang(rawLang);
+    if (!lang) {
+      return res.status(400).json({ error: `Invalid language code: ${rawLang}` });
+    }
+
+    const sourceUrl = String(req.query.url || '').trim();
+    if (!sourceUrl) {
+      return res.status(400).json({ error: 'Query parameter "url" required' });
+    }
+
+    const payload = await resolveEurlexUrl(sourceUrl, lang);
+    res.status(payload.resolved ? 200 : 404).json(payload);
+  } catch (err) {
+    safeErrorResponse(res, err, 'Failed to resolve EUR-Lex URL');
+  }
+});
+
 // Root endpoint with API docs
 app.get('/', (req, res) => {
   res.json({
@@ -868,7 +1034,8 @@ app.get('/', (req, res) => {
       'GET /api/laws/:celex/info': 'Get metadata only',
       'GET /api/laws/by-reference?actType=directive&year=2018&number=1972&lang=ENG': 'Resolve an official reference and fetch the matching FMX',
       'GET /api/search?q=keyword': 'Search cached files',
-      'GET /api/resolve-reference?actType=directive&year=2018&number=1972&lang=ENG': 'Resolve an FMX-derived legal reference to CELEX via Cellar SPARQL'
+      'GET /api/resolve-reference?actType=directive&year=2018&number=1972&lang=ENG': 'Resolve an FMX-derived legal reference to CELEX via Cellar SPARQL',
+      'GET /api/resolve-url?url=https://eur-lex.europa.eu/...&lang=ENG': 'Resolve a full EUR-Lex URL to a canonical CELEX'
     },
     celexExamples: {
       '32016R0679': 'GDPR',
