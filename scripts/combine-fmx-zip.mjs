@@ -33,22 +33,29 @@ try {
 
   const files = readdirSync(tmp);
 
-  // Find the manifest (*.doc.fmx.xml)
-  const docFile = files.find((f) => f.endsWith(".doc.fmx.xml"));
+  // Find the manifest: prefer new format (*.doc.fmx.xml), fall back to old format (*.doc.xml)
+  let docFile = files.find((f) => f.endsWith(".doc.fmx.xml"));
+  const isOldFormat = !docFile;
+  if (!docFile) {
+    docFile = files.find((f) => f.endsWith(".doc.xml"));
+  }
   if (!docFile) {
     throw new Error("No *.doc.fmx.xml manifest found in ZIP");
   }
   const manifest = readFileSync(join(tmp, docFile), "utf8");
 
   // Extract file references from manifest using regex
-  // DOC.MAIN.PUB contains the main act
-  // DOC.SUB.PUB contains annexes
+  // DOC.MAIN.PUB contains the main act; DOC.SUB.PUB contains annexes
+  // New format: data files end with .fmx.xml; old format: data files end with .xml (but not .doc.xml)
   const refPattern = /FILE="([^"]+)"/g;
   const physRefs = [];
   let m;
   while ((m = refPattern.exec(manifest)) !== null) {
     const ref = m[1];
-    if (ref.endsWith(".fmx.xml") && ref !== docFile && files.includes(ref)) {
+    const isDataFile = isOldFormat
+      ? ref.endsWith(".xml") && !ref.endsWith(".doc.xml")
+      : ref.endsWith(".fmx.xml");
+    if (isDataFile && ref !== docFile && files.includes(ref)) {
       physRefs.push(ref);
     }
   }

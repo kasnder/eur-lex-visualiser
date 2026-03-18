@@ -243,28 +243,37 @@ function combineZipToXml(zipPath) {
   const entries = zip.getEntries();
   const entryNames = entries.map(e => e.entryName);
 
-  // Find the manifest (*.doc.fmx.xml)
-  const docEntry = entries.find(e => e.entryName.endsWith('.doc.fmx.xml'));
+  // Find the manifest: prefer new format (*.doc.fmx.xml), fall back to old format (*.doc.xml)
+  let docEntry = entries.find(e => e.entryName.endsWith('.doc.fmx.xml'));
+  const isOldFormat = !docEntry;
+  if (!docEntry) {
+    docEntry = entries.find(e => e.entryName.endsWith('.doc.xml'));
+  }
   if (!docEntry) {
     throw new Error('No *.doc.fmx.xml manifest found in ZIP');
   }
   const manifest = docEntry.getData().toString('utf8');
 
-  // Extract file references from manifest
+  // Extract file references from manifest.
+  // New format: data files end with .fmx.xml; old format: data files end with .xml (but not .doc.xml)
   const refPattern = /FILE="([^"]+)"/g;
   const physRefs = [];
   let m;
   while ((m = refPattern.exec(manifest)) !== null) {
     const ref = m[1];
-    if (ref.endsWith('.fmx.xml') && ref !== docEntry.entryName && entryNames.includes(ref)) {
+    const isDataFile = isOldFormat
+      ? ref.endsWith('.xml') && !ref.endsWith('.doc.xml')
+      : ref.endsWith('.fmx.xml');
+    if (isDataFile && ref !== docEntry.entryName && entryNames.includes(ref)) {
       physRefs.push(ref);
     }
   }
 
   if (physRefs.length === 0) {
-    // Fallback: include all .fmx.xml files except the manifest
+    // Fallback: include all data files except the manifest
+    const ext = isOldFormat ? '.xml' : '.fmx.xml';
     for (const name of entryNames) {
-      if (name.endsWith('.fmx.xml') && name !== docEntry.entryName) {
+      if (name.endsWith(ext) && name !== docEntry.entryName && !name.endsWith('.doc.xml')) {
         physRefs.push(name);
       }
     }
