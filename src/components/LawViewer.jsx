@@ -331,6 +331,10 @@ export function LawViewer() {
     }
   }, [locale, formexLang, isImportRoute, isLegacyLawRoute, isLegacyExtensionRoute]);
 
+  const effectivePrimaryLang = (!isImportRoute && !isLegacyLawRoute && !isLegacyExtensionRoute)
+    ? lawLangFromUiLocale(locale)
+    : formexLang;
+
   const updateViewerSearchParams = useCallback((mutate) => {
     const nextParams = new URLSearchParams(searchParams);
     mutate(nextParams);
@@ -340,7 +344,7 @@ export function LawViewer() {
   const setSecondaryLanguage = useCallback((nextLang) => {
     updateViewerSearchParams((params) => {
       const normalized = normalizeExtraLanguage(nextLang);
-      if (!normalized || normalized === formexLang) {
+      if (!normalized || normalized === effectivePrimaryLang) {
         params.delete("lang2");
       } else {
         try {
@@ -351,7 +355,7 @@ export function LawViewer() {
         params.set("lang2", normalized);
       }
     });
-  }, [formexLang, updateViewerSearchParams]);
+  }, [effectivePrimaryLang, updateViewerSearchParams]);
 
   const handleUnifiedLanguageChange = useCallback((nextLang) => {
     setFormexLang(nextLang);
@@ -409,7 +413,7 @@ export function LawViewer() {
     celexMatchedBundledLaw || bundledLaw || storedImportedLaw || derivedSlugLaw || null
   ), [celexMatchedBundledLaw, bundledLaw, storedImportedLaw, derivedSlugLaw]);
   const currentCelex = importCelex || currentLaw?.celex || null;
-  const secondaryLang = secondaryLangParam && secondaryLangParam !== formexLang ? secondaryLangParam : null;
+  const secondaryLang = secondaryLangParam && secondaryLangParam !== effectivePrimaryLang ? secondaryLangParam : null;
   const isSideBySide = !!secondaryLang && !!currentCelex;
   const currentLawSlug = currentLaw?.slug || null;
 
@@ -424,11 +428,11 @@ export function LawViewer() {
 
   useEffect(() => {
     if (!secondaryLangParam) return;
-    if (secondaryLangParam !== formexLang) return;
+    if (secondaryLangParam !== effectivePrimaryLang) return;
     updateViewerSearchParams((params) => {
       params.delete("lang2");
     });
-  }, [formexLang, secondaryLangParam, updateViewerSearchParams]);
+  }, [effectivePrimaryLang, secondaryLangParam, updateViewerSearchParams]);
   const canonicalRoute = useMemo(() => {
     if (isLegacyExtensionRoute || !currentLawSlug) return null;
     return getCanonicalLawRoute(currentLaw, kind, id, routeLocale || locale);
