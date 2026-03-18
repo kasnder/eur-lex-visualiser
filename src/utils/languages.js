@@ -345,7 +345,7 @@ const CS = {
   definition: /Definice?/i,
   recital: /[Bb]od\s+odůvodnění|[Oo]d\u016fvodn[eě]n[ií]/,
   quoteChars: "\u201E\u201C\u2018\u2019\u00AB\u00BB\"'",
-  meansVerb: "rozum[ií]\s+se",
+  meansVerb: "rozum[ií]\\s+se",
   definitionFormat: "term_first",
   titleSplit: /\s+ze dne\s+/i,
   parliamentSplit: /\s+Evropsk\u00e9ho parlamentu\b/i,
@@ -420,7 +420,7 @@ const RO = {
   definition: /Defini[t\u0163]ii/i,
   recital: /[Cc]onsiderent/,
   quoteChars: "\u201E\u201C\u2018\u2019\u00AB\u00BB\"'",
-  meansVerb: "\u00ednseamn\u0103",
+  meansVerb: "\u00eenseamn\u0103",
   definitionFormat: "term_first",
   titleSplit: /\s+din\s+/i,
   parliamentSplit: /\s+Parlamentului European\b/i,
@@ -713,6 +713,51 @@ export function buildMeansRegex(lang) {
   }
   // Default: "'term' meansVerb definition"
   return new RegExp(`^[${q}]([^${q}]+)[${q}]\\s+${lang.meansVerb}\\s+`, "i");
+}
+
+/**
+ * Build a fallback regex for definition extraction.
+ *
+ * Used when buildMeansRegex() produces no match, which happens whenever the
+ * translated regulation does NOT repeat the "means" verb in each definition
+ * item — only in the article-level intro.  In those cases the items are
+ * formatted as one of:
+ *
+ *   'term': definition          (FR, NL, DA, HU, EL — colon separator)
+ *   'term' – definition         (ET — en-dash separator)
+ *   'term' definition           (DE, CS, FI, SK — direct juxtaposition)
+ *   'term' ir/sú definition     (LV, SK — copula verb)
+ *
+ * For Lithuanian (LT) and Swedish (SV), the EU Publications Office omits
+ * QUOT.START/QUOT.END elements entirely.  Items look like:
+ *
+ *   term – definition           (LT — en-dash)
+ *   term : definition           (SV — colon)
+ *
+ * The function returns a RegExp with capture group 1 = the term text.
+ * It also consumes any trailing separator so that the remainder of the
+ * string is the definition.
+ */
+export function buildFallbackDefRegex(lang) {
+  const q = lang.quoteChars;
+
+  // For LT and SV the term is NOT wrapped in QUOT markers.  Detect them by
+  // code so we don't need to add per-language flags.
+  if (lang.code === "LT") {
+    // term – definition  (en-dash U+2013)
+    return /^(.+?)\s*\u2013\s+/;
+  }
+  if (lang.code === "SV") {
+    // term : definition
+    return /^(.+?)\s*:\s+/;
+  }
+
+  // All other languages: term is surrounded by quote characters from quoteChars.
+  // After the closing quote there may be: colon, en-dash (–), comma, or nothing.
+  return new RegExp(
+    `^[${q}]([^${q}]+)[${q}]\\s*[:\\u2013\\u2014,]?\\s*`,
+    "i"
+  );
 }
 
 /**

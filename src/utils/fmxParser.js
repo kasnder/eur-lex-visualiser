@@ -13,7 +13,7 @@
  *  3. Textual:    Recital reference patterns in each language
  */
 
-import { getLangConfig, buildMeansRegex } from "./languages.js";
+import { getLangConfig, buildMeansRegex, buildFallbackDefRegex } from "./languages.js";
 
 // ---------------------------------------------------------------------------
 // FMX → HTML conversion helpers
@@ -435,6 +435,7 @@ export function parseFmxToCombined(xmlText) {
   const langCode = lgDoc ? lgDoc.textContent.trim().toUpperCase() : "EN";
   const lang = getLangConfig(langCode);
   const meansRegex = buildMeansRegex(lang);
+  const fallbackDefRegex = buildFallbackDefRegex(lang);
 
   // --- Title ---
   // FMX <TI> contains multiple <P> elements; join them with spaces
@@ -599,21 +600,30 @@ export function parseFmxToCombined(xmlText) {
         if (!text) continue;
 
         if (lang.definitionFormat === "verb_first") {
-          // Verb-first languages (FR, IT, ES, PT): meansVerb 'term': definition
+          // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition
           const termMatch = text.match(meansRegex);
           if (termMatch) {
             const term = termMatch[1].trim();
-            // The definition is the full text (term is identified by position)
             const definition = text.slice(termMatch[0].length).trim();
             definitions.push({ term, definition });
           }
         } else {
-          // Term-first languages (EN, PL, DE, ...): 'term' meansVerb definition
-          const termMatch = text.match(meansRegex);
+          // Term-first languages: 'term' meansVerb definition
+          // Try the configured meansVerb first; fall back to the quoted-term
+          // pattern for languages where the verb only appears in the article
+          // intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
+          let termMatch = text.match(meansRegex);
           if (termMatch) {
             const term = termMatch[1].trim();
             const definition = text.replace(termMatch[0], "").trim();
             definitions.push({ term, definition });
+          } else {
+            const fbMatch = text.match(fallbackDefRegex);
+            if (fbMatch) {
+              const term = fbMatch[1].trim();
+              const definition = text.slice(fbMatch[0].length).trim();
+              if (term && definition) definitions.push({ term, definition });
+            }
           }
         }
       }

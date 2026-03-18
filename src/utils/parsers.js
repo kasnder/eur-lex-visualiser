@@ -1,5 +1,5 @@
 // ---------------- Parser (best-effort for OJ & consolidated) ----------------
-import { detectLanguage, getLangConfig, buildMeansRegex } from "./languages.js";
+import { detectLanguage, getLangConfig, buildMeansRegex, buildFallbackDefRegex } from "./languages.js";
 import { isFmxDocument, parseFmxToCombined } from "./fmxParser.js";
 
 export function parseSingleXHTMLToCombined(xhtmlText) {
@@ -10,6 +10,7 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
   const langCode = detectLanguage(doc);
   const lang = getLangConfig(langCode);
   const meansRegex = buildMeansRegex(lang);
+  const fallbackDefRegex = buildFallbackDefRegex(lang);
 
   const getText = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : "");
   const innerHTML = (el) =>
@@ -260,13 +261,20 @@ export function parseSingleXHTMLToCombined(xhtmlText) {
         const textCell = cells[1];
         const text = getText(textCell);
 
-        // Match pattern: 'term' means … (language-specific quotes and verb)
-        const termMatch = text.match(meansRegex);
+        // Try the configured meansVerb first; fall back to the quoted-term
+        // pattern for languages where the verb only appears in the article intro.
+        let termMatch = text.match(meansRegex);
         if (termMatch) {
           const term = termMatch[1].trim();
-          // Definition is everything after the matched prefix
           const definition = text.replace(termMatch[0], '').trim();
           definitions.push({ term, definition });
+        } else {
+          const fbMatch = text.match(fallbackDefRegex);
+          if (fbMatch) {
+            const term = fbMatch[1].trim();
+            const definition = text.slice(fbMatch[0].length).trim();
+            if (term && definition) definitions.push({ term, definition });
+          }
         }
       }
     }
