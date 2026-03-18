@@ -1,9 +1,8 @@
 import React, { useMemo } from "react";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
   const { t } = useI18n();
-  if (!recitals || recitals.length === 0) return null;
 
   // Create a lookup map for full recital data (including HTML)
   const recitalLookup = useMemo(() => {
@@ -15,6 +14,8 @@ export function RelatedRecitals({ recitals, allRecitals, onSelectRecital }) {
     }
     return map;
   }, [allRecitals]);
+
+  if (!recitals || recitals.length === 0) return null;
 
   // Helper to format relevance score as percentage
   const formatScore = (score) => {

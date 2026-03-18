@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { EU_LANGUAGES } from "../utils/formexApi.js";
 import { getLanguageFlag } from "../utils/languageFlags.js";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 /**
  * Dropdown language selector for Formex-backed laws.

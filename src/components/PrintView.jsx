@@ -2,15 +2,13 @@ import React, { useMemo } from "react";
 import { mapRecitalsToArticles } from "../utils/nlp.js";
 
 export function PrintView({ data, options, uiLocale = "en", labels }) {
-  if (!data) return null;
-
-  const { title, articles, recitals, annexes } = data;
-  const { 
-    recitals: includeRecitals, 
-    articles: includeArticles, 
+  const { title, articles, recitals, annexes } = data ?? {};
+  const {
+    recitals: includeRecitals,
+    articles: includeArticles,
     annexes: includeAnnexes,
-    relatedRecitals: includeRelatedRecitals 
-  } = options;
+    relatedRecitals: includeRelatedRecitals,
+  } = options ?? {};
 
   // Compute related recitals if needed, ensuring each recital is assigned to ONE article max
   const relatedRecitalsMap = useMemo(() => {
@@ -18,6 +16,8 @@ export function PrintView({ data, options, uiLocale = "en", labels }) {
     // Use true as 3rd arg to enforce single assignment
     return mapRecitalsToArticles(recitals, articles, true);
   }, [includeRelatedRecitals, articles, recitals]);
+
+  if (!data) return null;
 
   // Helper to render division headers (Chapter/Section)
   let lastChapter = null;

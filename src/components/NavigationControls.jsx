@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "./Button.jsx";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 export function NavigationControls({ selected, lists, onPrevNext, className = "" }) {
   const { t } = useI18n();

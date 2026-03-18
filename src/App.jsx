@@ -4,7 +4,8 @@ import { Landing } from "./components/Landing.jsx";
 import { LawViewer } from "./components/LawViewer.jsx";
 import { ThemeProvider } from "./components/ThemeProvider.jsx";
 import { runOneTimeMigrationReset } from "./utils/resetApp.js";
-import { I18nProvider, useI18n } from "./i18n/I18nProvider.jsx";
+import { I18nProvider } from "./i18n/I18nProvider.jsx";
+import { useI18n } from "./i18n/useI18n.js";
 import { getLocaleHomePath, isSupportedUiLocale, normalizeUiLocale } from "./i18n/localeMeta.js";
 
 function Layout() {

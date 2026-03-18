@@ -9,7 +9,7 @@ import { parseFormexToCombined } from "../utils/parsers.js";
 import { FormexApiError, getCachedFormex, resolveOfficialReference } from "../utils/formexApi.js";
 import { getImportedLaws, getLibraryLaws } from "../utils/library.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute } from "../utils/lawRouting.js";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
 
 export function Landing({ forcedLocale = null }) {

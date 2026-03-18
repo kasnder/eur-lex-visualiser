@@ -22,7 +22,7 @@ import { SEO } from "./SEO.jsx";
 import { NumberSelector } from "./NumberSelector.jsx";
 import { RelatedRecitals } from "./RelatedRecitals.jsx";
 import { CrossReferences } from "./CrossReferences.jsx";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
 
 const EMPTY_LAW_DATA = { title: "", articles: [], recitals: [], annexes: [], definitions: [] };
@@ -360,7 +360,7 @@ export function LawViewer() {
     return () => {
       cancelled = true;
     };
-  }, [sourceUrl, importCelex, formexLang, navigate, loadAttempt]);
+  }, [sourceUrl, importCelex, formexLang, locale, navigate, loadAttempt, t]);
 
   useEffect(() => {
     if (isLegacyExtensionRoute || !canonicalRoute) return;
@@ -733,7 +733,7 @@ export function LawViewer() {
     } catch {
       // ignore localStorage failures
     }
-  }, [isLegacyExtensionRoute, currentCelex, currentLaw, hasLoadedContent, searchParams, data.title, formexLang]);
+  }, [isLegacyExtensionRoute, currentCelex, currentLaw, hasLoadedContent, searchParams, data.title, formexLang, t]);
 
   const retryLoad = useCallback(() => {
     setLoadAttempt((attempt) => attempt + 1);
@@ -864,7 +864,7 @@ export function LawViewer() {
       }
       openFallbackReference(fallbackUrl);
     }
-  }, [resolveReferenceInput, currentContentLang, openFallbackReference, navigate]);
+  }, [resolveReferenceInput, currentContentLang, locale, openFallbackReference, navigate]);
 
   // Process HTML to inject definition tooltips
   const processedHtml = useMemo(() => {

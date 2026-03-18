@@ -1,6 +1,6 @@
 import React from "react";
 import { buildEurlexOjUrl, buildEurlexSearchUrl } from "../utils/url.js";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 /**
  * Displays cross-references for the currently selected article.

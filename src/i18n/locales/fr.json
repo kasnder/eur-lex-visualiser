@@ -1,0 +1,168 @@
+{
+  "app": {
+    "name": "LegalViz.EU",
+    "tagline": "Visualiseur du droit de l’UE",
+    "home": "Aller à l’accueil"
+  },
+  "common": {
+    "close": "Fermer",
+    "cancel": "Annuler",
+    "go": "Aller",
+    "retry": "Réessayer",
+    "reloadPage": "Recharger la page",
+    "dismiss": "Ignorer",
+    "read": "Lire",
+    "openOnEurlex": "Ouvrir dans EUR-Lex",
+    "theme": "Thème",
+    "lastOpened": "Dernière ouverture : {date}",
+    "hideLaw": "Masquer cet acte",
+    "article": "Article",
+    "recital": "Considérant",
+    "annex": "Annexe",
+    "articles": "Articles",
+    "recitals": "Considérants",
+    "annexes": "Annexes",
+    "noSelection": "Aucune sélection"
+  },
+  "seo": {
+    "defaultDescription": "Interactive visualisation of EU laws. Navigate articles, recitals, and annexes with ease.",
+    "defaultKeywords": "EU law, GDPR, AI Act, DMA, DSA, Data Act, visualisation, legal tech, interactive law",
+    "landingDescription": "Read and navigate EU laws efficiently with interactive visualisations. View articles and related recitals side by side."
+  },
+  "error": {
+    "somethingWentWrong": "Something went wrong",
+    "routingError": "LegalViz hit a routing error while opening this page.",
+    "unexpectedProblem": "LegalViz ran into an unexpected problem while loading this page."
+  },
+  "theme": {
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode",
+    "toggle": "Toggle theme"
+  },
+  "uiLanguage": {
+    "label": "Langue de l’interface",
+    "helper": "Changer la langue de l’interface"
+  },
+  "search": {
+    "trigger": "Search (Cmd+K)...",
+    "placeholder": "Search...",
+    "initializing": "Initializing search...",
+    "clear": "Clear search",
+    "searchingCached": "Searching {count} cached {lawWord} in {language}. Open a law in this language to make it searchable.",
+    "noCached": "No cached laws are searchable in {language} yet. Open a law in this language to add it to search.",
+    "typeCached": "Type to search across {count} cached {lawWord} in {language}.",
+    "typeToStart": "Type to start searching...",
+    "noResultsCached": "No results found for \"{query}\" in {count} cached {lawWord} in {language}.",
+    "noResults": "No results found for \"{query}\"",
+    "selectToNavigate": "Select to navigate",
+    "escToClose": "ESC to close",
+    "bestMatch": "Best Match",
+    "law": "law",
+    "laws": "laws"
+  },
+  "topBar": {
+    "byline": "By Konrad Kollnig, Law & Tech Lab Maastricht",
+    "moreTools": "Plus d’outils",
+    "hideSidebar": "Masquer la barre latérale",
+    "showSidebar": "Afficher la barre latérale",
+    "printPdf": "Imprimer / PDF",
+    "viewOnEurlex": "Voir sur EUR-Lex"
+  },
+  "languageSelector": {
+    "formexTitle": "Formex API ({lang})",
+    "useFormex": "Use Formex API",
+    "loadFromApi": "Load from api.legalviz.eu"
+  },
+  "landing": {
+    "heroTitle": "Lisez le droit de l’UE avec élégance,",
+    "heroSubtitle": "et facilement.",
+    "heroDescription": "Choose the instrument you are working with. You will then see an interactive view with chapters, articles, recitals, and annexes side by side.",
+    "option1": "Option 1 · Import by official reference",
+    "option2": "Option 2 · Open a law from your library",
+    "option3": "Option 3 · Visualise other EU laws",
+    "directive": "Directive",
+    "regulation": "Règlement",
+    "decision": "Décision",
+    "year": "Année",
+    "number": "Numéro",
+    "importLaw": "Importer l’acte",
+    "importing": "Import en cours...",
+    "importHelper": "Choose the act type, year, and number. If automatic import fails, LegalViz opens the corresponding EUR-Lex search page.",
+    "example": "Example for GDPR: choose Regulation, enter 2016 as the year, and 679 as the number.",
+    "invalidReference": "Enter a 4-digit year and a numeric law number.",
+    "automaticImportFallback": "Automatic import failed, so EUR-Lex search was opened in a new tab.",
+    "importUnavailable": "Could not import this law right now.",
+    "deleteConfirm": "Are you sure you want to hide this law?",
+    "never": "Jamais",
+    "visualiseStepsTitle": "Visualise other EU laws in 4 simple steps",
+    "dismissInstructions": "Dismiss these instructions permanently",
+    "extensionDescription": "Want to visualise a different EU law? Install our browser extension to open any recent EU law from EUR-Lex in this visualiser.",
+    "installExtension": "Install the extension:",
+    "howItWorks": "How it works:",
+    "step1": "Install the extension for your browser (see links above).",
+    "step2": "Visit a EU law page on EUR-Lex.",
+    "step3": "Open the law in the English language using the language selector on EUR-Lex.",
+    "step4": "Click the extension icon to open that law in LegalViz directly.",
+    "sourceCode": "Source code and support on GitHub",
+    "builtBy": "Built by Konrad Kollnig at the Law & Tech Lab, Maastricht University."
+  },
+  "resetFooter": {
+    "title": "Something isn't working?",
+    "button": "Click here to reset the whole app",
+    "note": "This clears LegalViz local settings and cached data in this browser."
+  },
+  "printModal": {
+    "title": "Options d’impression",
+    "description": "Customize what you want to include in your print-ready view or PDF.",
+    "itemsAvailable": "{count} items available",
+    "layout": "Layout",
+    "includeRelatedRecitals": "Include related recitals inline",
+    "includeRelatedRecitalsHelp": "Automatically inserts relevant recitals next to articles based on AI analysis. Useful for understanding context.",
+    "generateView": "Generate View"
+  },
+  "navigation": {
+    "previous": "Previous {label}",
+    "next": "Next {label}"
+  },
+  "numberSelector": {
+    "invalidRange": "Invalid range"
+  },
+  "relatedRecitals": {
+    "title": "Related Recitals",
+    "description": "These recitals appear to be related to this article based on text analysis using simple AI (TF-IDF similarity). Sorted by relevance score.",
+    "match": "{score}% match",
+    "read": "Read →"
+  },
+  "crossReferences": {
+    "title": "Cross-References",
+    "references": "This {itemLabel} references:",
+    "referencedBy": "Referenced by:",
+    "external": "References to other legislation:"
+  },
+  "lawViewer": {
+    "notAvailableTitle": "This law is not available here yet",
+    "notAvailableMessage": "We couldn't find the structured text version we use to display this law in LegalViz. The law itself may still be available on EUR-Lex.",
+    "lawLoadFailed": "Law could not be loaded",
+    "lawLoadServiceFailed": "The law could not be loaded from the Formex service.",
+    "referenceResolveFailed": "This law reference could not be resolved automatically.",
+    "importResolveFailed": "This EUR-Lex page could not be resolved to an importable CELEX document.",
+    "loadingLaw": "Chargement de l’acte",
+    "legacyExtensionTitle": "Extension update needed",
+    "legacyExtensionMessage": "LegalViz now imports laws through a new Formex-based flow. This older extension entrypoint is no longer supported, so please update your browser extension and try again.",
+    "retryImport": "Retry import",
+    "selectPrompt": "Select an article, recital, or annex from the menu to begin reading.",
+    "structuredVersionUnavailable": "The structured LegalViz version of this law is not available right now.",
+    "lawContentUnavailable": "The law content is unavailable right now.",
+    "toggleContents": "Toggle contents",
+    "quickNavigation": "Navigation rapide",
+    "quickNavigationHelp": "Jump directly to a specific article, recital, or annex number.",
+    "tableOfContents": "Table des matières",
+    "noArticles": "No articles available.",
+    "popupBlocked": "Please allow popups to print"
+  },
+  "printView": {
+    "documentTitle": "Document juridique de l’UE",
+    "generatedOn": "Generated on {date}",
+    "printedFrom": "Imprimé depuis LegalViz.EU"
+  }
+}

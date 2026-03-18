@@ -6,7 +6,7 @@ import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLanguage = "EN", searchableLawCount = 0 }) {
   const { t } = useI18n();

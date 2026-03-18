@@ -1,8 +1,8 @@
 import React from "react";
 import { Moon, Sun } from "lucide-react";
-import { useTheme } from "./ThemeProvider";
+import { useTheme } from "./useTheme";
 import { Button } from "./Button";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 export function ThemeToggle() {
     const { theme, setTheme } = useTheme();

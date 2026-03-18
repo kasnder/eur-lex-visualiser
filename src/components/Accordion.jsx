@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 
 export function Accordion({ title, children, defaultOpen = false, isOpen, onToggle }) {
+  const MotionPanel = m.div;
   const [open, setOpen] = useState(defaultOpen);
 
   useEffect(() => {
@@ -30,7 +31,7 @@ export function Accordion({ title, children, defaultOpen = false, isOpen, onTogg
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div
+          <MotionPanel
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -38,10 +39,9 @@ export function Accordion({ title, children, defaultOpen = false, isOpen, onTogg
             className="border-t p-2 dark:border-gray-700 dark:text-gray-300"
           >
             {children}
-          </motion.div>
+          </MotionPanel>
         )}
       </AnimatePresence>
     </div>
   );
 }
-

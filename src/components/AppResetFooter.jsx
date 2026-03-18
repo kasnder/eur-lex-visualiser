@@ -1,6 +1,6 @@
 import { RotateCcw } from "lucide-react";
 import { resetWholeApp } from "../utils/resetApp.js";
-import { useI18n } from "../i18n/I18nProvider.jsx";
+import { useI18n } from "../i18n/useI18n.js";
 
 export function AppResetFooter({ className = "" }) {
   const { t } = useI18n();

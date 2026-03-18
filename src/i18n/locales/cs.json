@@ -1,0 +1,168 @@
+{
+  "app": {
+    "name": "LegalViz.EU",
+    "tagline": "Vizualizátor práva EU",
+    "home": "Přejít na domovskou stránku"
+  },
+  "common": {
+    "close": "Zavřít",
+    "cancel": "Zrušit",
+    "go": "Přejít",
+    "retry": "Zkusit znovu",
+    "reloadPage": "Obnovit stránku",
+    "dismiss": "Skrýt",
+    "read": "Číst",
+    "openOnEurlex": "Otevřít v EUR-Lex",
+    "theme": "Motiv",
+    "lastOpened": "Naposledy otevřeno: {date}",
+    "hideLaw": "Skrýt tento předpis",
+    "article": "Článek",
+    "recital": "Bod odůvodnění",
+    "annex": "Příloha",
+    "articles": "Články",
+    "recitals": "Body odůvodnění",
+    "annexes": "Přílohy",
+    "noSelection": "Nic není vybráno"
+  },
+  "seo": {
+    "defaultDescription": "Interaktivní vizualizace práva EU. Snadno procházejte články, body odůvodnění a přílohy.",
+    "defaultKeywords": "právo EU, GDPR, AI Act, DMA, DSA, Data Act, vizualizace, legal tech, interaktivní právo",
+    "landingDescription": "Čtěte a procházejte právo EU efektivně pomocí interaktivních vizualizací. Zobrazujte články a související body odůvodnění vedle sebe."
+  },
+  "error": {
+    "somethingWentWrong": "Něco se pokazilo",
+    "routingError": "Při otevírání této stránky došlo v LegalViz k chybě směrování.",
+    "unexpectedProblem": "Při načítání této stránky došlo v LegalViz k neočekávanému problému."
+  },
+  "theme": {
+    "switchToLight": "Přepnout na světlý režim",
+    "switchToDark": "Přepnout na tmavý režim",
+    "toggle": "Přepnout motiv"
+  },
+  "uiLanguage": {
+    "label": "Jazyk rozhraní",
+    "helper": "Změnit jazyk rozhraní aplikace"
+  },
+  "search": {
+    "trigger": "Hledat (Cmd+K)...",
+    "placeholder": "Hledat...",
+    "initializing": "Inicializace vyhledávání...",
+    "clear": "Vymazat hledání",
+    "searchingCached": "Vyhledávání v {count} uložených {lawWord} v jazyce {language}. Otevřete předpis v tomto jazyce, aby bylo možné v něm hledat.",
+    "noCached": "V jazyce {language} zatím nejsou k dispozici žádné uložené předpisy pro vyhledávání. Otevřete předpis v tomto jazyce a přidejte ho.",
+    "typeCached": "Pište pro vyhledávání v {count} uložených {lawWord} v jazyce {language}.",
+    "typeToStart": "Začněte psát pro vyhledávání...",
+    "noResultsCached": "Žádné výsledky pro „{query}“ v {count} uložených {lawWord} v jazyce {language}.",
+    "noResults": "Žádné výsledky pro „{query}“",
+    "selectToNavigate": "Vyberte pro přechod",
+    "escToClose": "ESC pro zavření",
+    "bestMatch": "Nejlepší shoda",
+    "law": "předpisu",
+    "laws": "předpisech"
+  },
+  "topBar": {
+    "byline": "Od Konrada Kollniga, Law & Tech Lab Maastricht",
+    "moreTools": "Další nástroje",
+    "hideSidebar": "Skrýt postranní panel",
+    "showSidebar": "Zobrazit postranní panel",
+    "printPdf": "Tisk / PDF",
+    "viewOnEurlex": "Zobrazit v EUR-Lex"
+  },
+  "languageSelector": {
+    "formexTitle": "Jazyk dokumentu ({lang})",
+    "useFormex": "Jazyk dokumentu",
+    "loadFromApi": "Vyberte, který jazyk Formex načíst."
+  },
+  "landing": {
+    "heroTitle": "Čtěte právo EU krásně,",
+    "heroSubtitle": "a s lehkostí.",
+    "heroDescription": "Vyberte předpis, se kterým pracujete. Poté uvidíte interaktivní pohled s kapitolami, články, body odůvodnění a přílohami vedle sebe.",
+    "option1": "Možnost 1 · Import podle úředního odkazu",
+    "option2": "Možnost 2 · Otevřít předpis z knihovny",
+    "option3": "Možnost 3 · Vizualizovat další předpisy EU",
+    "directive": "Směrnice",
+    "regulation": "Nařízení",
+    "decision": "Rozhodnutí",
+    "year": "Rok",
+    "number": "Číslo",
+    "importLaw": "Importovat předpis",
+    "importing": "Importuji...",
+    "importHelper": "Vyberte typ aktu, rok a číslo. Pokud automatický import selže, LegalViz otevře odpovídající stránku vyhledávání EUR-Lex.",
+    "example": "Příklad pro GDPR: zvolte Nařízení, zadejte rok 2016 a číslo 679.",
+    "invalidReference": "Zadejte čtyřmístný rok a číselné číslo předpisu.",
+    "automaticImportFallback": "Automatický import nebyl k dispozici, proto bylo v nové kartě otevřeno vyhledávání v EUR-Lex.",
+    "importUnavailable": "Tento předpis nyní nelze importovat.",
+    "deleteConfirm": "Opravdu chcete tento předpis skrýt?",
+    "never": "Nikdy",
+    "visualiseStepsTitle": "Vizualizujte další předpisy EU ve 4 jednoduchých krocích",
+    "dismissInstructions": "Trvale skrýt tyto pokyny",
+    "extensionDescription": "Chcete vizualizovat jiný předpis EU? Nainstalujte si naše rozšíření pro prohlížeč a otevřete jakýkoli nedávný předpis EU z EUR-Lex v tomto vizualizátoru.",
+    "installExtension": "Nainstalujte rozšíření:",
+    "howItWorks": "Jak to funguje:",
+    "step1": "Nainstalujte rozšíření pro svůj prohlížeč (viz odkazy výše).",
+    "step2": "Navštivte stránku předpisu EU na EUR-Lex.",
+    "step3": "Otevřete předpis v angličtině pomocí jazykového výběru na EUR-Lex.",
+    "step4": "Kliknutím na ikonu rozšíření otevřete daný předpis přímo v LegalViz.",
+    "sourceCode": "Zdrojový kód a podpora na GitHubu",
+    "builtBy": "Vytvořil Konrad Kollnig v Law & Tech Lab, Maastricht University."
+  },
+  "resetFooter": {
+    "title": "Něco nefunguje?",
+    "button": "Klikněte sem pro reset celé aplikace",
+    "note": "Tímto se vymažou místní nastavení a uložená data LegalViz v tomto prohlížeči."
+  },
+  "printModal": {
+    "title": "Možnosti tisku",
+    "description": "Přizpůsobte si, co chcete zahrnout do zobrazení pro tisk nebo PDF.",
+    "itemsAvailable": "K dispozici položek: {count}",
+    "layout": "Rozvržení",
+    "includeRelatedRecitals": "Vložit související body odůvodnění do textu",
+    "includeRelatedRecitalsHelp": "Automaticky vkládá relevantní body odůvodnění vedle článků na základě analýzy AI. Užitečné pro pochopení kontextu.",
+    "generateView": "Vygenerovat zobrazení"
+  },
+  "navigation": {
+    "previous": "Předchozí {label}",
+    "next": "Další {label}"
+  },
+  "numberSelector": {
+    "invalidRange": "Neplatný rozsah"
+  },
+  "relatedRecitals": {
+    "title": "Související body odůvodnění",
+    "description": "Tyto body odůvodnění se zdají být s tímto článkem spojeny na základě textové analýzy pomocí jednoduché AI (TF-IDF similarity). Jsou seřazeny podle relevance.",
+    "match": "Shoda {score} %",
+    "read": "Číst →"
+  },
+  "crossReferences": {
+    "title": "Křížové odkazy",
+    "references": "Tento {itemLabel} odkazuje na:",
+    "referencedBy": "Odkazováno z:",
+    "external": "Odkazy na jiné právní předpisy:"
+  },
+  "lawViewer": {
+    "notAvailableTitle": "Tento předpis zde zatím není k dispozici",
+    "notAvailableMessage": "Nepodařilo se nám najít strukturovanou verzi textu, kterou používáme k zobrazení tohoto předpisu v LegalViz. Samotný předpis může být stále dostupný v EUR-Lex.",
+    "lawLoadFailed": "Předpis se nepodařilo načíst",
+    "lawLoadServiceFailed": "Předpis se nepodařilo načíst ze služby Formex.",
+    "referenceResolveFailed": "Tento právní odkaz se nepodařilo automaticky přeložit.",
+    "importResolveFailed": "Tuto stránku EUR-Lex se nepodařilo převést na importovatelný dokument CELEX.",
+    "loadingLaw": "Načítání předpisu",
+    "legacyExtensionTitle": "Je potřeba aktualizovat rozšíření",
+    "legacyExtensionMessage": "LegalViz nyní importuje předpisy pomocí nového toku založeného na Formexu. Tento starší vstupní bod rozšíření již není podporován, proto prosím aktualizujte rozšíření a zkuste to znovu.",
+    "retryImport": "Zkusit import znovu",
+    "selectPrompt": "Vyberte článek, bod odůvodnění nebo přílohu z nabídky a začněte číst.",
+    "structuredVersionUnavailable": "Strukturovaná verze tohoto předpisu pro LegalViz není právě k dispozici.",
+    "lawContentUnavailable": "Obsah předpisu není právě k dispozici.",
+    "toggleContents": "Přepnout obsah",
+    "quickNavigation": "Rychlá navigace",
+    "quickNavigationHelp": "Přejděte přímo na konkrétní číslo článku, bodu odůvodnění nebo přílohy.",
+    "tableOfContents": "Obsah",
+    "noArticles": "Nejsou k dispozici žádné články.",
+    "popupBlocked": "Povolte prosím vyskakovací okna pro tisk"
+  },
+  "printView": {
+    "documentTitle": "Dokument práva EU",
+    "generatedOn": "Vygenerováno {date}",
+    "printedFrom": "Vytištěno z LegalViz.EU"
+  }
+}
