@@ -5,7 +5,6 @@ import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose,
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
-import { getLanguageFlag } from "../utils/languageFlags.js";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
 
 function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading }) {
@@ -303,7 +302,6 @@ export function TopBar({
 }) {
   const navigate = useNavigate();
   const { articles, recitals, annexes } = lists;
-  const selectedLanguageFlag = useFormex ? getLanguageFlag(formexLang) : null;
 
   const onNavigate = (item) => {
     const extensionParams = isExtensionMode && lawKey === 'extension'
@@ -370,15 +368,6 @@ export function TopBar({
         <div className="flex-1 min-w-0 flex items-center justify-center">
           {title && (
             <div className="flex items-center gap-2 min-w-0 max-w-full">
-              {selectedLanguageFlag && (
-                <span
-                  className="shrink-0 text-lg"
-                  title={`Selected language: ${formexLang}`}
-                  aria-label={`Selected language ${formexLang}`}
-                >
-                  {selectedLanguageFlag}
-                </span>
-              )}
               <span
                 className="line-clamp-2 text-sm font-medium text-gray-700 dark:text-gray-300 text-center"
                 title={title}
