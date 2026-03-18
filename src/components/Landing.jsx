@@ -5,6 +5,7 @@ import { Github, Trash, Clock } from "lucide-react";
 import { LAWS } from "../constants/laws.js";
 import { TopBar } from "./TopBar.jsx";
 import { SEO } from "./SEO.jsx";
+import { AppResetFooter } from "./AppResetFooter.jsx";
 import { fetchText } from "../utils/fetch.js";
 import { parseAnyToCombined } from "../utils/parsers.js";
 import { FormexApiError, resolveOfficialReference } from "../utils/formexApi.js";
@@ -380,7 +381,7 @@ export function Landing() {
           className="mt-8 w-full"
         >
           <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-            Import by official reference
+            Option 1 · Import by official reference
           </h2>
           <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:bg-gray-900 dark:border-gray-800">
             <form onSubmit={handleReferenceImport} className="grid gap-3 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
@@ -434,11 +435,9 @@ export function Landing() {
           transition={{ delay: 0.15 }}
           className="mt-8 w-full"
         >
-          {!instructionsDismissed && !isExtensionReady && (
-            <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-              Option 1 · Choose a popular EU law
-            </h2>
-          )}
+          <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
+            Option 2 · Choose a popular EU law
+          </h2>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {allLaws.map((law, idx) => (
@@ -504,11 +503,9 @@ export function Landing() {
               transition={{ delay: 0.15 }}
               className="mt-10 w-full"
             >
-              {!isExtensionReady && (
-                <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-                  Option 2 · Visualise other EU laws
-                </h2>
-              )}
+              <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
+                Option 3 · Visualise other EU laws
+              </h2>
               <div className={`rounded-2xl border border-gray-200 bg-white shadow-sm ${!isExtensionReady ? "mt-4" : ""} dark:bg-gray-900 dark:border-gray-800`}>
                 <div className="flex w-full items-center justify-between px-6 py-4 text-left">
                   <button
@@ -682,6 +679,15 @@ export function Landing() {
             <Github className="h-4 w-4" />
             <span>Source code and support on GitHub</span>
           </a>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.25 }}
+          className="mt-8"
+        >
+          <AppResetFooter />
         </motion.div>
       </div >
     </div >
