@@ -740,8 +740,7 @@ async function findDownloadUrls(fmx4Uri) {
 
 /**
  * Extract a Formex ZIP and combine its FMX files into a single
- * <COMBINED.FMX> XML document, matching the logic in
- * scripts/combine-fmx-zip.mjs.
+ * <COMBINED.FMX> XML document.
  *
  * Returns the path to the combined XML file (cached alongside the ZIP).
  */
