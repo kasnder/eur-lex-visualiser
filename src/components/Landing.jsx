@@ -7,6 +7,7 @@ import { TopBar } from "./TopBar.jsx";
 import { SEO } from "./SEO.jsx";
 import { fetchText } from "../utils/fetch.js";
 import { parseAnyToCombined } from "../utils/parsers.js";
+import { FormexApiError, resolveOfficialReference } from "../utils/formexApi.js";
 
 export function Landing() {
   const navigate = useNavigate();
@@ -51,6 +52,11 @@ export function Landing() {
   // State for global search
   const [allLawsData, setAllLawsData] = useState({ articles: [], recitals: [], annexes: [] });
   const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [referenceType, setReferenceType] = useState("directive");
+  const [referenceYear, setReferenceYear] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [importError, setImportError] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
 
   const fetchCustomLaw = (key) => {
     return new Promise((resolve) => {
@@ -259,6 +265,60 @@ export function Landing() {
     });
   };
 
+  const handleReferenceImport = async (e) => {
+    e.preventDefault();
+    setImportError("");
+
+    const year = referenceYear.trim();
+    const number = referenceNumber.trim();
+    if (!/^\d{4}$/.test(year) || !/^\d{1,4}$/.test(number)) {
+      setImportError("Enter a 4-digit year and a numeric law number.");
+      return;
+    }
+
+    const parsed = {
+      actType: referenceType,
+      year,
+      number,
+      raw: `${referenceType[0].toUpperCase()}${referenceType.slice(1)} ${year}/${number}`,
+    };
+
+    setIsImporting(true);
+    try {
+      const result = await resolveOfficialReference(parsed, "EN");
+      if (result?.resolved?.celex) {
+        const params = new URLSearchParams({
+          celex: result.resolved.celex,
+          raw: parsed.raw,
+        });
+        navigate(`/import?${params.toString()}`);
+        return;
+      }
+
+      const fallbackUrl = result?.fallback?.url;
+      if (fallbackUrl) {
+        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+        setImportError("Automatic import was not available, so EUR-Lex search was opened in a new tab.");
+        return;
+      }
+
+      setImportError("This reference could not be imported automatically.");
+    } catch (err) {
+      const fallbackUrl = err instanceof FormexApiError
+        ? err.fallback?.url || err.details?.fallback?.url
+        : null;
+
+      if (fallbackUrl) {
+        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+        setImportError("Automatic import failed, so EUR-Lex search was opened in a new tab.");
+      } else {
+        setImportError("Could not import this law right now.");
+      }
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const allLaws = [
     ...customLaws.map(l => ({
       ...l,
@@ -317,6 +377,61 @@ export function Landing() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
+          className="mt-8 w-full"
+        >
+          <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
+            Import by official reference
+          </h2>
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:bg-gray-900 dark:border-gray-800">
+            <form onSubmit={handleReferenceImport} className="grid gap-3 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
+              <select
+                value={referenceType}
+                onChange={(e) => setReferenceType(e.target.value)}
+                className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
+              >
+                <option value="directive">Directive</option>
+                <option value="regulation">Regulation</option>
+                <option value="decision">Decision</option>
+              </select>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={referenceYear}
+                onChange={(e) => setReferenceYear(e.target.value)}
+                placeholder="Year"
+                className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
+              />
+              <input
+                type="text"
+                inputMode="numeric"
+                value={referenceNumber}
+                onChange={(e) => setReferenceNumber(e.target.value)}
+                placeholder="Number"
+                className="min-w-0 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:ring-blue-950"
+              />
+              <button
+                type="submit"
+                disabled={isImporting}
+                className="rounded-xl bg-gray-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-600 dark:hover:bg-blue-500"
+              >
+                {isImporting ? "Importing..." : "Import law"}
+              </button>
+            </form>
+            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+              Choose the act type, year, and number. If automatic import fails, LegalViz opens the corresponding EUR-Lex search page.
+            </p>
+            {importError && (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                {importError}
+              </p>
+            )}
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
           className="mt-8 w-full"
         >
           {!instructionsDismissed && !isExtensionReady && (

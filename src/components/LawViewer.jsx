@@ -93,13 +93,6 @@ export function LawViewer() {
     localStorage.setItem("legalviz-formex-lang", formexLang);
   }, [formexLang]);
 
-  useEffect(() => {
-    const importLang = searchParams.get("lang");
-    if (isImportedMode && importLang && importLang !== formexLang) {
-      setFormexLang(importLang);
-    }
-  }, [isImportedMode, searchParams, formexLang]);
-
   const onIncreaseFont = () => setFontScale(s => Math.min(s + 1, 5));
   const onDecreaseFont = () => setFontScale(s => Math.max(s - 1, 1));
   const onToggleSidebar = () => setIsSidebarOpen(s => !s);
@@ -109,13 +102,12 @@ export function LawViewer() {
     if (!isImportedMode && !overrides.celex) return "";
     const params = new URLSearchParams();
     params.set("celex", overrides.celex || importCelex);
-    params.set("lang", overrides.lang || formexLang);
 
     const raw = overrides.raw || searchParams.get("raw");
     if (raw) params.set("raw", raw);
 
     return `?${params.toString()}`;
-  }, [isImportedMode, importCelex, formexLang, searchParams]);
+  }, [isImportedMode, importCelex, searchParams]);
 
   // Map scale to prose class and percentage for display
   const getProseClass = (s) => {
@@ -841,7 +833,6 @@ export function LawViewer() {
       if (result?.resolved?.celex) {
         navigate(`/import${getImportParams({
           celex: result.resolved.celex,
-          lang: currentContentLang,
           raw: reference.raw,
         })}`);
         return;
@@ -930,10 +921,11 @@ export function LawViewer() {
       />
       <div className="print:hidden">
         <TopBar
-          lawKey={isExtensionMode ? "extension" : key}
+          lawKey={isExtensionMode ? "extension" : isImportedMode ? "import" : key}
           title={data.title}
           lists={{ articles: data.articles, recitals: data.recitals, annexes: data.annexes }}
           isExtensionMode={isExtensionMode}
+          isImportedMode={isImportedMode}
           eurlexUrl={eurlexUrl}
           onPrint={() => setPrintModalOpen(true)}
           onToggleSidebar={onToggleSidebar}

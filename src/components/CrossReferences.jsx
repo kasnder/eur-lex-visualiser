@@ -7,7 +7,14 @@ import { buildEurlexOjUrl, buildEurlexSearchUrl } from "../utils/url.js";
  * Shows which other articles are referenced by the current article,
  * and which articles reference the current article (back-references).
  */
-export function CrossReferences({ articleNumber, crossReferences, articles, onSelectArticle, currentLang = "EN" }) {
+export function CrossReferences({
+  articleNumber,
+  crossReferences,
+  articles,
+  onSelectArticle,
+  currentLang = "EN",
+  onOpenExternalReference,
+}) {
   if (!crossReferences || !articleNumber) return null;
 
   const allRefsForArticle = crossReferences[articleNumber] || [];
@@ -138,21 +145,22 @@ export function CrossReferences({ articleNumber, crossReferences, articles, onSe
                   </span>
                 );
                 const cls = "group inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm transition hover:border-blue-400 hover:shadow-sm dark:bg-blue-900/20 dark:border-blue-800 dark:hover:border-blue-500";
-                return href ? (
-                  <a
+                return (
+                  <button
                     key={`ext-${i}`}
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    type="button"
+                    onClick={() => {
+                      if (onOpenExternalReference) {
+                        onOpenExternalReference(ref);
+                      } else if (href) {
+                        window.open(href, "_blank", "noopener,noreferrer");
+                      }
+                    }}
                     className={cls}
                     title={ref.raw}
                   >
                     {inner}
-                  </a>
-                ) : (
-                  <span key={`ext-${i}`} className={cls} title={ref.raw}>
-                    {inner}
-                  </span>
+                  </button>
                 );
               })}
             </div>

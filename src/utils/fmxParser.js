@@ -532,12 +532,14 @@ export function injectCrossRefLinks(html, lang) {
 
     EXTERNAL_LAW_RE.lastIndex = 0;
     while ((match = EXTERNAL_LAW_RE.exec(text)) !== null) {
+      const meta = parseExternalLawMeta(match[0], match[1]);
       refs.push({
         start: match.index,
         end: match.index + match[0].length,
         kind: "external",
         target: match[1],
         label: match[0],
+        ...meta,
       });
     }
 
@@ -574,6 +576,11 @@ export function injectCrossRefLinks(html, lang) {
         link.setAttribute("target", "_blank");
         link.setAttribute("rel", "noopener noreferrer");
         link.setAttribute("title", `Open ${ref.target} on EUR-Lex`);
+        link.setAttribute("data-ref-raw", ref.label);
+        if (ref.actType) link.setAttribute("data-ref-act-type", ref.actType);
+        if (ref.year) link.setAttribute("data-ref-year", ref.year);
+        if (ref.number) link.setAttribute("data-ref-number", ref.number);
+        if (ref.suffix) link.setAttribute("data-ref-suffix", ref.suffix);
       }
 
       frag.appendChild(link);

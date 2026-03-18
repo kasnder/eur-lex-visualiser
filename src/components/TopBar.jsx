@@ -284,6 +284,7 @@ export function TopBar({
   title,
   lists,
   isExtensionMode,
+  isImportedMode = false,
   eurlexUrl,
   onPrint,
   showPrint = true,
@@ -307,6 +308,7 @@ export function TopBar({
     const extensionParams = isExtensionMode && lawKey === 'extension'
       ? window.location.search
       : '';
+    const importParams = isImportedMode ? window.location.search : '';
 
     // Ensure ID is a string before encoding
     const safeId = encodeURIComponent(String(item.id));
@@ -314,6 +316,8 @@ export function TopBar({
 
     if (isExtensionMode) {
       navigate(`/extension/${item.type}/${safeId}${extensionParams}`);
+    } else if (isImportedMode && !item.law_key) {
+      navigate(`/import/${item.type}/${safeId}${importParams}`);
     } else {
       navigate(`/law/${targetLawKey}/${item.type}/${safeId}`);
     }
