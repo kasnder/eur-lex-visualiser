@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical } from "lucide-react";
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
+import { LanguageSelector } from "./LanguageSelector.jsx";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
 
 function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading }) {
@@ -292,7 +293,12 @@ export function TopBar({
   isSidebarOpen,
   onIncreaseFont,
   onDecreaseFont,
-  fontSize
+  fontSize,
+  formexLang,
+  onFormexLangChange,
+  useFormex,
+  onToggleFormex,
+  hasCelex,
 }) {
   const navigate = useNavigate();
   const { articles, recitals, annexes } = lists;
@@ -375,6 +381,15 @@ export function TopBar({
 
         {/* Right: Navigation Controls */}
         <div className="flex-shrink-0 flex items-center gap-2 md:gap-3">
+
+          {/* Language Selector */}
+          <LanguageSelector
+            currentLang={formexLang}
+            onChangeLang={onFormexLangChange}
+            useFormex={useFormex}
+            onToggleFormex={onToggleFormex}
+            hasCelex={hasCelex}
+          />
 
           {/* Tools Group (Unified Menu) */}
           <div className="relative flex items-center">

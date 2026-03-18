@@ -9,6 +9,7 @@ import { parseAnyToCombined } from "../utils/parsers.js";
 import { getLawPathFromKey } from "../utils/url.js";
 import { mapRecitalsToArticles, NLP_VERSION } from "../utils/nlp.js";
 import { injectDefinitionTooltips } from "../utils/definitions.js";
+import { fetchFormex, extractCelexFromUrl } from "../utils/formexApi.js";
 
 import { Button } from "./Button.jsx";
 import { Accordion } from "./Accordion.jsx";
@@ -55,6 +56,22 @@ export function LawViewer() {
     }
   });
 
+  // Formex API settings (opt-in)
+  const [useFormex, setUseFormex] = useState(() => {
+    try {
+      return localStorage.getItem("legalviz-use-formex") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [formexLang, setFormexLang] = useState(() => {
+    try {
+      return localStorage.getItem("legalviz-formex-lang") || "EN";
+    } catch {
+      return "EN";
+    }
+  });
+
   useEffect(() => {
     localStorage.setItem("legalviz-fontscale", fontScale);
   }, [fontScale]);
@@ -62,6 +79,14 @@ export function LawViewer() {
   useEffect(() => {
     localStorage.setItem("legalviz-sidebar", isSidebarOpen);
   }, [isSidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem("legalviz-use-formex", useFormex);
+  }, [useFormex]);
+
+  useEffect(() => {
+    localStorage.setItem("legalviz-formex-lang", formexLang);
+  }, [formexLang]);
 
   const onIncreaseFont = () => setFontScale(s => Math.min(s + 1, 5));
   const onDecreaseFont = () => setFontScale(s => Math.max(s - 1, 1));
@@ -101,13 +126,20 @@ export function LawViewer() {
     }
   };
 
-  const loadLaw = React.useCallback(async (path) => {
-    if (!path) return;
+  const loadLaw = React.useCallback(async (path, celex, lang) => {
+    if (!path && !celex) return;
     setLoading(true);
     setError("");
     setSelected({ kind: "article", id: null, html: "" });
     try {
-      const text = await fetchText(path);
+      let text;
+      if (celex && lang) {
+        // Load from Formex API
+        text = await fetchFormex(celex, lang);
+      } else {
+        // Load from local file
+        text = await fetchText(path);
+      }
       const combined = parseAnyToCombined(text);
       setData(combined);
     } catch (e) {
@@ -179,8 +211,9 @@ export function LawViewer() {
 
       // Generate a cache key for NLP results
       let cacheKey = null;
+      const formexSuffix = useFormex ? `_fmx_${formexLang}` : '';
       if (key && !isExtensionMode) {
-        cacheKey = `nlp_v${NLP_VERSION}_${key}`;
+        cacheKey = `nlp_v${NLP_VERSION}_${key}${formexSuffix}`;
       } else if (isExtensionMode && data.title) {
         // Fallback for extension mode if title exists
         // Simple hash of title + lengths to identify specific content
@@ -224,7 +257,7 @@ export function LawViewer() {
     } else {
       setRecitalMap(new Map());
     }
-  }, [data.articles, data.recitals, key, isExtensionMode, data.title]);
+  }, [data.articles, data.recitals, key, isExtensionMode, data.title, useFormex, formexLang]);
 
   // Ref to track the currently loaded law key to prevent re-loading on navigation
   const loadedKeyRef = React.useRef(null);
@@ -237,12 +270,13 @@ export function LawViewer() {
     if (isExtension && storageKey) {
       // If we already loaded this key and have data, don't reload.
       // This prevents reloading when navigating between articles of the same law.
-      if (loadedKeyRef.current === storageKey && data.title) {
+      const formexSuffix = useFormex ? `_formex_${formexLang}` : '';
+      if (loadedKeyRef.current === storageKey + formexSuffix && data.title) {
         return;
       }
 
       console.log('Extension mode detected, loading storage key:', storageKey);
-      loadedKeyRef.current = storageKey;
+      loadedKeyRef.current = storageKey + formexSuffix;
       setIsExtensionMode(true);
       setLoading(true);
 
@@ -261,6 +295,20 @@ export function LawViewer() {
           } else if (payload.html) {
             console.log('Received law data from extension');
             isResponseReceived = true;
+
+            // If Formex is enabled, try to extract CELEX from the metadata URL
+            // and load via API instead of parsing the extension HTML
+            if (useFormex && payload.metadata?.url) {
+              const celex = extractCelexFromUrl(payload.metadata.url);
+              if (celex) {
+                console.log(`Extension: using Formex API for CELEX ${celex} (${formexLang})`);
+                loadLaw(null, celex, formexLang).then(() => {
+                  setIsExtensionMode(true); // re-set since loadLaw doesn't set it
+                });
+                return;
+              }
+            }
+
             loadFromExtension(payload.html, payload.metadata);
           } else {
             // Empty response, wait for retry
@@ -298,19 +346,25 @@ export function LawViewer() {
         clearTimeout(timeout);
       };
     }
-  }, [searchParams, loadFromExtension, data.title]);
+  }, [searchParams, loadFromExtension, loadLaw, data.title, useFormex, formexLang]);
 
-  // Load law when path changes
+  // Resolve CELEX for the current law key
+  const currentLaw = LAWS.find(l => l.key === key);
+  const currentCelex = currentLaw?.celex || null;
+
+  // Load law when path/formex settings change
   useEffect(() => {
     if (isExtensionMode) return; // Don't load from file if we're in extension mode
 
-    if (lawPath) {
+    if (useFormex && currentCelex) {
+      loadLaw(null, currentCelex, formexLang);
+    } else if (lawPath) {
       loadLaw(lawPath);
     } else if (key) {
       // Only redirect if we have a key but no matching law path
       navigate("/", { replace: true });
     }
-  }, [lawPath, key, loadLaw, navigate, isExtensionMode]);
+  }, [lawPath, key, loadLaw, navigate, isExtensionMode, useFormex, currentCelex, formexLang]);
 
   // Update selection from URL params when data is loaded or URL params change
   useEffect(() => {
@@ -637,6 +691,16 @@ export function LawViewer() {
     return law ? law.eurlex : null;
   }, [key, isExtensionMode, data.eurlex]);
 
+  // Whether this law can be loaded via the Formex API
+  const hasCelex = useMemo(() => {
+    if (currentCelex) return true;
+    // In extension mode, try to extract from the eurlex URL
+    if (isExtensionMode && data.eurlex) {
+      return !!extractCelexFromUrl(data.eurlex);
+    }
+    return false;
+  }, [currentCelex, isExtensionMode, data.eurlex]);
+
   // Process HTML to inject definition tooltips
   const processedHtml = useMemo(() => {
     if (!selected.html) return "";
@@ -722,6 +786,11 @@ export function LawViewer() {
           onIncreaseFont={onIncreaseFont}
           onDecreaseFont={onDecreaseFont}
           fontSize={getFontPercent(fontScale)}
+          formexLang={formexLang}
+          onFormexLangChange={setFormexLang}
+          useFormex={useFormex}
+          onToggleFormex={setUseFormex}
+          hasCelex={hasCelex}
         />
 
         <main className={`mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-4 py-4 md:flex-row md:px-6 md:py-6 md:gap-6 justify-center`}>
