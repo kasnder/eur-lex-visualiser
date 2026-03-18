@@ -1,6 +1,6 @@
 # EUR‑Lex FMX API
 
-A minimal **Node.js** REST API that serves the FMX (Formex 4) files you downloaded for EU regulations. The API is ready to be deployed on **Railway** (or any other Node hosting platform).
+A minimal **Node.js** REST API that serves the FMX (Formex 4) files for EU regulations.
 
 ## Features
 - **Health check**: `GET /health`
