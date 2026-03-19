@@ -9,7 +9,7 @@ import { mapRecitalsToArticles, NLP_VERSION } from "../utils/nlp.js";
 import { injectDefinitionTooltips } from "../utils/definitions.js";
 import { EU_LANGUAGES, fetchFormex, FormexApiError, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
 import { parseOfficialReference } from "../utils/officialReferences.js";
-import { markLawOpened, saveLawMeta } from "../utils/library.js";
+import { findCachedCelexByOfficialReference, markLawOpened, saveLawMeta } from "../utils/library.js";
 import { buildImportedLawCandidate, findBundledLawByCelex, findBundledLawByKey, findBundledLawBySlug, getCanonicalLawRoute, parseOfficialReferenceSlug } from "../utils/lawRouting.js";
 
 import { Button } from "./Button.jsx";
@@ -286,6 +286,7 @@ export function LawViewer() {
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printOptions, setPrintOptions] = useState(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [resolvedCelex, setResolvedCelex] = useState(null);
   const primaryLoadRequestRef = useRef(0);
 
   // View Settings
@@ -404,13 +405,37 @@ export function LawViewer() {
     celexMatchedBundledLaw || bundledLaw || derivedSlugLaw || null
   ), [celexMatchedBundledLaw, bundledLaw, derivedSlugLaw]);
   const currentCelex = importCelex || currentLaw?.celex || null;
+  const effectiveCelex = currentCelex || resolvedCelex || null;
   const secondaryLang = secondaryLangParam && secondaryLangParam !== effectivePrimaryLang ? secondaryLangParam : null;
-  const isSideBySide = !!secondaryLang && !!currentCelex;
+  const isSideBySide = !!secondaryLang && !!effectiveCelex;
   const currentLawSlug = currentLaw?.slug || null;
 
   useEffect(() => () => {
     primaryLoadRequestRef.current += 1;
   }, []);
+
+  useEffect(() => {
+    setResolvedCelex(null);
+  }, [importCelex, slug, key, location.pathname]);
+
+  useEffect(() => {
+    if (isLegacyExtensionRoute || currentCelex || !slugReference) return;
+
+    let cancelled = false;
+
+    findCachedCelexByOfficialReference(slugReference)
+      .then((cachedCelex) => {
+        if (cancelled || !cachedCelex) return;
+        setResolvedCelex(cachedCelex);
+      })
+      .catch(() => {
+        // ignore local metadata lookup failures
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCelex, isLegacyExtensionRoute, slugReference]);
 
   useEffect(() => {
     if (!secondaryLang) return;
@@ -615,19 +640,27 @@ export function LawViewer() {
 
   useEffect(() => {
     if (isLegacyExtensionRoute || !canonicalRoute) return;
-    if (isLegacyLawRoute || (isImportRoute && currentCelex && currentLawSlug)) {
+    if (isLegacyLawRoute || (isImportRoute && effectiveCelex && currentLawSlug)) {
       navigate(`${canonicalRoute}${location.search}`, { replace: true });
     }
-  }, [canonicalRoute, currentCelex, currentLawSlug, isLegacyExtensionRoute, isImportRoute, isLegacyLawRoute, navigate, location.search]);
+  }, [canonicalRoute, effectiveCelex, currentLawSlug, isLegacyExtensionRoute, isImportRoute, isLegacyLawRoute, navigate, location.search]);
 
   useEffect(() => {
-    if (isLegacyExtensionRoute || currentCelex || !slugReference) return;
+    if (isLegacyExtensionRoute || effectiveCelex || !slugReference) return;
 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
 
-    resolveOfficialReference(slugReference, formexLang)
+    const resolveSlugReference = async () => {
+      const cachedCelex = await findCachedCelexByOfficialReference(slugReference);
+      if (cachedCelex) {
+        return { resolved: { celex: cachedCelex } };
+      }
+      return resolveOfficialReference(slugReference, formexLang);
+    };
+
+    resolveSlugReference()
       .then((result) => {
         if (cancelled) return;
         const resolvedCelex = result?.resolved?.celex;
@@ -641,6 +674,13 @@ export function LawViewer() {
           setLoading(false);
           return;
         }
+        setResolvedCelex(resolvedCelex);
+        saveLawMeta({
+          celex: resolvedCelex,
+          officialReference: slugReference,
+          label: currentLaw?.label || `${slugReference.actType} ${slugReference.year}/${slugReference.number}`,
+          eurlex: buildEurlexCelexUrl(resolvedCelex, formexLang),
+        }).then(() => markLawOpened(resolvedCelex));
         loadLaw(resolvedCelex, formexLang);
       })
       .catch((error) => {
@@ -652,23 +692,23 @@ export function LawViewer() {
     return () => {
       cancelled = true;
     };
-  }, [slugReference, currentCelex, formexLang, loadLaw, isLegacyExtensionRoute, t]);
+  }, [slugReference, effectiveCelex, formexLang, loadLaw, isLegacyExtensionRoute, t, currentLaw]);
 
   // Load law when path/formex settings change
   useEffect(() => {
     if (isLegacyExtensionRoute) return;
-    if (sourceUrl && !currentCelex) return;
-    if (!currentCelex && slugReference) return;
+    if (sourceUrl && !effectiveCelex) return;
+    if (!effectiveCelex && slugReference) return;
 
-    if (currentCelex) {
-      loadLaw(currentCelex, formexLang);
+    if (effectiveCelex) {
+      loadLaw(effectiveCelex, formexLang);
     } else if (key || slug) {
       navigate(localizePath("/", locale), { replace: true });
     }
-  }, [key, slug, loadLaw, navigate, isLegacyExtensionRoute, currentCelex, formexLang, loadAttempt, sourceUrl, slugReference, localizePath, locale]);
+  }, [key, slug, loadLaw, navigate, isLegacyExtensionRoute, effectiveCelex, formexLang, loadAttempt, sourceUrl, slugReference, localizePath, locale]);
 
   useEffect(() => {
-    if (!currentCelex || !secondaryLang || isLegacyExtensionRoute) {
+    if (!effectiveCelex || !secondaryLang || isLegacyExtensionRoute) {
       setSecondaryData(EMPTY_LAW_DATA);
       setSecondaryLoadError(null);
       setSecondaryLoading(false);
@@ -680,7 +720,7 @@ export function LawViewer() {
     setSecondaryLoadError(null);
     setSecondaryData(EMPTY_LAW_DATA);
 
-    fetchFormex(currentCelex, secondaryLang)
+    fetchFormex(effectiveCelex, secondaryLang)
       .then((text) => {
         if (cancelled) return;
         const combined = parseFormexToCombined(text);
@@ -700,7 +740,7 @@ export function LawViewer() {
     return () => {
       cancelled = true;
     };
-  }, [currentCelex, secondaryLang, isLegacyExtensionRoute, t]);
+  }, [effectiveCelex, secondaryLang, isLegacyExtensionRoute, t]);
 
   // Update selection from URL params when data is loaded or URL params change
   useEffect(() => {
@@ -981,9 +1021,9 @@ export function LawViewer() {
 
   const eurlexUrl = useMemo(() => {
     if (sourceUrl) return sourceUrl;
-    if (currentCelex) return buildEurlexCelexUrl(currentCelex, formexLang);
+    if (effectiveCelex) return buildEurlexCelexUrl(effectiveCelex, formexLang);
     return currentLaw?.eurlex || null;
-  }, [currentLaw, currentCelex, formexLang, sourceUrl]);
+  }, [currentLaw, effectiveCelex, formexLang, sourceUrl]);
 
   const hasLoadedContent = data.articles.length > 0 || data.recitals.length > 0 || data.annexes.length > 0;
   const currentLawLabel = useMemo(() => {
@@ -993,20 +1033,34 @@ export function LawViewer() {
     if (slugReference) return `${slugReference.actType} ${slugReference.year}/${slugReference.number}`;
     return "";
   }, [data.title, searchParams, currentLaw, slugReference]);
+  const externalFallbackUrl = useMemo(() => {
+    if (loadError?.fallbackUrl) return loadError.fallbackUrl;
+    if (eurlexUrl) return eurlexUrl;
+
+    const referenceLabel = searchParams.get("raw")
+      || (slugReference ? `${slugReference.actType} ${slugReference.year}/${slugReference.number}` : null)
+      || currentLaw?.label
+      || slug
+      || key
+      || null;
+
+    if (!referenceLabel) return null;
+    return buildEurlexSearchUrl(referenceLabel, formexLang);
+  }, [loadError, eurlexUrl, searchParams, slugReference, currentLaw, slug, key, formexLang]);
 
   useEffect(() => {
-    if (isLegacyExtensionRoute || !currentCelex || !hasLoadedContent) return;
+    if (isLegacyExtensionRoute || !effectiveCelex || !hasLoadedContent) return;
 
     const rawReference = searchParams.get("raw");
     const officialReference = currentLaw?.officialReference || parseOfficialReference(rawReference || "");
     saveLawMeta({
-      celex: currentCelex,
+      celex: effectiveCelex,
       raw: rawReference,
       officialReference,
-      label: rawReference || data.title || currentLaw?.label || `CELEX ${currentCelex}`,
-      eurlex: buildEurlexCelexUrl(currentCelex, formexLang),
-    }).then(() => markLawOpened(currentCelex));
-  }, [isLegacyExtensionRoute, currentCelex, currentLaw, hasLoadedContent, searchParams, data.title, formexLang, t]);
+      label: rawReference || data.title || currentLaw?.label || `CELEX ${effectiveCelex}`,
+      eurlex: buildEurlexCelexUrl(effectiveCelex, formexLang),
+    }).then(() => markLawOpened(effectiveCelex));
+  }, [isLegacyExtensionRoute, effectiveCelex, currentLaw, hasLoadedContent, searchParams, data.title, formexLang, t]);
 
   const retryLoad = useCallback(() => {
     setLoadAttempt((attempt) => attempt + 1);
@@ -1070,7 +1124,7 @@ export function LawViewer() {
     });
   }, [data.crossReferences, currentContentLang]);
 
-  const hasCelex = !!currentCelex;
+  const hasCelex = !!effectiveCelex;
   const isLegacyExtensionQuery = searchParams.get("extension") === "true" || !!searchParams.get("key");
   const showLegacyMigrationNotice = isLegacyExtensionRoute || isLegacyExtensionQuery;
 
@@ -1377,11 +1431,11 @@ export function LawViewer() {
                       {loadError.message}
                     </p>
                     <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-                      {eurlexUrl && (
+                      {externalFallbackUrl && (
                         <Button
                           type="button"
                           className={loadErrorTone === "notice" ? "border border-sky-700 bg-sky-700 text-white hover:bg-sky-800 dark:border-sky-300 dark:bg-sky-300 dark:text-sky-950 dark:hover:bg-sky-200" : ""}
-                          onClick={() => window.open(loadError.fallbackUrl || eurlexUrl, "_blank", "noopener,noreferrer")}
+                          onClick={() => window.open(externalFallbackUrl, "_blank", "noopener,noreferrer")}
                         >
                           {t("common.openOnEurlex")}
                         </Button>

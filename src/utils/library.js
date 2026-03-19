@@ -3,6 +3,29 @@ import { getBundledLaws, getCanonicalLawRoute, buildImportedLawCandidate, findBu
 import { buildEurlexCelexUrl } from "./url.js";
 import { getAllLawMeta, listCachedCelexes, upsertLawMeta } from "./formexApi.js";
 
+function normalizeOfficialReference(reference) {
+  if (!reference) return null;
+
+  const actType = String(reference.actType || "").trim().toLowerCase();
+  const year = String(reference.year || "").trim();
+  const number = String(reference.number || "").trim();
+
+  if (!actType || !year || !number) return null;
+  return { actType, year, number };
+}
+
+function sameOfficialReference(left, right) {
+  const normalizedLeft = normalizeOfficialReference(left);
+  const normalizedRight = normalizeOfficialReference(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+
+  return (
+    normalizedLeft.actType === normalizedRight.actType &&
+    normalizedLeft.year === normalizedRight.year &&
+    normalizedLeft.number === normalizedRight.number
+  );
+}
+
 function dispatchLibraryUpdate() {
   if (typeof window === "undefined") return;
   try {
@@ -162,4 +185,22 @@ export async function getLibraryLaws() {
       if (timeDiff !== 0) return timeDiff;
       return (b.addedAt || 0) - (a.addedAt || 0);
     });
+}
+
+export async function findStoredLawMetaByOfficialReference(reference) {
+  const target = normalizeOfficialReference(reference);
+  if (!target) return null;
+
+  const metaEntries = await getAllLawMeta();
+  return metaEntries.find((entry) => {
+    if (!entry?.celex) return false;
+    const entryReference = entry.officialReference
+      || parseOfficialReference(entry.raw || "")
+      || parseOfficialReference(entry.label || "");
+    return sameOfficialReference(entryReference, target);
+  }) || null;
+}
+
+export async function findCachedCelexByOfficialReference(reference) {
+  return (await findStoredLawMetaByOfficialReference(reference))?.celex || null;
 }

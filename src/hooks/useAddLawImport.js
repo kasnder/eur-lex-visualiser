@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { FormexApiError, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute } from "../utils/lawRouting.js";
+import { findCachedCelexByOfficialReference } from "../utils/library.js";
 
 export function useAddLawImport({ locale, navigate, t }) {
   const [referenceType, setReferenceType] = useState("regulation");
@@ -33,10 +34,12 @@ export function useAddLawImport({ locale, navigate, t }) {
 
     setIsImporting(true);
     try {
-      const result = await resolveOfficialReference(parsed, "EN");
-      if (result?.resolved?.celex) {
+      const cachedCelex = await findCachedCelexByOfficialReference(parsed);
+      const result = cachedCelex ? null : await resolveOfficialReference(parsed, "EN");
+      const resolvedCelex = cachedCelex || result?.resolved?.celex;
+      if (resolvedCelex) {
         const importedLaw = buildImportedLawCandidate({
-          celex: result.resolved.celex,
+          celex: resolvedCelex,
           officialReference: parsed,
         });
         navigate(getCanonicalLawRoute(importedLaw, null, null, locale));
