@@ -416,7 +416,7 @@ export function LawViewer() {
 
   useEffect(() => {
     setResolvedCelex(null);
-  }, [importCelex, slug, key, location.pathname]);
+  }, [importCelex, slug, key]);
 
   useEffect(() => {
     if (isLegacyExtensionRoute || currentCelex || !slugReference) return;
