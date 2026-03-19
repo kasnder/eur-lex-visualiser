@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical } from "lucide-react";
+import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical, RotateCcw } from "lucide-react";
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
@@ -343,6 +343,7 @@ export function TopBar({
   hasCelex,
   onToggleSecondLanguage,
   isSideBySide = false,
+  onResetApp,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -427,6 +428,7 @@ export function TopBar({
               isSidebarOpen={isSidebarOpen}
               onToggleSecondLanguage={onToggleSecondLanguage}
               isSideBySide={isSideBySide}
+              onResetApp={onResetApp}
             />
           </div>
 
@@ -456,6 +458,7 @@ function ToolsMenu({
   isSidebarOpen,
   onToggleSecondLanguage,
   isSideBySide,
+  onResetApp,
 }) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -535,6 +538,20 @@ function ToolsMenu({
               <ExternalLink size={18} />
               <span>{t("topBar.viewOnEurlex")}</span>
             </a>
+          )}
+
+          {onResetApp && (
+            <button
+              type="button"
+              onClick={() => {
+                onResetApp();
+                setIsOpen(false);
+              }}
+              className="flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              <RotateCcw size={18} />
+              <span>{t("resetFooter.button")}</span>
+            </button>
           )}
 
           <div className="px-3 py-2">
