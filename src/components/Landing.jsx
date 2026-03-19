@@ -7,7 +7,7 @@ import { TopBar } from "./TopBar.jsx";
 import { SEO } from "./SEO.jsx";
 import { parseFormexToCombined } from "../utils/parsers.js";
 import { FormexApiError, getCachedFormex, resolveEurlexUrl, resolveOfficialReference } from "../utils/formexApi.js";
-import { getImportedLaws, getLibraryLaws } from "../utils/library.js";
+import { getImportedLaws, getLibraryLaws, upsertImportedLaw } from "../utils/library.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute } from "../utils/lawRouting.js";
 import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
@@ -410,7 +410,29 @@ export function Landing({ forcedLocale = null }) {
     });
   };
 
-  const handleReferenceImport = async (e) => {
+  const persistImportedLaw = useCallback((entry) => {
+    const storedLaw = upsertImportedLaw(entry);
+    if (!storedLaw?.id) return null;
+
+    try {
+      const stored = localStorage.getItem("eurlex_last_opened");
+      const existing = stored ? JSON.parse(stored) : {};
+      const now = Date.now();
+      existing[storedLaw.id] = now;
+      if (storedLaw.celex) {
+        existing[storedLaw.celex] = now;
+      }
+      localStorage.setItem("eurlex_last_opened", JSON.stringify(existing));
+      setLastOpened(existing);
+    } catch {
+      // ignore localStorage failures
+    }
+
+    setImportedLawsVersion(getImportedLaws().length);
+    return storedLaw;
+  }, []);
+
+  const handleReferenceImport = useCallback(async (e) => {
     e.preventDefault();
     setImportError("");
 
@@ -432,6 +454,12 @@ export function Landing({ forcedLocale = null }) {
     try {
       const result = await resolveOfficialReference(parsed, "EN");
       if (result?.resolved?.celex) {
+        persistImportedLaw({
+          celex: result.resolved.celex,
+          raw: parsed.raw,
+          officialReference: parsed,
+          label: parsed.raw,
+        });
         const importedLaw = buildImportedLawCandidate({
           celex: result.resolved.celex,
           officialReference: parsed,
@@ -462,7 +490,7 @@ export function Landing({ forcedLocale = null }) {
     } finally {
       setIsImporting(false);
     }
-  };
+  }, [locale, navigate, persistImportedLaw, referenceNumber, referenceType, referenceYear, t]);
 
   const openAddLawDialog = useCallback(() => {
     setImportError("");
@@ -507,6 +535,13 @@ export function Landing({ forcedLocale = null }) {
 
       if (resolvedCelex) {
         const officialReference = result?.parsed?.reference || null;
+        persistImportedLaw({
+          celex: resolvedCelex,
+          raw: sourceUrl,
+          officialReference,
+          label: sourceUrl,
+          eurlex: sourceUrl,
+        });
         if (officialReference?.actType && officialReference?.year && officialReference?.number) {
           const importedLaw = buildImportedLawCandidate({
             celex: resolvedCelex,
@@ -530,7 +565,7 @@ export function Landing({ forcedLocale = null }) {
     } finally {
       setIsResolvingUrl(false);
     }
-  }, [eurlexUrl, locale, navigate, t]);
+  }, [eurlexUrl, locale, navigate, persistImportedLaw, t]);
 
   const allLaws = getLibraryLaws({ hiddenLaws, lastOpened, importedLawsVersion });
 
