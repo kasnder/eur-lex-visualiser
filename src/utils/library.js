@@ -1,20 +1,7 @@
 import { parseOfficialReference } from "./officialReferences.js";
-import { getBundledLaws, getCanonicalLawRoute, buildImportedLawCandidate, findBundledLawByCelex, findBundledLawByKey } from "./lawRouting.js";
+import { getBundledLaws, getCanonicalLawRoute, buildImportedLawCandidate, findBundledLawByCelex } from "./lawRouting.js";
 import { buildEurlexCelexUrl } from "./url.js";
 import { getAllLawMeta, listCachedCelexes, upsertLawMeta } from "./formexApi.js";
-
-const LEGACY_IMPORTED_LAWS_STORAGE_KEY = "eurlex_imported_laws";
-const LEGACY_HIDDEN_LAWS_STORAGE_KEY = "eurlex_hidden_laws";
-const LEGACY_LAST_OPENED_STORAGE_KEY = "eurlex_last_opened";
-const LEGACY_MIGRATION_FLAG = "legalviz-library-meta-migrated";
-function readJson(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 function dispatchLibraryUpdate() {
   if (typeof window === "undefined") return;
@@ -25,7 +12,7 @@ function dispatchLibraryUpdate() {
   }
 }
 
-function normalizeImportedLaw(entry) {
+function normalizeLawMetaEntry(entry) {
   if (!entry?.celex) return null;
 
   const parsedReference = entry.officialReference
@@ -76,55 +63,10 @@ function getFallbackLabel(celex, officialReference) {
   return `CELEX ${celex}`;
 }
 
-function resolveLegacyEntryToCelex(entry, bundledByKey) {
-  if (!entry) return null;
-  if (/^3\d{4}[RLD]\d{4}$/i.test(String(entry))) return String(entry).toUpperCase();
-  if (String(entry).startsWith("import:")) return String(entry).slice("import:".length).toUpperCase();
-
-  const bundled = bundledByKey.get(String(entry));
-  return bundled?.celex || null;
-}
-
-export async function migrateLegacyLibraryState() {
-  if (typeof window === "undefined") return;
-  if (localStorage.getItem(LEGACY_MIGRATION_FLAG) === "true") return;
-
-  const bundledByKey = new Map(getBundledLaws().map((law) => [law.key, law]));
-  const imported = readJson(LEGACY_IMPORTED_LAWS_STORAGE_KEY, [])
-    .map(normalizeImportedLaw)
-    .filter(Boolean);
-  const hiddenEntries = readJson(LEGACY_HIDDEN_LAWS_STORAGE_KEY, []);
-  const lastOpened = readJson(LEGACY_LAST_OPENED_STORAGE_KEY, {});
-
-  for (const law of imported) {
-    await upsertLawMeta(law.celex, {
-      label: law.label,
-      raw: law.raw,
-      officialReference: law.officialReference,
-      eurlex: law.eurlex || buildEurlexCelexUrl(law.celex),
-      addedAt: law.addedAt,
-    });
-  }
-
-  for (const entry of hiddenEntries) {
-    const celex = resolveLegacyEntryToCelex(entry, bundledByKey);
-    if (!celex) continue;
-    await upsertLawMeta(celex, { hidden: true });
-  }
-
-  for (const [entry, timestamp] of Object.entries(lastOpened)) {
-    const celex = resolveLegacyEntryToCelex(entry, bundledByKey);
-    if (!celex) continue;
-    await upsertLawMeta(celex, { lastOpened: timestamp });
-  }
-
-  localStorage.setItem(LEGACY_MIGRATION_FLAG, "true");
-}
-
 export async function saveLawMeta(entry) {
   if (!entry?.celex) return null;
 
-  const normalized = normalizeImportedLaw(entry);
+  const normalized = normalizeLawMetaEntry(entry);
   if (!normalized) return null;
 
   const saved = await upsertLawMeta(normalized.celex, {
@@ -157,20 +99,21 @@ export async function setLawHidden(celex, hidden) {
 }
 
 export async function getLibraryLaws() {
-  await migrateLegacyLibraryState();
-
-  const bundled = getBundledLaws().map((law) => ({
-    ...law,
-    id: law.key,
-    kind: "bundled",
-    route: getCanonicalLawRoute(law),
-    timestamp: null,
-    addedAt: 0,
-  }));
-
-  const bundledByCelex = new Map(bundled.filter((law) => law.celex).map((law) => [law.celex, law]));
   const metaEntries = await getAllLawMeta();
   const metaByCelex = new Map(metaEntries.filter((entry) => entry?.celex).map((entry) => [entry.celex, entry]));
+  const bundled = getBundledLaws().map((law) => {
+    const meta = law.celex ? metaByCelex.get(law.celex) : null;
+    return {
+      ...law,
+      id: law.key,
+      kind: "bundled",
+      route: getCanonicalLawRoute(law),
+      timestamp: meta?.lastOpened || null,
+      addedAt: meta?.addedAt || 0,
+    };
+  });
+
+  const bundledByCelex = new Map(bundled.filter((law) => law.celex).map((law) => [law.celex, law]));
   const cachedCelexes = await listCachedCelexes();
 
   const cached = cachedCelexes.map((celex) => {
