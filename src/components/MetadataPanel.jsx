@@ -276,8 +276,8 @@ export function MetadataPanel({ celex, currentLang = "EN" }) {
       {/* Amendment History — load on demand */}
       {amendLoaded && amendments && amendments.length > 0 ? (
         <Accordion
-          title={`${t("amendmentHistory.title")} (${amendments.length})`}
-          defaultOpen={false}
+          title={t("amendmentHistory.title")}
+          defaultOpen={true}
         >
           <ActList acts={amendments} currentLang={currentLang} type="amendment" />
         </Accordion>
@@ -294,8 +294,8 @@ export function MetadataPanel({ celex, currentLang = "EN" }) {
       {/* Implementing / Delegated Acts — load on demand */}
       {implLoaded && implActs && implActs.length > 0 ? (
         <Accordion
-          title={`${t("metadata.implementingActs")} (${implActs.length})`}
-          defaultOpen={false}
+          title={t("metadata.implementingActs")}
+          defaultOpen={true}
         >
           <ActList acts={implActs} currentLang={currentLang} type="implementing" />
         </Accordion>
