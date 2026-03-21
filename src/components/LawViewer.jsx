@@ -1779,7 +1779,7 @@ export function LawViewer() {
                 </div>
               )}
               <MetadataPanel
-                celex={currentCelex}
+                celex={effectiveCelex}
                 currentLang={formexLang}
               />
             </div>
