@@ -26,6 +26,8 @@ import { MetadataPanel } from "./MetadataPanel.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
 import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
+import { useLandingLibrary } from "../hooks/useLandingLibrary.js";
+import { useLandingSearchIndex } from "../hooks/useLandingSearchIndex.js";
 
 const EMPTY_LAW_DATA = { title: "", articles: [], recitals: [], annexes: [], definitions: [] };
 const SECONDARY_LANGUAGE_STORAGE_KEY = "legalviz-secondary-formex-lang";
@@ -308,6 +310,7 @@ export function LawViewer() {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [resolvedCelex, setResolvedCelex] = useState(null);
   const primaryLoadRequestRef = useRef(0);
+  const { allLaws, libraryVersion } = useLandingLibrary();
 
   // View Settings
   const [fontScale, setFontScale] = useState(() => {
@@ -400,6 +403,17 @@ export function LawViewer() {
   const onIncreaseFont = () => setFontScale(s => Math.min(s + 1, 5));
   const onDecreaseFont = () => setFontScale(s => Math.max(s - 1, 1));
   const onToggleSidebar = () => setIsSidebarOpen(s => !s);
+  const {
+    allLawsData,
+    handleSearchOpen,
+    hasSearchInitialized,
+    isSearchLoading,
+    searchableLawCount,
+  } = useLandingSearchIndex({
+    formexLang,
+    laws: allLaws,
+    libraryVersion,
+  });
   const currentContentLang = formexLang;
   const loadErrorTone = loadError?.tone === "notice" ? "notice" : "error";
   const loadErrorPanelClass = loadErrorTone === "notice"
@@ -1377,20 +1391,28 @@ export function LawViewer() {
           lawKey={currentLaw?.slug || slug || key || "import"}
           title={currentLawLabel}
           lists={{ articles: data.articles, recitals: data.recitals, annexes: data.annexes }}
+          globalLists={allLawsData}
           isExtensionMode={false}
           eurlexUrl={eurlexUrl}
           onPrint={() => setPrintModalOpen(true)}
           showPrint={!isSideBySide}
+          onSearchOpen={handleSearchOpen}
+          hasSearchInitialized={hasSearchInitialized}
+          isSearchLoading={isSearchLoading}
           onToggleSidebar={onToggleSidebar}
           isSidebarOpen={isSidebarOpen}
           onIncreaseFont={onIncreaseFont}
           onDecreaseFont={onDecreaseFont}
           fontSize={getFontPercent(fontScale)}
           formexLang={formexLang}
+          searchableLawCount={searchableLawCount}
           onFormexLangChange={handleUnifiedLanguageChange}
           hasCelex={hasCelex}
           onToggleSecondLanguage={hasCelex ? toggleSecondLanguage : null}
           isSideBySide={isSideBySide}
+          searchModes={["laws", "matches", "current"]}
+          defaultSearchMode="current"
+          persistenceKey="legalviz-law-reader-search"
         />
 
         <main className={`mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-4 py-4 md:flex-row md:px-6 md:py-6 md:gap-6 justify-center`}>

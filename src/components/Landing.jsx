@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useState } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Github } from "lucide-react";
-import { TopBar } from "./TopBar.jsx";
+import { TopBar, SearchBox } from "./TopBar.jsx";
 import { SEO } from "./SEO.jsx";
 import { AddLawDialog } from "./AddLawDialog.jsx";
 import { LandingLibrary } from "./LandingLibrary.jsx";
@@ -12,6 +12,28 @@ import { resetWholeApp } from "../utils/resetApp.js";
 import { useAddLawImport } from "../hooks/useAddLawImport.js";
 import { useLandingLibrary } from "../hooks/useLandingLibrary.js";
 import { useLandingSearchIndex } from "../hooks/useLandingSearchIndex.js";
+import { buildImportedLawCandidate, getCanonicalLawRoute } from "../utils/lawRouting.js";
+import { saveLawMeta } from "../utils/library.js";
+
+function inferOfficialReferenceFromCelex(celex) {
+  const match = String(celex || "").match(/^3(\d{4})([RLD])0*(\d{1,4})(?:\(\d+\))?$/);
+  if (!match) return null;
+
+  const actTypeMap = {
+    R: "regulation",
+    L: "directive",
+    D: "decision",
+  };
+
+  const actType = actTypeMap[match[2]] || null;
+  if (!actType) return null;
+
+  return {
+    actType,
+    year: match[1],
+    number: String(Number.parseInt(match[3], 10)),
+  };
+}
 
 export function Landing({ forcedLocale = null }) {
   const navigate = useNavigate();
@@ -54,6 +76,7 @@ export function Landing({ forcedLocale = null }) {
   const {
     allLawsData,
     handleSearchOpen,
+    hasSearchInitialized,
     isSearchLoading,
     resetSearchIndex,
     searchableLawCount,
@@ -95,6 +118,34 @@ export function Landing({ forcedLocale = null }) {
     navigate(localizePath(law.route, locale));
   }, [locale, localizePath, markLawOpened, navigate]);
 
+  const handleSearchNavigate = useCallback(async (item) => {
+    if (item.search_kind === "law") {
+      const officialReference = inferOfficialReferenceFromCelex(item.celex);
+      const targetLaw = buildImportedLawCandidate({
+        celex: item.celex,
+        title: item.title,
+        officialReference,
+      });
+
+      if (officialReference) {
+        await saveLawMeta({
+          celex: item.celex,
+          label: item.title,
+          officialReference,
+        });
+      }
+
+      navigate(getCanonicalLawRoute(targetLaw, null, null, locale));
+      return;
+    }
+
+    const safeId = encodeURIComponent(String(item.id));
+    const targetLawSlug = item.law_slug || item.law_key;
+    if (targetLawSlug) {
+      navigate(localizePath(`/${targetLawSlug}/${item.type}/${safeId}`, locale));
+    }
+  }, [locale, localizePath, navigate]);
+
   const formatDate = (ts) => {
     if (!ts) return t("landing.never");
     return new Date(ts).toLocaleString(forcedLocale || locale, {
@@ -116,48 +167,67 @@ export function Landing({ forcedLocale = null }) {
         eurlexUrl={null}
         showPrint={false}
         onSearchOpen={handleSearchOpen}
+        hasSearchInitialized={hasSearchInitialized}
         isSearchLoading={isSearchLoading}
         formexLang={formexLang}
         searchableLawCount={searchableLawCount}
         onFormexLangChange={handleUnifiedLanguageChange}
         hasCelex={true}
         onResetApp={resetWholeApp}
+        onManualAddLaw={openAddLawDialog}
+        showSearch={false}
       />
 
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl flex-col items-center justify-center px-6 py-10">
         <Motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center"
+          className="flex w-full max-w-4xl flex-col items-center text-center"
         >
-          <span className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-medium tracking-tight text-gray-700 ring-1 ring-gray-200 mb-6 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700">
+          <span className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-medium tracking-tight text-gray-700 ring-1 ring-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700">
             <span>{t("app.name")}</span>
             <span className="mx-2 text-gray-400 dark:text-gray-500">|</span>
             <span className="font-normal text-gray-500 dark:text-gray-400">{t("app.tagline")}</span>
           </span>
-          <h1 className="text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl lg:text-5xl dark:text-white">
+
+          <h1 className="mt-6 max-w-3xl text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl lg:text-5xl dark:text-white">
             {t("landing.heroTitle")}
             <span className="block text-gray-600 dark:text-gray-400">{t("landing.heroSubtitle")}</span>
           </h1>
-          <p className="mx-auto mt-3 max-w-xl text-sm text-gray-600 sm:text-base dark:text-gray-400">
+
+          <div className="mt-8 w-full max-w-3xl">
+            <SearchBox
+              lists={allLawsData}
+              onNavigate={handleSearchNavigate}
+              onSearchOpen={handleSearchOpen}
+              hasSearchInitialized={hasSearchInitialized}
+              isSearchLoading={isSearchLoading}
+              activeLanguage={formexLang}
+              searchableLawCount={searchableLawCount}
+              triggerVariant="hero"
+            />
+          </div>
+
+          <p className="mx-auto mt-5 max-w-2xl text-sm text-gray-600 sm:text-base dark:text-gray-400">
             {t("landing.heroDescription")}
           </p>
         </Motion.div>
 
-        <LandingLibrary
-          laws={allLaws}
-          onAddLaw={openAddLawDialog}
-          onOpenLaw={handleOpenLaw}
-          onDeleteLaw={handleDelete}
-          formatDate={formatDate}
-          t={t}
-        />
+        <div className="mt-12 w-full max-w-4xl">
+          <LandingLibrary
+            laws={allLaws}
+            onOpenLaw={handleOpenLaw}
+            onDeleteLaw={handleDelete}
+            formatDate={formatDate}
+            t={t}
+          />
+        </div>
 
         <Motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className="mt-8 flex flex-col items-center gap-2 text-xs text-gray-500"
+          className="mt-10 flex flex-col items-center gap-2 text-center text-xs text-gray-500"
         >
           <p>{t("landing.builtBy")}</p>
           <a

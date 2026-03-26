@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical, RotateCcw } from "lucide-react";
+import { ChevronLeft, Search, X, ExternalLink, Printer, Loader2, PanelLeftClose, PanelLeftOpen, Minus, Plus, MoreVertical, RotateCcw, FilePlus2 } from "lucide-react";
 import { Button } from "./Button.jsx";
 import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
@@ -44,29 +44,98 @@ function cleanLawTitle(title, referenceLabel) {
   return raw.replace(new RegExp(`^${escapedReference}\\s+`, "i"), "").trim() || raw;
 }
 
+function extractShortLawTitle(title) {
+  const raw = String(title || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+
+  const matches = Array.from(raw.matchAll(/\(([^)]{5,120})\)/g));
+  for (const match of matches) {
+    const candidate = String(match[1] || "").trim();
+    if (!candidate) continue;
+    if (/text with eea relevance/i.test(candidate)) continue;
+    return candidate;
+  }
+
+  return "";
+}
+
 function getLawResultDisplay(item) {
   const bundledLaw = findBundledLawByCelex(item.celex);
   const officialReference = bundledLaw?.officialReference || inferOfficialReferenceFromCelex(item.celex);
   const referenceLabel = formatOfficialReference(officialReference);
-  const primaryTitle = bundledLaw?.label || referenceLabel || item.title || item.celex;
-  const secondaryTitle = cleanLawTitle(item.title, referenceLabel);
+  const rawTitle = String(item.title || "").replace(/\s+/g, " ").trim();
+  const cleanedTitle = cleanLawTitle(rawTitle, referenceLabel);
+  const shortTitle = extractShortLawTitle(cleanedTitle || rawTitle);
+  const primaryTitle = shortTitle && referenceLabel
+    ? `${shortTitle} — ${referenceLabel}`
+    : shortTitle
+      ? shortTitle
+      : bundledLaw?.label || referenceLabel || rawTitle || item.celex;
+  const secondaryTitle = cleanedTitle && cleanedTitle !== primaryTitle
+    ? cleanedTitle
+    : rawTitle && rawTitle !== primaryTitle
+      ? rawTitle
+      : bundledLaw?.label && bundledLaw.label !== primaryTitle
+        ? bundledLaw.label
+        : "";
+  const metaLine = [item.date, item.celex].filter(Boolean).join(" · ");
 
   return {
     primaryTitle,
-    secondaryTitle: secondaryTitle !== primaryTitle ? secondaryTitle : "",
+    secondaryTitle,
     referenceLabel,
+    metaLine,
   };
 }
 
-function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLanguage = "EN", searchableLawCount = 0 }) {
+export function SearchBox({
+  lists,
+  globalLists = null,
+  onNavigate,
+  onSearchOpen,
+  hasSearchInitialized = true,
+  isSearchLoading,
+  activeLanguage = "EN",
+  searchableLawCount = 0,
+  triggerVariant = "compact",
+  searchModes = null,
+  defaultSearchMode = null,
+  currentLawLabel = "",
+  persistenceKey = null,
+}) {
   const { t } = useI18n();
-  const [query, setQuery] = useState("");
+  const effectiveGlobalLists = globalLists || lists;
+  const readPersistedState = useCallback(() => {
+    if (!persistenceKey || typeof window === "undefined") return null;
+    try {
+      const raw = window.sessionStorage.getItem(persistenceKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, [persistenceKey]);
+  const availableModes = useMemo(() => {
+    if (Array.isArray(searchModes) && searchModes.length > 0) {
+      return searchModes;
+    }
+    return typeof onSearchOpen === "function" ? ["laws", "matches"] : ["current"];
+  }, [onSearchOpen, searchModes]);
+  const persistedState = useMemo(() => readPersistedState(), [readPersistedState]);
+  const [query, setQuery] = useState(() => String(persistedState?.query || ""));
   const [results, setResults] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [searchIndex, setSearchIndex] = useState(null);
-  const [isBuilding, setIsBuilding] = useState(false);
-  const [searchMode, setSearchMode] = useState("laws");
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(null);
+  const [globalSearchIndex, setGlobalSearchIndex] = useState(null);
+  const [isBuildingCurrent, setIsBuildingCurrent] = useState(false);
+  const [isBuildingGlobal, setIsBuildingGlobal] = useState(false);
+  const [searchMode, setSearchMode] = useState(() => (
+    persistedState?.searchMode && availableModes.includes(persistedState.searchMode)
+      ? persistedState.searchMode
+      : defaultSearchMode && availableModes.includes(defaultSearchMode)
+        ? defaultSearchMode
+      : availableModes[0]
+  ));
   const [isLawSearchLoading, setIsLawSearchLoading] = useState(false);
   const [lawSearchError, setLawSearchError] = useState("");
   const [lastLawSearchQuery, setLastLawSearchQuery] = useState("");
@@ -75,10 +144,41 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
   const modalInputRef = useRef(null);
   const resultsRef = useRef(null);
   const lawSearchAbortRef = useRef(null);
-  const isGlobalLibrarySearch = typeof onSearchOpen === "function";
-  const isLawMode = isGlobalLibrarySearch && searchMode === "laws";
-  const isMatchesMode = !isGlobalLibrarySearch || searchMode === "matches";
-  const isBusy = isLawMode ? isLawSearchLoading : (isBuilding || isSearchLoading);
+  const pendingSearchRef = useRef(null);
+  const hasGlobalSearch = availableModes.includes("laws") || availableModes.includes("matches");
+  const globalEntryCount = (effectiveGlobalLists?.articles?.length || 0)
+    + (effectiveGlobalLists?.recitals?.length || 0)
+    + (effectiveGlobalLists?.annexes?.length || 0);
+  const isCurrentMode = searchMode === "current";
+  const isLawMode = searchMode === "laws";
+  const isMatchesMode = searchMode === "matches";
+  const isCurrentBusy = isCurrentMode && isBuildingCurrent;
+  const isMatchesBusy = isMatchesMode && (isBuildingGlobal || isSearchLoading);
+  const isBusy = isLawMode ? isLawSearchLoading : isCurrentBusy || isMatchesBusy;
+
+  useEffect(() => {
+    if (!availableModes.includes(searchMode)) {
+      setSearchMode(
+        persistedState?.searchMode && availableModes.includes(persistedState.searchMode)
+          ? persistedState.searchMode
+          : defaultSearchMode && availableModes.includes(defaultSearchMode)
+            ? defaultSearchMode
+          : availableModes[0]
+      );
+    }
+  }, [availableModes, defaultSearchMode, persistedState?.searchMode, searchMode]);
+
+  useEffect(() => {
+    if (!persistenceKey || typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(persistenceKey, JSON.stringify({
+        query,
+        searchMode,
+      }));
+    } catch {
+      // ignore persistence failures
+    }
+  }, [persistenceKey, query, searchMode]);
 
   const focusModalInput = useCallback(() => {
     if (!isOpen) return;
@@ -92,20 +192,29 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     });
   }, [isOpen]);
 
-  const runMatchSearch = useCallback((nextQuery) => {
+  const runCurrentSearch = useCallback((nextQuery) => {
     if (nextQuery.length < 2) {
       setResults([]);
       return;
     }
 
-    let nextResults;
-    if (searchIndex) {
-      nextResults = searchWithIndex(nextQuery, searchIndex);
-    } else {
-      nextResults = searchContent(nextQuery, lists);
-    }
+    const nextResults = currentSearchIndex
+      ? searchWithIndex(nextQuery, currentSearchIndex)
+      : searchContent(nextQuery, lists);
     setResults(nextResults);
-  }, [lists, searchIndex]);
+  }, [currentSearchIndex, lists]);
+
+  const runGlobalMatchSearch = useCallback((nextQuery, sourceLists = effectiveGlobalLists, sourceIndex = globalSearchIndex) => {
+    if (nextQuery.length < 2) {
+      setResults([]);
+      return;
+    }
+
+    const nextResults = sourceIndex
+      ? searchWithIndex(nextQuery, sourceIndex)
+      : searchContent(nextQuery, sourceLists || { articles: [], recitals: [], annexes: [] });
+    setResults(nextResults);
+  }, [effectiveGlobalLists, globalSearchIndex]);
 
   const runLawSearch = useCallback((nextQuery) => {
     const trimmedQuery = String(nextQuery || "").trim();
@@ -154,6 +263,65 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
       });
   }, [t]);
 
+  const executeSearch = useCallback((mode, nextQuery) => {
+    if (mode === "laws") {
+      pendingSearchRef.current = null;
+      runLawSearch(nextQuery);
+      return;
+    }
+
+    if (mode === "current") {
+      if (isBuildingCurrent) {
+        pendingSearchRef.current = { mode, query: nextQuery };
+        return;
+      }
+      pendingSearchRef.current = null;
+      runCurrentSearch(nextQuery);
+      return;
+    }
+
+    if (mode === "matches") {
+      if (!hasSearchInitialized && typeof onSearchOpen === "function") {
+        pendingSearchRef.current = { mode, query: nextQuery };
+        Promise.resolve(onSearchOpen())
+          .then((loadedLists) => {
+            const pending = pendingSearchRef.current;
+            if (!pending || pending.mode !== "matches" || pending.query !== nextQuery) return;
+            pendingSearchRef.current = null;
+            runGlobalMatchSearch(pending.query, loadedLists, null);
+          })
+          .catch((error) => {
+            console.error("Failed to initialize within-laws search", error);
+          });
+        return;
+      }
+
+      if (
+        isSearchLoading
+        || isBuildingGlobal
+        || (typeof onSearchOpen === "function" && globalEntryCount === 0 && searchableLawCount > 0)
+      ) {
+        pendingSearchRef.current = { mode, query: nextQuery };
+        if (typeof onSearchOpen === "function") {
+          void onSearchOpen();
+        }
+        return;
+      }
+      pendingSearchRef.current = null;
+      runGlobalMatchSearch(nextQuery);
+    }
+  }, [
+    globalEntryCount,
+    hasSearchInitialized,
+    isBuildingCurrent,
+    isBuildingGlobal,
+    isSearchLoading,
+    onSearchOpen,
+    runCurrentSearch,
+    runGlobalMatchSearch,
+    runLawSearch,
+  ]);
+
   // Trigger search data loading on open
   useEffect(() => {
     if (isOpen && isMatchesMode) {
@@ -161,30 +329,52 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     }
   }, [isMatchesMode, isOpen, onSearchOpen]);
 
-  // Reset index when law changes
+  // Reset indices when source data changes
   useEffect(() => {
-    setSearchIndex(null);
+    setCurrentSearchIndex(null);
     setResults([]);
     setLawSearchError("");
   }, [lists]);
 
-  // Build index on open if needed
   useEffect(() => {
-    if (isOpen && isMatchesMode && !searchIndex && !isBuilding) {
-      setIsBuilding(true);
-      // Timeout to allow UI to render loading state
+    setGlobalSearchIndex(null);
+    setResults([]);
+    setLawSearchError("");
+  }, [effectiveGlobalLists]);
+
+  // Build current-law index on open if needed
+  useEffect(() => {
+    if (isOpen && isCurrentMode && !currentSearchIndex && !isBuildingCurrent) {
+      setIsBuildingCurrent(true);
       setTimeout(() => {
         try {
           const idx = buildSearchIndex(lists);
-          setSearchIndex(idx);
+          setCurrentSearchIndex(idx);
         } catch (e) {
-          console.error("Failed to build search index", e);
+          console.error("Failed to build current search index", e);
         } finally {
-          setIsBuilding(false);
+          setIsBuildingCurrent(false);
         }
       }, 100);
     }
-  }, [isMatchesMode, isOpen, searchIndex, isBuilding, lists]);
+  }, [currentSearchIndex, isBuildingCurrent, isCurrentMode, isOpen, lists]);
+
+  // Build global library index on open if needed
+  useEffect(() => {
+    if (isOpen && isMatchesMode && !isSearchLoading && !globalSearchIndex && !isBuildingGlobal) {
+      setIsBuildingGlobal(true);
+      setTimeout(() => {
+        try {
+          const idx = buildSearchIndex(effectiveGlobalLists || { articles: [], recitals: [], annexes: [] });
+          setGlobalSearchIndex(idx);
+        } catch (e) {
+          console.error("Failed to build global search index", e);
+        } finally {
+          setIsBuildingGlobal(false);
+        }
+      }, 100);
+    }
+  }, [effectiveGlobalLists, globalSearchIndex, isBuildingGlobal, isMatchesMode, isOpen, isSearchLoading]);
 
   useEffect(() => () => {
     lawSearchAbortRef.current?.abort();
@@ -281,64 +471,135 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     setQuery(q);
     setSelectedIndex(-1);
     setLawSearchError("");
-
-    if (isLawMode) {
-      if (q.trim() !== lastLawSearchQuery) {
-        setResults([]);
-      }
-      return;
-    } else {
-      if (isBuilding) return;
-      runMatchSearch(q);
+    if (isLawMode && q.trim() !== lastLawSearchQuery) {
+      setResults([]);
     }
+    executeSearch(searchMode, q);
   };
 
   useEffect(() => {
-    if (!isOpen || !isMatchesMode || isBuilding || query.length < 2) return;
-    runMatchSearch(query);
-  }, [isBuilding, isMatchesMode, isOpen, query, runMatchSearch]);
+    if (!isOpen || query.length < 2) return;
+    if (isCurrentMode && !isBuildingCurrent) {
+      runCurrentSearch(query);
+    }
+  }, [isBuildingCurrent, isCurrentMode, isOpen, query, runCurrentSearch]);
 
-  const modeSummary = isLawMode
-    ? t("search.searchingLaws")
-    : t("search.searchingMatches", {
-      count: searchableLawCount,
-      lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
-      language: activeLanguage,
-    });
+  useEffect(() => {
+    if (!isOpen || query.length < 2) return;
+    if (isMatchesMode && !isBuildingGlobal && !isSearchLoading) {
+      runGlobalMatchSearch(query);
+    }
+  }, [globalEntryCount, isBuildingGlobal, isMatchesMode, isOpen, isSearchLoading, query, runGlobalMatchSearch]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedIndex(-1);
+    setLawSearchError("");
+    executeSearch(searchMode, query);
+  }, [executeSearch, isOpen, searchMode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const pending = pendingSearchRef.current;
+    if (!pending) return;
+
+    if (pending.mode === "current" && !isBuildingCurrent) {
+      pendingSearchRef.current = null;
+      runCurrentSearch(pending.query);
+      return;
+    }
+
+    if (pending.mode === "matches" && !isSearchLoading && !isBuildingGlobal) {
+      if (
+        typeof onSearchOpen === "function" && globalEntryCount === 0 && searchableLawCount > 0
+      ) {
+        return;
+      }
+      pendingSearchRef.current = null;
+      runGlobalMatchSearch(pending.query);
+    }
+  }, [
+    globalEntryCount,
+    hasSearchInitialized,
+    isBuildingCurrent,
+    isBuildingGlobal,
+    isOpen,
+    isSearchLoading,
+    onSearchOpen,
+    runCurrentSearch,
+    runGlobalMatchSearch,
+    searchableLawCount,
+  ]);
+
+  const modeSummary = isCurrentMode
+    ? t("search.searchingCurrentLaw", { law: currentLawLabel || t("search.currentLawFallback") })
+    : isLawMode
+      ? t("search.searchingLaws")
+      : t("search.searchingMatches", {
+        count: searchableLawCount,
+        lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
+        language: activeLanguage,
+      });
 
   const inputPlaceholder = isBusy
     ? t("search.initializing")
-    : isLawMode
-      ? t("search.placeholderLaws")
-      : t("search.placeholderMatches");
-  const isInputDisabled = isMatchesMode && (isBuilding || isSearchLoading);
+    : isCurrentMode
+      ? t("search.placeholderCurrentLaw", { law: currentLawLabel || t("search.currentLawFallback") })
+      : isLawMode
+        ? t("search.placeholderLaws")
+        : t("search.placeholderMatches");
+  const isInputDisabled = isCurrentMode
+    ? isBuildingCurrent
+    : isMatchesMode
+      ? (isBuildingGlobal || isSearchLoading)
+      : false;
   const canSubmitLawSearch = isLawMode && query.trim().length >= 2 && !isLawSearchLoading;
 
   return (
     <>
-      {/* Search Input Trigger */}
-      <div className="relative lg:w-64 transition-all" ref={containerRef}>
-        {/* Desktop Input (Large screens only) */}
-        <div className="relative w-full hidden lg:block">
-          <input
-            type="text"
-            readOnly
-            onClick={() => setIsOpen(true)}
-            placeholder={t("search.trigger")}
-            className="w-full cursor-pointer rounded-xl border border-gray-200 bg-gray-50 py-1.5 pl-9 pr-4 text-sm outline-none hover:bg-white hover:border-blue-300 focus:ring-0 transition-all text-gray-500 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:placeholder:text-gray-500"
-          />
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-        </div>
-
-        {/* Mobile/Tablet Icon Button (Small & Medium screens) */}
-        <div className="lg:hidden">
+      <div className="relative transition-all" ref={containerRef}>
+        {triggerVariant === "hero" ? (
           <button
+            type="button"
             onClick={() => setIsOpen(true)}
-            className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-800"
+            className="group flex w-full items-center gap-4 rounded-full border border-gray-200 bg-white px-5 py-4 text-left shadow-sm transition hover:border-gray-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
           >
-            <Search size={20} />
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition group-hover:bg-gray-200 group-hover:text-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:group-hover:bg-gray-700 dark:group-hover:text-gray-200">
+              <Search size={20} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-base text-gray-500 dark:text-gray-400">
+                {t("landing.searchPlaceholder")}
+              </div>
+            </div>
+            <div className="hidden shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-500 sm:block dark:border-gray-700 dark:text-gray-400">
+                {t("search.shortcut")}
+            </div>
           </button>
-        </div>
+        ) : (
+          <div className="relative lg:w-64">
+            <div className="relative hidden w-full lg:block">
+              <input
+                type="text"
+                readOnly
+                onClick={() => setIsOpen(true)}
+                placeholder={t("search.trigger")}
+                className="w-full cursor-pointer rounded-xl border border-gray-200 bg-gray-50 py-1.5 pl-9 pr-4 text-sm outline-none transition-all hover:border-blue-300 hover:bg-white focus:ring-0 text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:placeholder:text-gray-500"
+              />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
+            </div>
+
+            <div className="lg:hidden">
+              <button
+                type="button"
+                onClick={() => setIsOpen(true)}
+                className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+              >
+                <Search size={20} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Spotlight Modal Overlay (Rendered in Portal to cover whole screen) */}
@@ -406,14 +667,14 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
               </button>
             </div>
 
-            {isGlobalLibrarySearch && (
+            {hasGlobalSearch && availableModes.length > 1 && (
               <div className="flex-none border-b border-gray-100 bg-gray-50/80 px-4 py-2.5 dark:border-gray-800 dark:bg-gray-950/60">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                     {t("search.modeLabel")}
                   </span>
                   <div className="inline-flex rounded-full border border-gray-200 bg-white p-0.5 dark:border-gray-700 dark:bg-gray-900">
-                    {["laws", "matches"].map((mode) => {
+                    {availableModes.map((mode) => {
                       const active = searchMode === mode;
                       return (
                         <button
@@ -423,9 +684,6 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                             setSearchMode(mode);
                             setSelectedIndex(-1);
                             setLawSearchError("");
-                            if (query.length < 2) {
-                              setResults([]);
-                            }
                             focusModalInput();
                           }}
                           className={`rounded-full px-3 py-1 text-xs font-medium transition ${
@@ -434,7 +692,11 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                               : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
                           }`}
                         >
-                          {mode === "laws" ? t("search.modeLaws") : t("search.modeMatches")}
+                          {mode === "current"
+                            ? t("search.modeCurrentLaw")
+                            : mode === "laws"
+                              ? t("search.modeLaws")
+                              : t("search.modeMatches")}
                         </button>
                       );
                     })}
@@ -497,9 +759,11 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                                   {lawDisplay.secondaryTitle}
                                 </p>
                               ) : null}
-                              <p className="pl-1 text-sm leading-relaxed text-gray-500">
-                                {[lawDisplay?.referenceLabel, item.date, item.celex].filter(Boolean).join(" · ")}
-                              </p>
+                              {lawDisplay?.metaLine ? (
+                                <p className="pl-1 text-sm leading-relaxed text-gray-500">
+                                  {lawDisplay.metaLine}
+                                </p>
+                              ) : null}
                             </>
                           ) : (
                             <p className="text-sm text-gray-500 line-clamp-2 pl-1 leading-relaxed">
@@ -515,28 +779,42 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                  {isGlobalLibrarySearch && isLawMode && lastLawSearchQuery.length < 2 ? (
+                  {isLawMode && lastLawSearchQuery.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
                         {t("search.typeLaws")}
                       </p>
                     </>
-                  ) : isGlobalLibrarySearch && isLawMode ? (
+                  ) : isLawMode ? (
                     <>
                       <Search size={48} className="opacity-20 mb-4" />
                       <p className="text-sm text-center max-w-sm">
                         {t("search.noResultsLaws", { query: lastLawSearchQuery })}
                       </p>
                     </>
-                  ) : isGlobalLibrarySearch && searchableLawCount === 0 ? (
+                  ) : isCurrentMode && query.length < 2 ? (
+                    <>
+                      <Search size={48} className="opacity-10 mb-4" />
+                      <p className="text-sm text-center max-w-sm">
+                        {t("search.typeCurrentLaw", { law: currentLawLabel || t("search.currentLawFallback") })}
+                      </p>
+                    </>
+                  ) : isCurrentMode ? (
+                    <>
+                      <Search size={48} className="opacity-20 mb-4" />
+                      <p className="text-sm text-center max-w-sm">
+                        {t("search.noResultsCurrentLaw", { query, law: currentLawLabel || t("search.currentLawFallback") })}
+                      </p>
+                    </>
+                  ) : isMatchesMode && searchableLawCount === 0 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
                         {t("search.noCached", { language: activeLanguage })}
                       </p>
                     </>
-                  ) : isGlobalLibrarySearch && query.length < 2 ? (
+                  ) : isMatchesMode && query.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
@@ -547,12 +825,12 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                         })}
                       </p>
                     </>
-                  ) : query.length < 2 ? (
+                  ) : !hasGlobalSearch && query.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm">{t("search.typeToStart")}</p>
                     </>
-                  ) : isGlobalLibrarySearch ? (
+                  ) : isMatchesMode ? (
                     <>
                       <Search size={48} className="opacity-20 mb-4" />
                       <p className="text-sm text-center max-w-sm">
@@ -593,11 +871,13 @@ export function TopBar({
   lawKey,
   title,
   lists,
+  globalLists = null,
   isExtensionMode,
   eurlexUrl,
   onPrint,
   showPrint = true,
   onSearchOpen,
+  hasSearchInitialized = true,
   isSearchLoading,
   onToggleSidebar,
   isSidebarOpen,
@@ -611,6 +891,10 @@ export function TopBar({
   onToggleSecondLanguage,
   isSideBySide = false,
   onResetApp,
+  onManualAddLaw,
+  showSearch = true,
+  searchModes = null,
+  defaultSearchMode = null,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -716,17 +1000,25 @@ export function TopBar({
               onToggleSecondLanguage={onToggleSecondLanguage}
               isSideBySide={isSideBySide}
               onResetApp={onResetApp}
+              onManualAddLaw={onManualAddLaw}
             />
           </div>
 
-          <SearchBox
-            lists={lists}
-            onNavigate={onNavigate}
-            onSearchOpen={onSearchOpen}
-            isSearchLoading={isSearchLoading}
-            activeLanguage={formexLang}
-            searchableLawCount={searchableLawCount}
-          />
+          {showSearch ? (
+            <SearchBox
+              lists={lists}
+              globalLists={globalLists}
+              onNavigate={onNavigate}
+              onSearchOpen={onSearchOpen}
+              hasSearchInitialized={hasSearchInitialized}
+              isSearchLoading={isSearchLoading}
+              activeLanguage={formexLang}
+              searchableLawCount={searchableLawCount}
+              searchModes={searchModes}
+              defaultSearchMode={defaultSearchMode}
+              currentLawLabel={title}
+            />
+          ) : null}
 
         </div>
       </div>
@@ -746,6 +1038,7 @@ function ToolsMenu({
   onToggleSecondLanguage,
   isSideBySide,
   onResetApp,
+  onManualAddLaw,
 }) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -825,6 +1118,20 @@ function ToolsMenu({
               <ExternalLink size={18} />
               <span>{t("topBar.viewOnEurlex")}</span>
             </a>
+          )}
+
+          {onManualAddLaw && (
+            <button
+              type="button"
+              onClick={() => {
+                onManualAddLaw();
+                setIsOpen(false);
+              }}
+              className="flex items-center gap-3 w-full px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              <FilePlus2 size={18} />
+              <span>{t("landing.manualAddLaw")}</span>
+            </button>
           )}
 
           {onResetApp && (

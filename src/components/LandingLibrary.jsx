@@ -1,5 +1,5 @@
 import { motion as Motion } from "framer-motion";
-import { Clock, Plus, Trash } from "lucide-react";
+import { Clock, Trash } from "lucide-react";
 
 function LawLibraryCard({ law, onOpen, onDelete, formatDate, t }) {
   return (
@@ -40,7 +40,7 @@ function LawLibraryCard({ law, onOpen, onDelete, formatDate, t }) {
   );
 }
 
-export function LandingLibrary({ laws, onAddLaw, onOpenLaw, onDeleteLaw, formatDate, t }) {
+export function LandingLibrary({ laws, onOpenLaw, onDeleteLaw, formatDate, t }) {
   return (
     <>
       <Motion.div
@@ -49,23 +49,13 @@ export function LandingLibrary({ laws, onAddLaw, onOpenLaw, onDeleteLaw, formatD
         transition={{ delay: 0.1 }}
         className="mt-8 w-full"
       >
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-              {t("landing.libraryTitle")}
-            </h2>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              {t("landing.libraryDescription")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onAddLaw}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-800 dark:bg-blue-600 dark:hover:bg-blue-500"
-          >
-            <Plus className="h-4 w-4" />
-            <span>{t("landing.addLawShort")}</span>
-          </button>
+        <div>
+          <h2 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
+            {t("landing.recentTitle")}
+          </h2>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+            {t("landing.recentDescription")}
+          </p>
         </div>
       </Motion.div>
 
@@ -87,7 +77,7 @@ export function LandingLibrary({ laws, onAddLaw, onOpenLaw, onDeleteLaw, formatD
             />
           )) : (
             <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 sm:col-span-2">
-              {t("landing.libraryEmpty")}
+              {t("landing.recentEmpty")}
             </div>
           )}
         </div>
