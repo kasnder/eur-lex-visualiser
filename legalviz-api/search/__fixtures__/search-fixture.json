@@ -1,0 +1,87 @@
+{
+  "generatedAt": "2026-03-26T00:00:00.000Z",
+  "count": 9,
+  "records": [
+    {
+      "celex": "32016R0679",
+      "title": "Regulation (EU) 2016/679 of the European Parliament and of the Council of 27 April 2016 on the protection of natural persons with regard to the processing of personal data and on the free movement of such data (General Data Protection Regulation)",
+      "type": "regulation",
+      "date": "2016-04-27",
+      "eli": "http://data.europa.eu/eli/reg/2016/679/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32022R1925",
+      "title": "Regulation (EU) 2022/1925 of the European Parliament and of the Council of 14 September 2022 on contestable and fair markets in the digital sector (Digital Markets Act)",
+      "type": "regulation",
+      "date": "2022-09-14",
+      "eli": "http://data.europa.eu/eli/reg/2022/1925/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32022R2065",
+      "title": "Regulation (EU) 2022/2065 of the European Parliament and of the Council of 19 October 2022 on a Single Market For Digital Services (Digital Services Act)",
+      "type": "regulation",
+      "date": "2022-10-19",
+      "eli": "http://data.europa.eu/eli/reg/2022/2065/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32023R2854",
+      "title": "Regulation (EU) 2023/2854 of the European Parliament and of the Council of 13 December 2023 on harmonised rules on fair access to and use of data (Data Act)",
+      "type": "regulation",
+      "date": "2023-12-13",
+      "eli": "http://data.europa.eu/eli/reg/2023/2854/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32022R0868",
+      "title": "Regulation (EU) 2022/868 of the European Parliament and of the Council of 30 May 2022 on European data governance (Data Governance Act)",
+      "type": "regulation",
+      "date": "2022-05-30",
+      "eli": "http://data.europa.eu/eli/reg/2022/868/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32024D0788",
+      "title": "Commission Decision (EU) 2024/788 on confirming the participation of Ireland in Directive (EU) 2023/2843 as regards digitalisation of judicial cooperation",
+      "type": "decision",
+      "date": "2024-03-06",
+      "eli": "http://data.europa.eu/eli/dec/2024/788/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32026R0667",
+      "title": "Regulation (EU) 2026/667 of the European Parliament and of the Council of 11 March 2026 amending Regulation (EU) 2021/1119 as regards the setting of a Union intermediate climate target for 2040",
+      "type": "regulation",
+      "date": "2026-03-11",
+      "eli": "http://data.europa.eu/eli/reg/2026/667/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32019L0789",
+      "title": "Directive (EU) 2019/789 laying down rules on the exercise of copyright and related rights applicable to certain online transmissions of broadcasting organisations",
+      "type": "directive",
+      "date": "2019-04-17",
+      "eli": "http://data.europa.eu/eli/dir/2019/789/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    },
+    {
+      "celex": "32019L0790",
+      "title": "Directive (EU) 2019/790 on copyright and related rights in the Digital Single Market",
+      "type": "directive",
+      "date": "2019-04-17",
+      "eli": "http://data.europa.eu/eli/dir/2019/790/oj",
+      "fmxAvailable": true,
+      "fmxUnavailable": false
+    }
+  ]
+}

@@ -7,6 +7,56 @@ import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
 import { useI18n } from "../i18n/useI18n.js";
+import { searchLaws as searchLawsApi } from "../utils/formexApi.js";
+import { buildImportedLawCandidate, findBundledLawByCelex, getCanonicalLawRoute } from "../utils/lawRouting.js";
+import { saveLawMeta } from "../utils/library.js";
+
+function inferOfficialReferenceFromCelex(celex) {
+  const match = String(celex || "").match(/^3(\d{4})([RLD])0*(\d{1,4})(?:\(\d+\))?$/);
+  if (!match) return null;
+
+  const actTypeMap = {
+    R: "regulation",
+    L: "directive",
+    D: "decision",
+  };
+
+  const actType = actTypeMap[match[2]] || null;
+  if (!actType) return null;
+
+  return {
+    actType,
+    year: match[1],
+    number: String(Number.parseInt(match[3], 10)),
+  };
+}
+
+function formatOfficialReference(reference) {
+  if (!reference?.actType || !reference?.year || !reference?.number) return null;
+  const actTypeLabel = reference.actType.charAt(0).toUpperCase() + reference.actType.slice(1);
+  return `${actTypeLabel} (EU) ${reference.year}/${reference.number}`;
+}
+
+function cleanLawTitle(title, referenceLabel) {
+  const raw = String(title || "").replace(/\s+/g, " ").trim();
+  if (!raw || !referenceLabel) return raw;
+  const escapedReference = referenceLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return raw.replace(new RegExp(`^${escapedReference}\\s+`, "i"), "").trim() || raw;
+}
+
+function getLawResultDisplay(item) {
+  const bundledLaw = findBundledLawByCelex(item.celex);
+  const officialReference = bundledLaw?.officialReference || inferOfficialReferenceFromCelex(item.celex);
+  const referenceLabel = formatOfficialReference(officialReference);
+  const primaryTitle = bundledLaw?.label || referenceLabel || item.title || item.celex;
+  const secondaryTitle = cleanLawTitle(item.title, referenceLabel);
+
+  return {
+    primaryTitle,
+    secondaryTitle: secondaryTitle !== primaryTitle ? secondaryTitle : "",
+    referenceLabel,
+  };
+}
 
 function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLanguage = "EN", searchableLawCount = 0 }) {
   const { t } = useI18n();
@@ -16,29 +66,111 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [searchIndex, setSearchIndex] = useState(null);
   const [isBuilding, setIsBuilding] = useState(false);
+  const [searchMode, setSearchMode] = useState("laws");
+  const [isLawSearchLoading, setIsLawSearchLoading] = useState(false);
+  const [lawSearchError, setLawSearchError] = useState("");
+  const [lastLawSearchQuery, setLastLawSearchQuery] = useState("");
 
   const containerRef = useRef(null);
-  const inputRef = useRef(null);
+  const modalInputRef = useRef(null);
   const resultsRef = useRef(null);
+  const lawSearchAbortRef = useRef(null);
   const isGlobalLibrarySearch = typeof onSearchOpen === "function";
+  const isLawMode = isGlobalLibrarySearch && searchMode === "laws";
+  const isMatchesMode = !isGlobalLibrarySearch || searchMode === "matches";
+  const isBusy = isLawMode ? isLawSearchLoading : (isBuilding || isSearchLoading);
+
+  const focusModalInput = useCallback(() => {
+    if (!isOpen) return;
+
+    window.requestAnimationFrame(() => {
+      const input = modalInputRef.current;
+      if (!input) return;
+      input.focus();
+      const length = input.value.length;
+      input.setSelectionRange(length, length);
+    });
+  }, [isOpen]);
+
+  const runMatchSearch = useCallback((nextQuery) => {
+    if (nextQuery.length < 2) {
+      setResults([]);
+      return;
+    }
+
+    let nextResults;
+    if (searchIndex) {
+      nextResults = searchWithIndex(nextQuery, searchIndex);
+    } else {
+      nextResults = searchContent(nextQuery, lists);
+    }
+    setResults(nextResults);
+  }, [lists, searchIndex]);
+
+  const runLawSearch = useCallback((nextQuery) => {
+    const trimmedQuery = String(nextQuery || "").trim();
+
+    if (lawSearchAbortRef.current) {
+      lawSearchAbortRef.current.abort();
+    }
+
+    setLawSearchError("");
+
+    if (trimmedQuery.length < 2) {
+      setResults([]);
+      setLastLawSearchQuery("");
+      setIsLawSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    lawSearchAbortRef.current = controller;
+    setIsLawSearchLoading(true);
+    setLastLawSearchQuery(trimmedQuery);
+
+    searchLawsApi(trimmedQuery, { limit: 12, signal: controller.signal })
+      .then((payload) => {
+        const nextResults = Array.isArray(payload?.results)
+          ? payload.results.map((item) => ({
+            ...item,
+            search_kind: "law",
+            id: item.celex,
+          }))
+          : [];
+        setResults(nextResults);
+        setSelectedIndex(-1);
+      })
+      .catch((error) => {
+        if (error?.name === "AbortError") return;
+        console.error("Failed to search laws", error);
+        setResults([]);
+        setLawSearchError(error?.message || t("search.apiUnavailable"));
+      })
+      .finally(() => {
+        if (lawSearchAbortRef.current === controller) {
+          lawSearchAbortRef.current = null;
+          setIsLawSearchLoading(false);
+        }
+      });
+  }, [t]);
 
   // Trigger search data loading on open
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && isMatchesMode) {
       onSearchOpen?.();
     }
-  }, [isOpen, onSearchOpen]);
+  }, [isMatchesMode, isOpen, onSearchOpen]);
 
   // Reset index when law changes
   useEffect(() => {
     setSearchIndex(null);
-    setQuery("");
     setResults([]);
+    setLawSearchError("");
   }, [lists]);
 
   // Build index on open if needed
   useEffect(() => {
-    if (isOpen && !searchIndex && !isBuilding) {
+    if (isOpen && isMatchesMode && !searchIndex && !isBuilding) {
       setIsBuilding(true);
       // Timeout to allow UI to render loading state
       setTimeout(() => {
@@ -52,10 +184,41 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
         }
       }, 100);
     }
-  }, [isOpen, searchIndex, isBuilding, lists]);
+  }, [isMatchesMode, isOpen, searchIndex, isBuilding, lists]);
+
+  useEffect(() => () => {
+    lawSearchAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    focusModalInput();
+  }, [focusModalInput, isOpen, searchMode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleWindowFocus = () => {
+      focusModalInput();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        focusModalInput();
+      }
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [focusModalInput, isOpen]);
 
   const handleSelect = useCallback((item) => {
-    onNavigate(item);
+    Promise.resolve(onNavigate(item));
     // setQuery(""); // Keep search term
     // setResults([]); // Keep results
     setIsOpen(false);
@@ -66,7 +229,7 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
         setIsOpen(false);
-        inputRef.current?.blur();
+        modalInputRef.current?.blur();
       }
       // Command/Ctrl + K to open
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -116,22 +279,40 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
   const handleSearch = (e) => {
     const q = e.target.value;
     setQuery(q);
+    setSelectedIndex(-1);
+    setLawSearchError("");
 
-    if (isBuilding) return;
-
-    if (q.length >= 2) {
-      let res;
-      if (searchIndex) {
-        res = searchWithIndex(q, searchIndex);
-      } else {
-        // Fallback if index missing for some reason
-        res = searchContent(q, lists);
+    if (isLawMode) {
+      if (q.trim() !== lastLawSearchQuery) {
+        setResults([]);
       }
-      setResults(res);
+      return;
     } else {
-      setResults([]);
+      if (isBuilding) return;
+      runMatchSearch(q);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen || !isMatchesMode || isBuilding || query.length < 2) return;
+    runMatchSearch(query);
+  }, [isBuilding, isMatchesMode, isOpen, query, runMatchSearch]);
+
+  const modeSummary = isLawMode
+    ? t("search.searchingLaws")
+    : t("search.searchingMatches", {
+      count: searchableLawCount,
+      lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
+      language: activeLanguage,
+    });
+
+  const inputPlaceholder = isBusy
+    ? t("search.initializing")
+    : isLawMode
+      ? t("search.placeholderLaws")
+      : t("search.placeholderMatches");
+  const isInputDisabled = isMatchesMode && (isBuilding || isSearchLoading);
+  const canSubmitLawSearch = isLawMode && query.trim().length >= 2 && !isLawSearchLoading;
 
   return (
     <>
@@ -140,7 +321,6 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
         {/* Desktop Input (Large screens only) */}
         <div className="relative w-full hidden lg:block">
           <input
-            ref={inputRef}
             type="text"
             readOnly
             onClick={() => setIsOpen(true)}
@@ -179,21 +359,27 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
               <Search size={20} className="text-gray-400 hidden md:block" />
               <div className="flex-1 relative">
                 <input
-                  autoFocus
+                  ref={modalInputRef}
                   type="text"
                   value={query}
                   onChange={handleSearch}
-                  placeholder={isBuilding || isSearchLoading ? t("search.initializing") : t("search.placeholder")}
-                  disabled={isBuilding || isSearchLoading}
+                  onKeyDown={(e) => {
+                    if (isLawMode && e.key === "Enter" && selectedIndex < 0) {
+                      e.preventDefault();
+                      runLawSearch(query);
+                    }
+                  }}
+                  placeholder={inputPlaceholder}
+                  disabled={isInputDisabled}
                   className="w-full text-lg text-gray-900 placeholder:text-gray-400 outline-none bg-transparent pr-8 disabled:opacity-50 dark:text-white dark:placeholder:text-gray-600"
                 />
-                {isBuilding || isSearchLoading ? (
+                {isBusy ? (
                   <div className="absolute right-0 top-1/2 -translate-y-1/2">
                     <Loader2 className="animate-spin text-blue-600" size={20} />
                   </div>
                 ) : query && (
                   <button
-                    onClick={() => { setQuery(""); setResults([]); inputRef.current?.focus(); }}
+                    onClick={() => { setQuery(""); setResults([]); focusModalInput(); }}
                     className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
                     title={t("search.clear")}
                   >
@@ -201,6 +387,16 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
                   </button>
                 )}
               </div>
+              {isLawMode ? (
+                <button
+                  type="button"
+                  onClick={() => runLawSearch(query)}
+                  disabled={!canSubmitLawSearch}
+                  className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+                >
+                  {t("search.submitLawSearch")}
+                </button>
+              ) : null}
               <div className="h-6 w-px bg-gray-200 mx-1 hidden md:block dark:bg-gray-700"></div>
               <button
                 onClick={() => setIsOpen(false)}
@@ -211,58 +407,129 @@ function SearchBox({ lists, onNavigate, onSearchOpen, isSearchLoading, activeLan
             </div>
 
             {isGlobalLibrarySearch && (
-              <div className="flex-none border-b border-gray-100 px-4 py-2.5 text-xs text-gray-500 bg-gray-50/80 dark:bg-gray-950/60 dark:border-gray-800 dark:text-gray-400">
-                {t("search.searchingCached", {
-                  count: searchableLawCount,
-                  lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
-                  language: activeLanguage,
-                })}
+              <div className="flex-none border-b border-gray-100 bg-gray-50/80 px-4 py-2.5 dark:border-gray-800 dark:bg-gray-950/60">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                    {t("search.modeLabel")}
+                  </span>
+                  <div className="inline-flex rounded-full border border-gray-200 bg-white p-0.5 dark:border-gray-700 dark:bg-gray-900">
+                    {["laws", "matches"].map((mode) => {
+                      const active = searchMode === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            setSearchMode(mode);
+                            setSelectedIndex(-1);
+                            setLawSearchError("");
+                            if (query.length < 2) {
+                              setResults([]);
+                            }
+                            focusModalInput();
+                          }}
+                          className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                            active
+                              ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
+                              : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+                          }`}
+                        >
+                          {mode === "laws" ? t("search.modeLaws") : t("search.modeMatches")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {modeSummary}
+                </div>
               </div>
             )}
 
             <div className="flex-1 overflow-y-auto p-2 scroll-smooth bg-gray-50/30 dark:bg-gray-950/50">
-              {results.length > 0 ? (
+              {lawSearchError ? (
+                <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                  <Search size={48} className="opacity-10 mb-4" />
+                  <p className="max-w-sm text-center text-sm">{lawSearchError}</p>
+                </div>
+              ) : results.length > 0 ? (
                 <div className="flex flex-col gap-2 p-2 w-full" ref={resultsRef}>
                   {results.map((item, idx) => (
-                    <button
-                      type="button"
-                      key={`${item.type}-${item.id}-${idx}`}
-                      onClick={() => handleSelect(item)}
-                      className={`group flex flex-col gap-1 p-3 text-left rounded-xl transition-all w-full ${idx === selectedIndex
-                        ? "bg-blue-50 ring-1 ring-blue-200 shadow-sm dark:bg-blue-900/30 dark:ring-blue-700"
-                        : "hover:bg-blue-50/50 hover:ring-1 hover:ring-blue-200 bg-white md:bg-transparent dark:bg-gray-800 md:dark:bg-transparent dark:hover:ring-blue-800 dark:hover:bg-blue-900/20"
-                        }`}
-                    >
-                      <div className="flex items-center gap-2.5 w-full min-w-0">
-                        <span className={`flex-shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${item.type === 'article' ? 'bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/40 dark:text-blue-200 dark:border-blue-800' :
-                          item.type === 'recital' ? 'bg-purple-50 text-purple-700 border-purple-100 dark:bg-purple-900/40 dark:text-purple-200 dark:border-purple-800' :
-                            'bg-orange-50 text-orange-700 border-orange-100 dark:bg-orange-900/40 dark:text-orange-200 dark:border-orange-800'
-                          }`}>
-                          {item.type}
-                        </span>
-                        <span className="font-semibold text-gray-900 text-base truncate flex-1 min-w-0 group-hover:text-blue-700">
-                          {item.title}
-                        </span>
-                        {item.score > 100 && (
-                          <span className="flex-shrink-0 text-[10px] bg-green-100 text-green-700 px-1.5 rounded-full font-medium">{t("search.bestMatch")}</span>
-                        )}
-                        {item.law_label && (
-                          <span className="flex-shrink-0 text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium dark:bg-gray-800 dark:text-gray-400">
-                            {item.law_label}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-500 line-clamp-2 pl-1 leading-relaxed">
-                        <span className="opacity-70">...</span>
-                        {item.preview}
-                        <span className="opacity-70">...</span>
-                      </p>
-                    </button>
+                    (() => {
+                      const lawDisplay = item.search_kind === "law" ? getLawResultDisplay(item) : null;
+                      return (
+                        <button
+                          type="button"
+                          key={`${item.search_kind || item.type}-${item.id}-${idx}`}
+                          onClick={() => handleSelect(item)}
+                          className={`group flex flex-col gap-1 p-3 text-left rounded-xl transition-all w-full ${idx === selectedIndex
+                            ? "bg-blue-50 ring-1 ring-blue-200 shadow-sm dark:bg-blue-900/30 dark:ring-blue-700"
+                            : "hover:bg-blue-50/50 hover:ring-1 hover:ring-blue-200 bg-white md:bg-transparent dark:bg-gray-800 md:dark:bg-transparent dark:hover:ring-blue-800 dark:hover:bg-blue-900/20"
+                            }`}
+                        >
+                          <div className="flex items-center gap-2.5 w-full min-w-0">
+                            <span className={`flex-shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${item.search_kind === "law"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-200 dark:border-emerald-800"
+                              : item.type === "article"
+                                ? "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/40 dark:text-blue-200 dark:border-blue-800"
+                                : item.type === "recital"
+                                  ? "bg-purple-50 text-purple-700 border-purple-100 dark:bg-purple-900/40 dark:text-purple-200 dark:border-purple-800"
+                                  : "bg-orange-50 text-orange-700 border-orange-100 dark:bg-orange-900/40 dark:text-orange-200 dark:border-orange-800"
+                              }`}>
+                              {item.search_kind === "law" ? t("search.lawResultType") : item.type}
+                            </span>
+                            <span className="font-semibold text-gray-900 text-base truncate flex-1 min-w-0 group-hover:text-blue-700">
+                              {lawDisplay?.primaryTitle || item.title}
+                            </span>
+                            {item.search_kind !== "law" && item.score > 100 && (
+                              <span className="flex-shrink-0 text-[10px] bg-green-100 text-green-700 px-1.5 rounded-full font-medium">{t("search.bestMatch")}</span>
+                            )}
+                            {item.law_label && (
+                              <span className="flex-shrink-0 text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium dark:bg-gray-800 dark:text-gray-400">
+                                {item.law_label}
+                              </span>
+                            )}
+                          </div>
+                          {item.search_kind === "law" ? (
+                            <>
+                              {lawDisplay?.secondaryTitle ? (
+                                <p className="pl-1 text-sm leading-relaxed text-gray-500 line-clamp-2">
+                                  {lawDisplay.secondaryTitle}
+                                </p>
+                              ) : null}
+                              <p className="pl-1 text-sm leading-relaxed text-gray-500">
+                                {[lawDisplay?.referenceLabel, item.date, item.celex].filter(Boolean).join(" · ")}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-gray-500 line-clamp-2 pl-1 leading-relaxed">
+                              <span className="opacity-70">...</span>
+                              {item.preview}
+                              <span className="opacity-70">...</span>
+                            </p>
+                          )}
+                        </button>
+                      );
+                    })()
                   ))}
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                  {isGlobalLibrarySearch && searchableLawCount === 0 ? (
+                  {isGlobalLibrarySearch && isLawMode && lastLawSearchQuery.length < 2 ? (
+                    <>
+                      <Search size={48} className="opacity-10 mb-4" />
+                      <p className="text-sm text-center max-w-sm">
+                        {t("search.typeLaws")}
+                      </p>
+                    </>
+                  ) : isGlobalLibrarySearch && isLawMode ? (
+                    <>
+                      <Search size={48} className="opacity-20 mb-4" />
+                      <p className="text-sm text-center max-w-sm">
+                        {t("search.noResultsLaws", { query: lastLawSearchQuery })}
+                      </p>
+                    </>
+                  ) : isGlobalLibrarySearch && searchableLawCount === 0 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">
@@ -349,10 +616,30 @@ export function TopBar({
   const location = useLocation();
   const { locale, localizePath, t } = useI18n();
 
-  const onNavigate = (item) => {
+  const onNavigate = async (item) => {
     const extensionParams = isExtensionMode && lawKey === 'extension'
       ? window.location.search
       : '';
+
+    if (item.search_kind === "law") {
+      const officialReference = inferOfficialReferenceFromCelex(item.celex);
+      const targetLaw = buildImportedLawCandidate({
+        celex: item.celex,
+        title: item.title,
+        officialReference,
+      });
+
+      if (officialReference) {
+        await saveLawMeta({
+          celex: item.celex,
+          label: item.title,
+          officialReference,
+        });
+      }
+
+      navigate(getCanonicalLawRoute(targetLaw, null, null, locale));
+      return;
+    }
 
     // Ensure ID is a string before encoding
     const safeId = encodeURIComponent(String(item.id));

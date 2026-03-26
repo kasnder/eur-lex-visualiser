@@ -1,90 +1,162 @@
-# EUR‑Lex FMX API
+# EUR-Lex FMX API
 
-A minimal **Node.js** REST API that serves the FMX (Formex 4) files for EU regulations.
+Node.js API for:
+- fetching and caching FMX/Formex files by CELEX or official reference
+- resolving EUR-Lex references through Cellar SPARQL
+- searching a local metadata index of primary EU acts
 
-## Features
-- **Health check**: `GET /health`
-- **List all available FMX files**: `GET /api/laws`
-- **Fetch a specific law by CELEX ID** (e.g. `32016R0679` for GDPR): `GET /api/laws/:celex`
-- **Fetch FMX by official reference**: `GET /api/laws/by-reference?actType=directive&year=2018&number=1972`
-- **Resolve an FMX-derived law reference to CELEX via Cellar SPARQL**: `GET /api/resolve-reference?actType=directive&year=2018&number=1972`
-- **Resolve a full EUR-Lex URL to CELEX**: `GET /api/resolve-url?url=https://eur-lex.europa.eu/...`
-- **Search by keyword**: `GET /api/search?q=keyword`
-- CORS enabled for easy client‑side consumption.
+## Current API surface
+- `GET /health`
+- `GET /api/laws`
+- `GET /api/laws/:celex?lang=ENG`
+- `GET /api/laws/:celex/info?lang=ENG`
+- `GET /api/laws/:celex/metadata`
+- `GET /api/laws/:celex/amendments`
+- `GET /api/laws/:celex/implementing`
+- `GET /api/laws/by-reference?actType=directive&year=2018&number=1972&lang=ENG`
+- `GET /api/resolve-reference?...`
+- `GET /api/resolve-url?url=https://eur-lex.europa.eu/...&lang=ENG`
+- `GET /api/search?q=...&limit=10`
 
-## Directory layout
-```
- eur-lex-api/
-   ├─ package.json
-   ├─ server.js          # Express server
-   ├─ README.md          # <‑‑ you are reading this
-   └─ .gitignore
-```
-The FMX files live **outside** this folder – in `../eur-lex-visualiser/fmx-downloads/`. The server defaults to that location, but you can override it with the `FMX_DIR` environment variable.
+`/api/search` now searches a local metadata cache of primary regulations/directives/decisions instead of scanning cached FMX filenames.
 
-## Quick local test
+## Search
+
+Search is intentionally narrow and conservative:
+- primary acts only
+- regulations, directives, decisions
+- local metadata cache
+- lexical ranking only
+
+Each result returns:
+- `celex`
+- `title`
+- `type`
+- `date`
+- `eli`
+- `fmxAvailable`
+- `matchReason`
+
+Examples:
+
 ```bash
-# From the workspace root
-cd eur-lex-api
-npm install          # install Express & CORS
-npm start            # starts on PORT (default 3000)
+curl "http://localhost:3000/api/search?q=32016R0679"
+curl "http://localhost:3000/api/search?q=regulation%202016/679"
+curl "http://localhost:3000/api/search?q=digital%20markets%20act&limit=5"
 ```
-Open a browser or use `curl`:
+
+If the search cache has not been built yet, `/api/search` returns `503` with `code=search_cache_unavailable`.
+
+## Search Cache Build
+
+The search cache is built manually and loaded at server startup.
+
+Build it:
+
+```bash
+npm run build:search-cache
+```
+
+Useful options:
+
+```bash
+npm run build:search-cache -- --concurrency 6
+npm run build:search-cache -- --resume --concurrency 6
+npm run build:search-cache -- --fromYear 2026 --toYear 2010 --limit 200
+```
+
+Builder behavior:
+- harvests primary `reg|dir|dec` `/eli/.../oj` acts from the official Publications Office SPARQL endpoint
+- enriches titles from FMX/Formex where available
+- records FMX availability
+- writes the cache atomically
+- persists resumable build state
+
+Default files:
+- search cache: [search/data/search-cache.json](/Users/konrad/Documents/legalviz.eu/legalviz-api/search/data/search-cache.json)
+- build state: [search/data/search-build-state.json](/Users/konrad/Documents/legalviz.eu/legalviz-api/search/data/search-build-state.json)
+
+Important: restart the API server after rebuilding the cache, because the cache is loaded on startup.
+
+## Project Layout
+
+```text
+legalviz-api/
+├─ package.json
+├─ server.js
+├─ README.md
+├─ routes/
+│  └─ api-routes.js
+├─ search/
+│  ├─ search-build.js
+│  ├─ search-index.js
+│  ├─ search-ranking.js
+│  ├─ search-route.js
+│  ├─ search-regression.test.js
+│  └─ search-route.test.js
+└─ shared/
+   ├─ api-utils.js
+   ├─ fmx-service.js
+   ├─ rate-limit.js
+   ├─ reference-utils.js
+   └─ reference-utils.test.js
+```
+
+## Local Development
+
+```bash
+cd legalviz-api
+npm install
+npm start
+```
+
+Quick checks:
+
 ```bash
 curl http://localhost:3000/health
 curl http://localhost:3000/api/laws
-curl http://localhost:3000/api/laws/32016R0679   # GDPR (English)
-curl "http://localhost:3000/api/resolve-reference?actType=directive&year=2018&number=1972&raw=Directive%20(EU)%202018/1972&lang=ENG"
-curl "http://localhost:3000/api/resolve-url?url=https%3A%2F%2Feur-lex.europa.eu%2Flegal-content%2FEN%2FTXT%2FHTML%2F%3Furi%3DCELEX%253A32016R0679&lang=ENG"
-curl "http://localhost:3000/api/laws/by-reference?actType=directive&year=2018&number=1972&raw=Directive%20(EU)%202018/1972&lang=ENG"
+curl http://localhost:3000/api/laws/32016R0679?lang=ENG
+curl "http://localhost:3000/api/search?q=gdpr"
+curl "http://localhost:3000/api/resolve-reference?actType=directive&year=2018&number=1972&lang=ENG"
+curl "http://localhost:3000/api/resolve-url?url=https%3A%2F%2Feur-lex.europa.eu%2Feli%2Freg%2F2016%2F679%2Foj&lang=ENG"
 ```
-You should receive JSON listings or the raw FMX file (XML or ZIP) with proper `Content‑Type`.
 
-The URL-based resolver is used by the browser extension import flow:
-- the extension opens LegalViz with a `sourceUrl` query parameter
-- the frontend calls `/api/resolve-url`
-- the API resolves the URL to a canonical CELEX
-- the frontend keeps `/import?...` as a compatibility entrypoint, then redirects to the canonical public law route
+## Tests
 
-The reference-based endpoints are designed to consume the structured fields we extract from FMX cross-references, such as:
-- `actType=directive|regulation|decision`
-- `year=2018`
-- `number=1972`
-- optional `raw=Directive%20(EU)%202018/1972`
-- optional `suffix=JHA`
-- optional `ojColl=L&ojNo=321&ojYear=2018`
+Run all current tests:
 
-They then use the official Cellar SPARQL endpoint to resolve the corresponding CELEX identifier. The resolver responds with:
-- `resolved`: the best CELEX when confidence is high
-- `tried`: the ELI candidates that were attempted
-- `fallback.url`: a EUR-Lex search URL to open in a separate tab if resolution fails
+```bash
+npm test
+```
 
-`/api/resolve-url` accepts a full EUR-Lex URL and tries, in order:
-- direct `CELEX:` extraction when the URL already contains a CELEX identifier
-- structured ELI resolution for URLs like `/eli/reg/...`, `/eli/dir/...`, or `/eli/dec/...`
-- HTML-based fallback resolution for EUR-Lex text pages, including Official Journal pages that link to the underlying act CELEX
+Search-only tests:
 
-`/api/laws/by-reference` will then fetch FMX using the resolved CELEX and returns structured errors where relevant:
-- `code=resolution_failed` when the official reference could not be resolved
-- `code=fmx_not_found` when CELEX resolves but no Formex data is available
+```bash
+npm run test:search
+```
 
-## Deploying to Railway
-1. **Create a Railway project** and link it to this repository (or push the repo to GitHub and connect it).
-2. Railway automatically detects a Node project (via `package.json`) and uses the `npm start` script.
-3. Set the environment variable `FMX_DIR` to the absolute path of the FMX directory on the Railway container, e.g. `/app/eur-lex-visualiser/fmx-downloads`. If you place the files inside the same repo under `eur-lex-visualiser/fmx-downloads`, Railway will copy them, and the default relative path works out of the box.
-4. Click *Deploy* – Railway will `npm install`, run `npm start`, and expose the service on a generated domain.
-5. You can now call the API endpoints from anywhere.
+Current test coverage includes:
+- search regression ranking checks
+- search route behavior
+- CELEX/reference parsing helpers
 
-## Example Railway environment variables
+## Environment Variables
+
 | Variable | Description |
 |----------|-------------|
-| `PORT`   | Port Railway assigns (you usually **do not** set this – Railway injects it). |
-| `FMX_DIR`| Absolute path to the FMX folder (optional – defaults to `../eur-lex-visualiser/fmx-downloads`). |
+| `PORT` | Port for the API server. |
+| `FMX_DIR` | Directory for cached FMX/XML/ZIP downloads. Defaults to `legalviz-api/fmx-downloads`. |
+| `RATE_LIMIT_MAX` | Per-IP request cap for the 15-minute window. |
+| `STORAGE_LIMIT_MB` | Max size of the FMX download cache before eviction starts. |
+| `SEARCH_CACHE_PATH` | Optional override for the search cache JSON path. |
 
-## Extending the API
-- **Language support**: The server currently maps CELEX IDs to a few filename patterns. To support all languages, enhance `celexMap` and the filename resolution logic.
-- **Metadata**: Add a JSON file describing each law (title, date, publication OJ reference) and serve it via `/api/metadata`.
-- **Authentication**: If you want to restrict access, plug in any Express auth middleware.
+## Notes
+
+- FMX fetching and search are separate concerns. Search does not download FMX files.
+- `/api/search` prefers primary acts and deprioritizes implementing/delegated/corrigendum material.
+- Search quality is strongest for CELEX, `type + year/number`, and well-titled flagship laws.
+- The builder is resumable, but a partially enriched cache is still only best-effort for relevance.
 
 ## License
-MIT – feel free to adapt or extend.
+
+MIT

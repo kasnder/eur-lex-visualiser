@@ -517,6 +517,26 @@ export async function fetchImplementingActs(celex) {
   return res.json();
 }
 
+export async function searchLaws(query, { limit = 10, noRewrite = false, signal } = {}) {
+  const params = new URLSearchParams({
+    q: String(query || "").trim(),
+    limit: String(limit),
+  });
+
+  if (noRewrite) {
+    params.set("noRewrite", "1");
+  }
+
+  const url = `${API_BASE}/api/search?${params.toString()}`;
+  const res = await fetch(url, { signal });
+
+  if (!res.ok) {
+    await readApiError(res, `Law search failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function fetchFormexByReference(reference, lang = "EN") {
   const query = buildReferenceQuery(reference, lang);
   const url = `${API_BASE}/api/laws/by-reference?${query}`;
