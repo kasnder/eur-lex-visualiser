@@ -1,7 +1,27 @@
 import { motion as Motion } from "framer-motion";
 import { Clock, Trash } from "lucide-react";
 
+function formatOfficialReference(law) {
+  const reference = law?.officialReference;
+  if (reference?.actType && reference?.year && reference?.number) {
+    const actTypeLabel = reference.actType.charAt(0).toUpperCase() + reference.actType.slice(1);
+    return `${actTypeLabel} (EU) ${reference.year}/${reference.number}`;
+  }
+
+  const parts = String(law?.label || "").split(" — ").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts.slice(1).join(" — ") : "";
+}
+
+function getCardTitle(law) {
+  const parts = String(law?.label || "").split(" — ").map((part) => part.trim()).filter(Boolean);
+  return parts[0] || law?.label || "";
+}
+
 function LawLibraryCard({ law, onOpen, onDelete, formatDate, t }) {
+  const title = getCardTitle(law);
+  const officialReference = formatOfficialReference(law);
+  const metaLine = [officialReference, law?.celex ? `CELEX ${law.celex}` : null].filter(Boolean).join(" · ");
+
   return (
     <Motion.div
       whileHover={{ y: -2, scale: 1.01 }}
@@ -19,8 +39,11 @@ function LawLibraryCard({ law, onOpen, onDelete, formatDate, t }) {
     >
       <div className="flex items-start justify-between gap-2 w-full">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-900 truncate pr-6 dark:text-gray-100">
-            {law.label}
+          <div className="truncate pr-8 text-sm font-semibold text-gray-900 dark:text-gray-100">
+            {title}
+          </div>
+          <div className="mt-1 truncate pr-8 text-[11px] text-gray-500 dark:text-gray-400">
+            {metaLine}
           </div>
           <div className="mt-2 flex items-center gap-1 text-[10px] text-gray-400">
             <Clock className="h-3 w-3" />
