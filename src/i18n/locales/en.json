@@ -193,5 +193,25 @@
     "documentTitle": "EU Law Document",
     "generatedOn": "Generated on {date}",
     "printedFrom": "Printed from LegalViz.EU"
+  },
+  "amendmentHistory": {
+    "title": "Amendment History",
+    "loading": "Loading amendments…",
+    "amendment": "Amendment",
+    "corrigendum": "Corrigendum"
+  },
+  "metadata": {
+    "title": "Status & Dates",
+    "loading": "Loading metadata…",
+    "unavailable": "Metadata not available",
+    "status": "Status",
+    "inForce": "In force",
+    "notInForce": "No longer in force",
+    "entryIntoForce": "Entry into force",
+    "endOfValidity": "End of validity",
+    "dateOfDocument": "Date of document",
+    "eea": "EEA relevant",
+    "yes": "Yes",
+    "implementingActs": "Implementing / Delegated Acts"
   }
 }

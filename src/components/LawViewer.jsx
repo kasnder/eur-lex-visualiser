@@ -22,6 +22,7 @@ import { SEO } from "./SEO.jsx";
 import { NumberSelector } from "./NumberSelector.jsx";
 import { RelatedRecitals } from "./RelatedRecitals.jsx";
 import { CrossReferences } from "./CrossReferences.jsx";
+import { MetadataPanel } from "./MetadataPanel.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
 import { useI18n } from "../i18n/useI18n.js";
 import { lawLangFromUiLocale, uiLocaleFromLawLang } from "../i18n/localeMeta.js";
@@ -1093,6 +1094,7 @@ export function LawViewer() {
     }).then(() => markLawOpened(effectiveCelex));
   }, [isLegacyExtensionRoute, effectiveCelex, currentLaw, hasLoadedContent, searchParams, data.title, formexLang, t]);
 
+
   const retryLoad = useCallback(() => {
     setLoadAttempt((attempt) => attempt + 1);
   }, []);
@@ -1847,6 +1849,10 @@ export function LawViewer() {
                   </Accordion>
                 </div>
               )}
+              <MetadataPanel
+                celex={effectiveCelex}
+                currentLang={formexLang}
+              />
             </div>
           </aside>
         </main>

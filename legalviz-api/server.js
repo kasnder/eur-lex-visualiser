@@ -1015,6 +1015,175 @@ app.get('/api/laws/:celex/info', rateLimitMiddleware, async (req, res) => {
   }
 });
 
+// Get rich metadata for a law via Cellar SPARQL (dates, in-force status, ELI, deadlines)
+app.get('/api/laws/:celex/metadata', rateLimitMiddleware, async (req, res) => {
+  try {
+    const { celex } = req.params;
+
+    if (!validateCelex(celex)) {
+      return res.status(400).json({ error: 'Invalid CELEX format' });
+    }
+
+    const cacheKey = `metadata:${celex}`;
+    const cached = cacheGet(resolutionCache, cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
+    const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT DISTINCT
+  ?dateEntryIntoForce ?dateEndOfValidity ?inForce
+  ?eli ?dateSignature ?dateDocument ?eea
+WHERE {
+  ?work owl:sameAs <${celexUri}> .
+  OPTIONAL { ?work cdm:resource_legal_date_entry-into-force ?dateEntryIntoForce }
+  OPTIONAL { ?work cdm:resource_legal_date_end-of-validity ?dateEndOfValidity }
+  OPTIONAL { ?work cdm:resource_legal_in-force ?inForce }
+  OPTIONAL { ?work cdm:resource_legal_eli ?eli }
+  OPTIONAL { ?work cdm:resource_legal_date_signature ?dateSignature }
+  OPTIONAL { ?work cdm:work_date_document ?dateDocument }
+  OPTIONAL { ?work cdm:resource_legal_eea ?eea }
+}
+LIMIT 10`;
+
+    const data = await runSparqlQuery(query);
+    const bindings = data.results?.bindings || [];
+
+    // Collect all unique entry-into-force dates
+    const entryDates = [...new Set(bindings.map(b => b.dateEntryIntoForce?.value).filter(Boolean))].sort();
+    const firstBinding = bindings[0] || {};
+
+    const payload = {
+      celex,
+      entryIntoForce: entryDates,
+      endOfValidity: firstBinding.dateEndOfValidity?.value || null,
+      inForce: firstBinding.inForce?.value === 'true',
+      eli: firstBinding.eli?.value || null,
+      dateSignature: firstBinding.dateSignature?.value || null,
+      dateDocument: firstBinding.dateDocument?.value || null,
+      eea: firstBinding.eea?.value === 'true',
+    };
+
+    cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+    res.json(payload);
+  } catch (err) {
+    safeErrorResponse(res, err, 'Failed to fetch law metadata');
+  }
+});
+
+// Get amendment history for a law via Cellar SPARQL
+app.get('/api/laws/:celex/amendments', rateLimitMiddleware, async (req, res) => {
+  try {
+    const { celex } = req.params;
+
+    if (!validateCelex(celex)) {
+      return res.status(400).json({ error: 'Invalid CELEX format' });
+    }
+
+    const cacheKey = `amendments:${celex}`;
+    const cached = cacheGet(resolutionCache, cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
+    // Relationships in Cellar are stored as owl:Axiom reifications, not plain triples,
+    // so we must query via owl:annotatedTarget/Property/Source.
+    // We include both amends and corrects (corrigenda).
+    const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+SELECT DISTINCT ?type ?sourceCelex ?date WHERE {
+  ?work owl:sameAs <${celexUri}> .
+  ?ax owl:annotatedTarget ?work ;
+      owl:annotatedProperty ?p ;
+      owl:annotatedSource ?sourceWork .
+  FILTER(?p IN (cdm:resource_legal_amends_resource_legal, cdm:resource_legal_corrects_resource_legal))
+  BIND(IF(?p = cdm:resource_legal_corrects_resource_legal, "corrigendum", "amendment") AS ?type)
+  ?sourceWork owl:sameAs ?sourceCelex .
+  FILTER(STRSTARTS(STR(?sourceCelex), "http://publications.europa.eu/resource/celex/"))
+  OPTIONAL { ?sourceWork cdm:work_date_document ?date }
+}
+ORDER BY ?date
+LIMIT 50`;
+
+    const data = await runSparqlQuery(query);
+    const amendments = (data.results?.bindings || []).map((b) => {
+      const rawCelex = b.sourceCelex?.value?.split('/').pop() || null;
+      const amendingCelex = rawCelex ? decodeURIComponent(rawCelex) : null;
+      const date = b.date?.value || null;
+      const type = b.type?.value || 'amendment';
+      return { celex: amendingCelex, date, type };
+    }).filter((a) => a.celex);
+
+    const payload = { celex, amendments };
+    cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+    res.json(payload);
+  } catch (err) {
+    safeErrorResponse(res, err, 'Failed to fetch amendment history');
+  }
+});
+
+// Get implementing/delegated acts adopted under a law via Cellar SPARQL
+app.get('/api/laws/:celex/implementing', rateLimitMiddleware, async (req, res) => {
+  try {
+    const { celex } = req.params;
+
+    if (!validateCelex(celex)) {
+      return res.status(400).json({ error: 'Invalid CELEX format' });
+    }
+
+    const cacheKey = `implementing:${celex}`;
+    const cached = cacheGet(resolutionCache, cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
+    // Find acts whose legal basis is this law (resource_legal_based_on_resource_legal)
+    const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+SELECT DISTINCT ?actCelex ?date ?title WHERE {
+  ?work owl:sameAs <${celexUri}> .
+  ?ax owl:annotatedTarget ?work ;
+      owl:annotatedProperty cdm:resource_legal_based_on_resource_legal ;
+      owl:annotatedSource ?actWork .
+  ?actWork owl:sameAs ?actCelex .
+  FILTER(STRSTARTS(STR(?actCelex), "http://publications.europa.eu/resource/celex/"))
+  OPTIONAL { ?actWork cdm:work_date_document ?date }
+  OPTIONAL {
+    ?actWork cdm:resource_legal_title ?titleExpr .
+    FILTER(LANG(?titleExpr) = "en")
+    BIND(STR(?titleExpr) AS ?title)
+  }
+}
+ORDER BY ?date
+LIMIT 100`;
+
+    const data = await runSparqlQuery(query);
+    const acts = (data.results?.bindings || []).map((b) => {
+      const rawCelex = b.actCelex?.value?.split('/').pop() || null;
+      const actCelex = rawCelex ? decodeURIComponent(rawCelex) : null;
+      return {
+        celex: actCelex,
+        date: b.date?.value || null,
+        title: b.title?.value || null,
+      };
+    }).filter((a) => a.celex);
+
+    const payload = { celex, acts };
+    cacheSet(resolutionCache, cacheKey, payload, RESOLUTION_CACHE_MS);
+    res.json(payload);
+  } catch (err) {
+    safeErrorResponse(res, err, 'Failed to fetch implementing acts');
+  }
+});
+
 // Search cached files
 app.get('/api/search', rateLimitMiddleware, (req, res) => {
   try {

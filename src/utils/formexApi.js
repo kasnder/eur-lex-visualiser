@@ -484,6 +484,39 @@ export async function resolveEurlexUrl(sourceUrl, lang = "EN") {
   return res.json();
 }
 
+export async function fetchAmendments(celex) {
+  const url = `${API_BASE}/api/laws/${encodeURIComponent(celex)}/amendments`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    await readApiError(res, `Amendment history fetch failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+export async function fetchLawMetadata(celex) {
+  const url = `${API_BASE}/api/laws/${encodeURIComponent(celex)}/metadata`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    await readApiError(res, `Metadata fetch failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+export async function fetchImplementingActs(celex) {
+  const url = `${API_BASE}/api/laws/${encodeURIComponent(celex)}/implementing`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    await readApiError(res, `Implementing acts fetch failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function fetchFormexByReference(reference, lang = "EN") {
   const query = buildReferenceQuery(reference, lang);
   const url = `${API_BASE}/api/laws/by-reference?${query}`;
