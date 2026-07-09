@@ -138,7 +138,7 @@ function buildLawSummarySection(law, summaryPayload) {
 
   const purposeHtml = citedText(law, summary.purpose);
   const scopeHtml = citedText(law, summary.scope);
-  const keyObligationsHtml = (summary.keyObligations || [])
+  const keyPointsHtml = (summary.keyPoints || [])
     .map((item) => `<li>${citedText(law, item)}</li>`)
     .join("");
   const relatedInstrumentsHtml = (summary.relatedInstruments || [])
@@ -154,7 +154,7 @@ function buildLawSummarySection(law, summaryPayload) {
       <h2>Overview</h2>
       ${purposeHtml ? `<p>${purposeHtml}</p>` : ""}
       ${scopeHtml ? `<p>${scopeHtml}</p>` : ""}
-      ${keyObligationsHtml ? `<h3>Key points</h3><ul>${keyObligationsHtml}</ul>` : ""}
+      ${keyPointsHtml ? `<h3>Key points</h3><ul>${keyPointsHtml}</ul>` : ""}
       ${summary.structure ? `<h3>Structure</h3><p>${escapeHtml(summary.structure)}</p>` : ""}
       ${relatedInstrumentsHtml ? `<h3>Related instruments</h3><ul>${relatedInstrumentsHtml}</ul>` : ""}
     </section>
