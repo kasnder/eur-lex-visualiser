@@ -87,11 +87,11 @@ export function LawSummary({ celex, lang = "EN", onArticleClick, className = "mb
                 <p><CitedText block={summary.scope} onArticleClick={onArticleClick} /></p>
               </div>
 
-              {summary.keyObligations?.length ? (
+              {summary.keyPoints?.length ? (
                 <div>
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Key Points</div>
                   <ul className="space-y-1.5">
-                    {summary.keyObligations.map((item, index) => (
+                    {summary.keyPoints.map((item, index) => (
                       <li key={`${item.text}-${index}`} className="flex gap-2">
                         <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
                         <span><CitedText block={item} onArticleClick={onArticleClick} /></span>
