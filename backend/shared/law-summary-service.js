@@ -68,7 +68,9 @@ function clip(value, maxChars) {
   const text = stripTags(value);
   if (text.length <= maxChars) return text;
   const window = text.slice(0, maxChars);
-  const boundaryPattern = /[.;]\s|\n/g;
+  // stripTags collapses all whitespace (incl. newlines) to single spaces, so
+  // sentence boundaries here are a period/semicolon followed by a space.
+  const boundaryPattern = /[.;]\s/g;
   let lastBoundaryEnd = -1;
   let match;
   while ((match = boundaryPattern.exec(window))) {
