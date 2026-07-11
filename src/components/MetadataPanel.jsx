@@ -139,6 +139,7 @@ function LoadButton({ label, count, loading, loaded, onClick }) {
  * Renders a list of acts (amendments or implementing acts) as cards.
  */
 function ActList({ acts, currentLang, type = "amendment" }) {
+  const { t } = useI18n();
   if (!acts || acts.length === 0) return null;
 
   return (
@@ -150,8 +151,8 @@ function ActList({ acts, currentLang, type = "amendment" }) {
           ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
           : (TYPE_BADGE[a.type] || TYPE_BADGE.amendment);
         const typeLabel = type === "implementing"
-          ? "Impl/Del"
-          : (a.type === "corrigendum" ? "Corrigendum" : "Amendment");
+          ? t("metadata.implDelBadge")
+          : (a.type === "corrigendum" ? t("amendmentHistory.corrigendum") : t("amendmentHistory.amendment"));
 
         return (
           <li key={a.celex}>
