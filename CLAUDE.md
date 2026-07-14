@@ -23,6 +23,8 @@ npm run test:api              # backend tests: node --test search/*.test.js shar
 Single test file (frontend, vitest): `npx vitest run src/utils/nlp.test.js`
 Single test file (backend, node:test): `cd backend && node --test search/search-ranking.test.js`
 
+The fmxParser.test.js is a vitest test (not part of the backend node:test glob).
+
 Backend CLI (`eurlex`) commands are documented in [backend/README.md](backend/README.md); run via `npx eurlex <command>` from `backend/` after `npm install`.
 
 Requires Node.js v24+.
