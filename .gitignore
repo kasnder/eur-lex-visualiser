@@ -25,12 +25,21 @@ backend/fmx-downloads/
 backend/html-fallback-downloads/
 # Raw law corpus + resumable build artifacts produced by the search-cache
 # harvest. The corpus can grow to hundreds of MB / tens of thousands of files;
-# only the derived search-cache.json is committed, never the raw XML.
+# never commit the raw XML/HTML. The derived caches are also NOT committed:
+# the full-corpus search-cache.json is ~285 MB raw / ~48 MB gzipped, so it (and
+# the case-law cache) ship as GitHub Release assets fetched at Docker build time
+# (see backend/Dockerfile, DATA_RELEASE_TAG) rather than bloating git history.
+backend/search/data/search-cache.json
+backend/search/data/search-cache.json.gz
+backend/search/data/case-law-cache-v5.json.gz
 backend/search/data/laws/
 backend/search/data/laws-html/
+backend/search/data/case-law/
 backend/search/data/shards/
 backend/search/data/html-shards/
 backend/search/data/search-build-state*.json
+backend/search/data/case-law-harvest-state.json*
+backend/search/data/case-law-targets.txt
 backend/search/data/search-cache-historical*.json
 backend/search/data/*.backup
 backend/search/data/*.bak

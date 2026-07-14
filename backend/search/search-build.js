@@ -358,6 +358,14 @@ function clampToBudget(parts, maxLength) {
 }
 
 function buildExcerptFromCombined(combined) {
+  const unnumberedText = (combined?.articles || [])
+    .filter((article) => article?.is_unnumbered)
+    .map((article) => stripXmlTags(article.article_html || ""))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, EXCERPT_ARTICLE_BUDGET);
+
   const articleText = EXCERPT_ARTICLE_NUMBERS
     .map((number) => (combined?.articles || []).find((article) => article?.article_number === number))
     .filter(Boolean)
@@ -385,9 +393,22 @@ function buildExcerptFromCombined(combined) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Priority order: subject-matter/scope, then definitions, then recitals fill
-  // whatever budget remains.
-  return clampToBudget([articleText, definitionsText, recitalsText], EXCERPT_MAX_LENGTH);
+  // A small set of legacy measures consists solely of an annex (for example
+  // annual quantitative-limit adjustments). They have no enacting Articles or
+  // recitals but still contain the entire searchable legal content.
+  const annexFallbackText = !(unnumberedText || articleText || definitionsText || recitalsText)
+    ? (combined?.annexes || [])
+      .map((annex) => stripXmlTags(annex?.annex_html || annex?.annex_text || ""))
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, EXCERPT_ARTICLE_BUDGET)
+    : "";
+
+  // Priority order: otherwise-unrepresented decision text, subject-matter/
+  // scope, then definitions; recitals fill whatever budget remains.
+  return clampToBudget([unnumberedText, articleText, definitionsText, recitalsText, annexFallbackText], EXCERPT_MAX_LENGTH);
 }
 
 // A single CELLAR download can be more than one XML file — modern Formex ships

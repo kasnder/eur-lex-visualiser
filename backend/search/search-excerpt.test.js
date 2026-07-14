@@ -137,6 +137,28 @@ test("buildExcerptFromCombined only pulls Article 1 and Article 2, skipping othe
   assert.doesNotMatch(excerpt, /definitions text/);
 });
 
+test("buildExcerptFromCombined indexes explicitly unnumbered decision text", () => {
+  const excerpt = buildExcerptFromCombined({
+    recitals: [],
+    articles: [{
+      article_number: "text",
+      is_unnumbered: true,
+      article_html: "<p>MERGERDECISIONSENTINEL confirms the concentration is compatible with the common market.</p>",
+    }],
+  });
+
+  assert.match(excerpt, /MERGERDECISIONSENTINEL/);
+});
+
+test("buildExcerptFromCombined falls back to annex-only measures", () => {
+  const excerpt = buildExcerptFromCombined({
+    articles: [],
+    recitals: [],
+    annexes: [{ annex_html: "<p>QUANTITATIVE LIMITS ADJUSTED FOR 1980</p>" }],
+  });
+  assert.match(excerpt, /QUANTITATIVE LIMITS ADJUSTED FOR 1980/);
+});
+
 test("buildExcerptFromCombined degrades to an empty string for missing/malformed input", () => {
   assert.equal(buildExcerptFromCombined(null), "");
   assert.equal(buildExcerptFromCombined(undefined), "");
