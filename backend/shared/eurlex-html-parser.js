@@ -386,8 +386,17 @@ function parseRecitals(paragraphs, articleStartIndex) {
 
   for (let index = 0; index < articleStartIndex; index += 1) {
     const paragraph = paragraphs[index];
+    // Recitals always precede the enacting formula; stop before it so the
+    // "HAS ADOPTED …" line is never folded into the last recital (relevant when
+    // the caller scans the whole preamble rather than a "Whereas:"-delimited block).
+    if (ENACTING_FORMULA.test(normalizeText(paragraph))) break;
     const match = paragraph.match(/^\((\d+)\)\s*(.*)$/);
     if (match) {
+      // Skip "(N) OJ No L …" footnote-citation lines — they carry a numbered
+      // marker like a recital but are Official-Journal references, not recitals.
+      // Treating them as recitals both fabricates junk and suppresses the
+      // unnumbered-"Whereas" fallback for acts whose real recitals aren't numbered.
+      if (/^OJ\b/i.test(match[2])) continue;
       if (current) recitals.push(current);
       current = {
         recital_number: match[1],
@@ -411,6 +420,59 @@ function parseRecitals(paragraphs, articleStartIndex) {
       recital_html: `<p>${escapeHtml(recitalText)}</p>`,
     };
   });
+}
+
+// Pre-1990s EEC/ECSC acts don't number their recitals: the preamble is a run of
+// paragraphs each beginning "Whereas …", sitting between the "Having regard to …"
+// citations and the "HAS ADOPTED THIS DIRECTIVE:" enacting formula. parseRecitals
+// (which needs "(N)" markers) finds nothing here, so this fallback treats every
+// "Whereas …" paragraph as one recital, folding wrapped continuation lines (and
+// mid-paragraph "; whereas …") into the current one. It stops at the enacting
+// formula / first article so the "HAS ADOPTED…" line is never swallowed.
+const ENACTING_FORMULA = /^(?:HAS|HAVE)\s+(?:ADOPTED|DECIDED|LAID\s+DOWN|DRAWN\s+UP)\b/i;
+
+function parseWhereasRecitals(paragraphs, endIndex) {
+  const recitals = [];
+  let current = null;
+
+  for (let index = 0; index < endIndex; index += 1) {
+    const paragraph = normalizeText(paragraphs[index]);
+    if (!paragraph) continue;
+    if (ENACTING_FORMULA.test(paragraph) || isArticleHeading(paragraph)) break;
+
+    if (/^whereas\b/i.test(paragraph)) {
+      if (current) recitals.push(current);
+      current = { chunks: [stripLeadingMarker(paragraph, /^whereas[\s,:;]*/i)] };
+    } else if (current) {
+      current.chunks.push(paragraph);
+    }
+  }
+  if (current) recitals.push(current);
+
+  return recitals.map((recital, order) =>
+    buildRecital(order + 1, recital.chunks.join(" ")));
+}
+
+// Old single-provision acts (amending regs, ECSC/Euratom decisions) often carry
+// no numbered "Article N" heading — the operative text follows the enacting
+// formula directly, sometimes under a "SOLE ARTICLE" / "ARTICLE UNIQUE" label.
+// parseArticles finds nothing in that case, so we salvage the body as Article 1.
+const SOLE_ARTICLE_HEADING =
+  /^(?:SOLE\s+ARTICLE|SINGLE\s+ARTICLE|ARTICLE\s+UNIQUE|ARTICLE\s+PREMIER)$/i;
+const CLOSING_FORMULA =
+  /^(?:THIS\s+(?:REGULATION|DIRECTIVE|DECISION)\s+SHALL\s+BE\s+BINDING|THIS\s+(?:REGULATION|DIRECTIVE|DECISION)\s+(?:IS|SHALL\s+BE)\s+ADDRESSED|DONE\s+AT\b|FOR\s+THE\s+(?:COMMISSION|COUNCIL|HIGH\s+AUTHORITY)\b)/i;
+
+function parseSoleArticleBody(paragraphs, startIndex) {
+  const body = [];
+  for (let index = startIndex; index < paragraphs.length; index += 1) {
+    const paragraph = normalizeText(paragraphs[index]);
+    if (!paragraph) continue;
+    if (isAnnexHeading(paragraph) || CLOSING_FORMULA.test(paragraph)) break;
+    // Drop a leading "SOLE ARTICLE" label but keep the operative text after it.
+    if (body.length === 0 && SOLE_ARTICLE_HEADING.test(paragraph)) continue;
+    body.push(paragraph);
+  }
+  return body;
 }
 
 function parseArticles(paragraphs) {
@@ -482,6 +544,52 @@ function parseArticles(paragraphs) {
 
   finalizeArticle();
   return articles;
+}
+
+// The plaintext/<TXT_TE> branch previously discarded annexes (annexes: []), so
+// annex content (schedules, forms, product lists) leaked into the last article's
+// body. Split the run of paragraphs after the articles by each "ANNEX"/"ANNEX I"
+// heading into a distinct annex, mirroring the { annex_id, annex_title,
+// annex_html } shape the structured branches emit. `startIndex` is the first
+// annex heading; everything before it is articles.
+function parseTxtTeAnnexes(paragraphs, startIndex, langConfig, injectFn) {
+  const annexCapture = langConfig?.annexCapture || /^ANNEX\s*([IVXLCDM]+|\d+)?/i;
+  const collected = [];
+  let current = null;
+
+  for (let index = startIndex; index < paragraphs.length; index += 1) {
+    const paragraph = normalizeText(paragraphs[index]);
+    if (!paragraph) continue;
+
+    if (isAnnexHeading(paragraph)) {
+      if (current) collected.push(current);
+      const match = paragraph.match(annexCapture);
+      current = {
+        heading: paragraph,
+        annex_id: (match && normalizeText(match[1] || "")) || paragraph,
+        subtitle: "",
+        body: [],
+      };
+      continue;
+    }
+    if (!current) continue;
+
+    // A short, non-sentence line immediately under the heading is the annex
+    // subtitle; everything else is body content.
+    if (!current.subtitle && current.body.length === 0
+        && isLikelyArticleTitle(paragraph) && !isLikelyDivisionTitle(paragraph)) {
+      current.subtitle = paragraph;
+      continue;
+    }
+    current.body.push(paragraph);
+  }
+  if (current) collected.push(current);
+
+  return collected.map((annex) => ({
+    annex_id: annex.annex_id,
+    annex_title: annex.subtitle ? `${annex.heading} — ${annex.subtitle}` : annex.heading,
+    annex_html: injectFn(paragraphsToHtml(annex.body), langConfig),
+  }));
 }
 
 function parseLegacyXhtmlToCombined(document, langCode, langConfig, injectCrossRefLinks) {
@@ -908,12 +1016,49 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
 
   const whereasIndex = paragraphs.findIndex((paragraph) => /^Whereas:?$/i.test(paragraph));
   const articleStartIndex = paragraphs.findIndex((paragraph) => isArticleHeading(paragraph));
-  const recitalParagraphs = whereasIndex >= 0 && articleStartIndex > whereasIndex
-    ? paragraphs.slice(whereasIndex + 1, articleStartIndex)
-    : [];
-  const recitals = parseRecitals(recitalParagraphs, recitalParagraphs.length);
+  const preambleEnd = articleStartIndex >= 0 ? articleStartIndex : paragraphs.length;
+  // With a standalone "Whereas:" heading, recitals are the block after it. Older
+  // 1990s acts instead number their recitals "(N) Whereas …" with no such heading
+  // and a "Having regard to …" citation block above — so scan the whole preamble;
+  // parseRecitals only latches onto "(N)"-marked paragraphs and stops at the
+  // enacting formula, ignoring the title/citation lines before the first recital.
+  const recitalParagraphs = whereasIndex >= 0 && preambleEnd > whereasIndex
+    ? paragraphs.slice(whereasIndex + 1, preambleEnd)
+    : paragraphs.slice(0, preambleEnd);
+  let recitals = parseRecitals(recitalParagraphs, recitalParagraphs.length);
+  // Fall back to old-style unnumbered "Whereas …" recitals (pre-1990s acts),
+  // which have no "(N)" markers for parseRecitals to latch onto.
+  if (recitals.length === 0) {
+    recitals = parseWhereasRecitals(paragraphs, preambleEnd);
+  }
 
-  const articles = parseArticles(paragraphs.slice(articleStartIndex >= 0 ? articleStartIndex : paragraphs.length))
+  // Annexes follow the articles. Cut the article body at the first "ANNEX"
+  // heading so annex content isn't swallowed into the last article, and parse
+  // the remainder as annexes.
+  const annexStartIndex = paragraphs.findIndex((paragraph) => isAnnexHeading(normalizeText(paragraph)));
+  const articleSliceEnd = annexStartIndex > articleStartIndex ? annexStartIndex : paragraphs.length;
+  let rawArticles = parseArticles(
+    paragraphs.slice(articleStartIndex >= 0 ? articleStartIndex : paragraphs.length, articleSliceEnd),
+  );
+  // Single-provision acts have no "Article N" heading — recover the operative
+  // text after the enacting formula as a lone Article 1 so it isn't dropped.
+  if (rawArticles.length === 0) {
+    const enactingIndex = paragraphs.findIndex((paragraph) =>
+      ENACTING_FORMULA.test(normalizeText(paragraph)));
+    if (enactingIndex >= 0) {
+      const body = parseSoleArticleBody(paragraphs, enactingIndex + 1);
+      if (body.length) {
+        rawArticles = [{
+          article_number: "1",
+          article_title: "",
+          division: { chapter: { number: "", title: "" }, section: null },
+          bodyParagraphs: body,
+        }];
+      }
+    }
+  }
+
+  const articles = rawArticles
     .map((article) => {
       const html = paragraphsToHtml(article.bodyParagraphs, { title: article.article_title });
       return {
@@ -930,11 +1075,15 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
 
   const definitions = articles.flatMap((article) => parseDefinitions(article));
 
+  const annexes = annexStartIndex >= 0
+    ? parseTxtTeAnnexes(paragraphs, annexStartIndex, langConfig, injectCrossRefLinks)
+    : [];
+
   return {
     title,
     articles: articles.map(({ bodyParagraphs, ...article }) => article),
     recitals,
-    annexes: [],
+    annexes,
     definitions,
     langCode,
     crossReferences: {},

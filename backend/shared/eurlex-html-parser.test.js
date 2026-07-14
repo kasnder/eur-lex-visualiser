@@ -151,6 +151,166 @@ test("parseEurlexHtmlToCombined parses LegisWrite Commission-proposal layout", a
   assert.match(parsed.annexes[0].annex_html, /Annex body content/);
 });
 
+// Pre-1990s EEC/ECSC acts ship as a <TXT_TE> fragment with an unnumbered
+// "Whereas …" preamble (no "(N)" recital markers) and a "HAS ADOPTED …"
+// enacting formula before Article 1 — the shape the FMX-less HTML corpus is full of.
+const OLD_WHEREAS_HTML = `<!DOCTYPE html>
+<html lang="EN">
+<head><meta name="DC.description" content="Council Directive 64/428/EEC"></head>
+<body>
+  <div id="TexteOnly">
+    <TXT_TE>
+      <p>COUNCIL DIRECTIVE of 7 July 1964</p>
+      <p>THE COUNCIL OF THE EUROPEAN ECONOMIC COMMUNITY,</p>
+      <p>Having regard to the Treaty establishing the European Economic Community;</p>
+      <p>Having regard to the proposal from the Commission;</p>
+      <p>Whereas the General Programmes provide for freedom of establishment;</p>
+      <p>Whereas wholesale trade activities have been liberalised;</p>
+      <p>and whereas that liberalisation should continue in stages;</p>
+      <p>HAS ADOPTED THIS DIRECTIVE:</p>
+      <p>Article 1</p>
+      <p>Member States shall abolish the restrictions referred to in the General Programme.</p>
+      <p>Article 2</p>
+      <p>This Directive is addressed to the Member States.</p>
+    </TXT_TE>
+  </div>
+</body>
+</html>`;
+
+test("parseEurlexHtmlToCombined extracts unnumbered Whereas recitals from old acts", async () => {
+  const parsed = await parseEurlexHtmlToCombined(OLD_WHEREAS_HTML, "ENG");
+
+  // Two "Whereas …" paragraphs → two recitals; the continuation line ("and
+  // whereas …") folds into the second, not a third.
+  assert.equal(parsed.recitals.length, 2);
+  assert.equal(parsed.recitals[0].recital_number, "1");
+  assert.match(parsed.recitals[0].recital_text, /^the General Programmes provide/);
+  assert.equal(parsed.recitals[1].recital_number, "2");
+  assert.match(parsed.recitals[1].recital_text, /liberalised.*continue in stages/);
+  // The "HAS ADOPTED …" enacting formula must never be swallowed into a recital.
+  assert.ok(parsed.recitals.every((r) => !/HAS ADOPTED/i.test(r.recital_text)));
+  assert.equal(parsed.articles.length, 2);
+  assert.equal(parsed.articles[0].article_number, "1");
+});
+
+// Old single-provision amending acts carry a "SOLE ARTICLE" label (or nothing)
+// instead of a numbered "Article N" heading.
+const SOLE_ARTICLE_HTML = `<!DOCTYPE html>
+<html lang="EN">
+<head><meta name="DC.description" content="Council Regulation (EEC) No 2681/72"></head>
+<body>
+  <div id="TexteOnly">
+    <TXT_TE>
+      <p>REGULATION (EEC) No 2681/72 OF THE COUNCIL of 12 December 1972</p>
+      <p>THE COUNCIL OF THE EUROPEAN COMMUNITIES,</p>
+      <p>Whereas the method of calculation should be clarified;</p>
+      <p>HAS ADOPTED THIS REGULATION:</p>
+      <p>SOLE ARTICLE</p>
+      <p>Article 10 of Regulation (EEC) No 2306/70 shall be replaced by the following text.</p>
+      <p>THIS REGULATION SHALL BE BINDING IN ITS ENTIRETY AND DIRECTLY APPLICABLE IN ALL MEMBER STATES.</p>
+      <p>DONE AT BRUSSELS, 12 DECEMBER 1972.</p>
+    </TXT_TE>
+  </div>
+</body>
+</html>`;
+
+test("parseEurlexHtmlToCombined recovers a single article from a 'SOLE ARTICLE' act", async () => {
+  const parsed = await parseEurlexHtmlToCombined(SOLE_ARTICLE_HTML, "ENG");
+
+  // No numbered "Article N" heading, but the operative text after the enacting
+  // formula is salvaged as a lone Article 1.
+  assert.equal(parsed.articles.length, 1);
+  assert.equal(parsed.articles[0].article_number, "1");
+  // The "SOLE ARTICLE" label is dropped; the operative sentence is kept.
+  assert.match(parsed.articles[0].article_html, /Article 10 of Regulation/);
+  assert.doesNotMatch(parsed.articles[0].article_html, /SOLE ARTICLE/i);
+  // The closing/binding formula and signature must not leak into the body.
+  assert.doesNotMatch(parsed.articles[0].article_html, /SHALL BE BINDING|DONE AT/i);
+  // The preamble recital is still parsed independently.
+  assert.equal(parsed.recitals.length, 1);
+});
+
+// 1990s directives number their recitals "(N) Whereas …" with a "Having regard
+// to …" citation block above and no standalone "Whereas:" heading (e.g. Directive
+// 95/46/EC). The preamble must be scanned for "(N)" markers, and the enacting
+// formula must not be swallowed into the last recital.
+const NUMBERED_WHEREAS_HTML = `<!DOCTYPE html>
+<html lang="EN">
+<head><meta name="DC.description" content="Directive 95/46/EC"></head>
+<body>
+  <div id="TexteOnly">
+    <TXT_TE>
+      <p>DIRECTIVE 95/46/EC OF THE EUROPEAN PARLIAMENT AND OF THE COUNCIL of 24 October 1995</p>
+      <p>THE EUROPEAN PARLIAMENT AND THE COUNCIL OF THE EUROPEAN UNION,</p>
+      <p>Having regard to the Treaty establishing the European Community, and in particular Article 100a thereof,</p>
+      <p>Having regard to the proposal from the Commission (1),</p>
+      <p>(1) Whereas the objectives of the Community include establishing an internal market;</p>
+      <p>(2) Whereas data-processing systems are designed to serve man;</p>
+      <p>(3) Whereas the establishment of an internal market requires the free movement of personal data;</p>
+      <p>HAVE ADOPTED THIS DIRECTIVE:</p>
+      <p>Article 1</p>
+      <p>Member States shall protect the fundamental rights of natural persons.</p>
+      <p>Article 2</p>
+      <p>This Directive is addressed to the Member States.</p>
+    </TXT_TE>
+  </div>
+</body>
+</html>`;
+
+test("parseEurlexHtmlToCombined parses '(N) Whereas' numbered recitals without a 'Whereas:' heading", async () => {
+  const parsed = await parseEurlexHtmlToCombined(NUMBERED_WHEREAS_HTML, "ENG");
+
+  // Three "(N) Whereas …" paragraphs → three numbered recitals; the "Having
+  // regard to …" citation lines above must not be mistaken for recitals.
+  assert.equal(parsed.recitals.length, 3);
+  assert.deepEqual(parsed.recitals.map((r) => r.recital_number), ["1", "2", "3"]);
+  assert.match(parsed.recitals[0].recital_text, /objectives of the Community/);
+  // The enacting formula sits between the last recital and Article 1 — it must
+  // never be folded into recital 3.
+  assert.ok(parsed.recitals.every((r) => !/HAVE ADOPTED/i.test(r.recital_text)));
+  assert.equal(parsed.articles.length, 2);
+});
+
+// Old <TXT_TE> acts carry annexes after the articles; the plaintext branch used
+// to drop them (annexes: []) and let their content bleed into the last article.
+const ANNEX_HTML = `<!DOCTYPE html>
+<html lang="EN">
+<head><meta name="DC.description" content="Council Regulation with annexes"></head>
+<body>
+  <div id="TexteOnly">
+    <TXT_TE>
+      <p>THE COUNCIL OF THE EUROPEAN COMMUNITIES,</p>
+      <p>Whereas measures are needed;</p>
+      <p>HAS ADOPTED THIS REGULATION:</p>
+      <p>Article 1</p>
+      <p>The scope is defined in Annex I.</p>
+      <p>Article 2</p>
+      <p>This Regulation shall enter into force on the third day.</p>
+      <p>ANNEX I</p>
+      <p>LIST OF PRODUCTS</p>
+      <p>Product A, Product B, Product C.</p>
+      <p>ANNEX II</p>
+      <p>Correlation table for the repealed Regulation.</p>
+    </TXT_TE>
+  </div>
+</body>
+</html>`;
+
+test("parseEurlexHtmlToCombined extracts annexes and keeps them out of the last article", async () => {
+  const parsed = await parseEurlexHtmlToCombined(ANNEX_HTML, "ENG");
+
+  // Two articles, two annexes; annex content is not swallowed into Article 2.
+  assert.equal(parsed.articles.length, 2);
+  assert.equal(parsed.annexes.length, 2);
+  assert.equal(parsed.annexes[0].annex_id, "I");
+  assert.match(parsed.annexes[0].annex_title, /ANNEX I/);
+  assert.match(parsed.annexes[0].annex_html, /Product A/);
+  assert.equal(parsed.annexes[1].annex_id, "II");
+  assert.match(parsed.annexes[1].annex_html, /Correlation table/);
+  const lastArticle = parsed.articles[parsed.articles.length - 1];
+  assert.doesNotMatch(lastArticle.article_html, /LIST OF PRODUCTS|Correlation table/);
+});
+
 test("parseEurlexHtmlToCombined keeps flat chapter and section headings out of article bodies", async () => {
   const parsed = await parseEurlexHtmlToCombined(FLAT_DIVISION_HTML, "ENG");
 
