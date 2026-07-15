@@ -1,7 +1,6 @@
-# Exclude unnecessary files from Firefox extension package
+# Exclude files that are not part of the browser extension package
 Archive.zip
 README.md
 generate-icons.html
+*.test.js
 *.md
-
-

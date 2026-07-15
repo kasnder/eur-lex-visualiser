@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LegalViz.EU",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Read EU law beautifully, and with ease",
   "browser_specific_settings": {
     "gecko": {
@@ -12,30 +12,15 @@
       }
     }
   },
-  "permissions": ["activeTab", "tabs"],
-  "host_permissions": [
-    "https://eur-lex.europa.eu/*",
-    "https://legalviz.eu/*",
-    "http://localhost/*",
-    "http://localhost:5173/*",
-    "http://127.0.0.1/*",
-    "http://127.0.0.1:5173/*"
-  ],
+  "permissions": ["activeTab"],
   "action": {
-    "default_title": "Open this EUR-Lex law in LegalViz.EU",
+    "default_title": "Open in LegalViz.EU",
     "default_icon": {
-      "16": "icon16-grey.png",
-      "48": "icon48-grey.png",
-      "128": "icon128-grey.png"
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
     }
   },
-  "content_scripts": [
-    {
-      "matches": ["https://eur-lex.europa.eu/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "background": {
     "scripts": ["background.js"],
     "service_worker": "background.js"

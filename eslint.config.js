@@ -30,7 +30,6 @@ export default defineConfig([
     'dist/**',
     '.claude/**',
     'eur-lex-api/**',
-    'extension/**',
     '**/*.html',
     '**/*_files/**',
     'backend/search/data/**',
@@ -54,6 +53,15 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+  {
+    files: ['extension/**/*.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.browser, ...globals.webextensions },
     },
   },
   {

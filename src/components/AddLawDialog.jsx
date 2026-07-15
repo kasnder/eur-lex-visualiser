@@ -142,32 +142,14 @@ export function AddLawDialog({
               <p>
                 {t("landing.extensionInline")}{" "}
                 <a
-                  href="https://chrome.google.com/webstore/detail/eur-lex-visualiser/akkfdjadggheloggnfonppfkbifanpbc"
+                  href="https://chromewebstore.google.com/detail/eur-lex-visualiser/akkfdjadggheloggnfonppfkbifanpbc"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-gray-200"
                 >
-                  Chrome
+                  Chrome / Edge / Brave
                 </a>
-                {", "}
-                <a
-                  href="https://chrome.google.com/webstore/detail/eur-lex-visualiser/akkfdjadggheloggnfonppfkbifanpbc"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-gray-200"
-                >
-                  Brave
-                </a>
-                {", "}
-                <a
-                  href="https://chrome.google.com/webstore/detail/eur-lex-visualiser/akkfdjadggheloggnfonppfkbifanpbc"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-gray-200"
-                >
-                  Edge
-                </a>
-                {t("landing.orConjunction")}
+                {" · "}
                 <a
                   href="https://addons.mozilla.org/en-US/firefox/addon/eur-lex-visualiser/"
                   target="_blank"
