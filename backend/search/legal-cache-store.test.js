@@ -6,10 +6,28 @@ const path = require("node:path");
 
 const {
   JsonLegalCacheStore,
+  containedAliasKeys,
 } = require("./legal-cache-store");
 const { buildSqliteData } = require("./build-sqlite-data");
 
 const fixturePath = path.join(__dirname, "__fixtures__", "search-fixture.json");
+
+function publicRecord(record) {
+  return {
+    celex: record?.celex,
+    title: record?.title,
+    date: record?.date,
+    eli: record?.eli,
+    type: record?.type,
+    fmxAvailable: record?.fmxAvailable,
+    fmxUnavailable: record?.fmxUnavailable,
+    enrichError: record?.enrichError,
+    eurovoc: record?.eurovoc,
+    celexYear: record?.celexYear,
+    celexNumber: record?.celexNumber,
+    aliases: record?.aliases,
+  };
+}
 
 test("legal cache store loads fixture successfully", () => {
   const store = new JsonLegalCacheStore(fixturePath);
@@ -32,6 +50,24 @@ test("legal cache store loads SQLite records without retaining excerpts", () => 
   assert.equal(store.records.every((record) => !Object.hasOwn(record, "excerpt")), true);
   assert.equal(store.getByCelex("32002L0058")?.celex, "32002L0058");
   store.close();
+});
+
+test("JSON and SQLite hydrate the same public law-record contract", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-contract-"));
+  const caseLawPath = path.join(tempDir, "case-law.json");
+  const sqlitePath = path.join(tempDir, "data.sqlite");
+  fs.writeFileSync(caseLawPath, "{}", "utf8");
+  buildSqliteData({ searchCachePath: fixturePath, caseLawCachePath: caseLawPath, outputPath: sqlitePath });
+
+  const jsonStore = new JsonLegalCacheStore(fixturePath, { preferJson: true });
+  const sqliteStore = new JsonLegalCacheStore(fixturePath, { sqlitePath, requireSqlite: true });
+  assert.equal(jsonStore.load(), true);
+  assert.equal(sqliteStore.load(), true);
+  assert.deepEqual(
+    sqliteStore.records.map((record) => publicRecord(record)),
+    jsonStore.records.map((record) => publicRecord(record))
+  );
+  sqliteStore.close();
 });
 
 test("an explicit missing SQLite path fails instead of silently loading JSON", () => {
@@ -391,9 +427,11 @@ test("legal cache store searchLaws keeps a title match ahead of an excerpt-only 
   );
 });
 
-test("legal cache store returns null for ambiguous official reference key", () => {
+test("JSON and SQLite both preserve ambiguous lookups", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-"));
   const tempPath = path.join(tempDir, "ambiguous.json");
+  const caseLawPath = path.join(tempDir, "case-law.json");
+  const sqlitePath = path.join(tempDir, "ambiguous.sqlite");
   fs.writeFileSync(tempPath, JSON.stringify({
     generatedAt: "2026-03-28T00:00:00.000Z",
     count: 2,
@@ -418,13 +456,69 @@ test("legal cache store returns null for ambiguous official reference key", () =
       },
     ],
   }, null, 2));
+  fs.writeFileSync(caseLawPath, "{}", "utf8");
+  buildSqliteData({ searchCachePath: tempPath, caseLawCachePath: caseLawPath, outputPath: sqlitePath });
 
-  const store = new JsonLegalCacheStore(tempPath);
-  store.load();
-  assert.equal(store.getByOfficialReference({
-    actType: "regulation",
-    year: "2020",
-    number: "123",
-  }), null);
-  assert.equal(store.getByEli("http://data.europa.eu/eli/reg/2020/123/oj"), null);
+  const stores = [
+    new JsonLegalCacheStore(tempPath, { preferJson: true }),
+    new JsonLegalCacheStore(tempPath, { sqlitePath, requireSqlite: true }),
+  ];
+  for (const store of stores) {
+    store.load();
+    assert.equal(store.getByOfficialReference({
+      actType: "regulation",
+      year: "2020",
+      number: "123",
+    }), null);
+    assert.equal(store.getByEli("http://data.europa.eu/eli/reg/2020/123/oj"), null);
+    store.close();
+  }
+});
+
+test("containedAliasKeys yields contiguous multi-word phrases, longest first", () => {
+  const keys = containedAliasKeys("digital services act obligations");
+
+  // Both the spaced and compact form of each sub-phrase are produced so a query
+  // can hit either alias variant stored in byAlias.
+  assert.ok(keys.includes("digital services act"));
+  assert.ok(keys.includes("digitalservicesact"));
+
+  // Longest sub-phrases come first so a more specific alias outranks a shorter
+  // one when several are added before the MiniSearch stage.
+  assert.equal(keys[0], "digital services act");
+
+  // The full query is handled by the exact-alias lookup, and single words are
+  // deliberately excluded to avoid broad, low-precision matches.
+  assert.ok(!keys.includes("digital services act obligations"));
+  assert.ok(!keys.includes("digital"));
+});
+
+test("containedAliasKeys stays bounded and deduplicated", () => {
+  // Fewer than three words cannot contain a shorter contiguous sub-phrase, so
+  // nothing is generated (the exact-alias path covers the whole query itself).
+  assert.deepEqual(containedAliasKeys(""), []);
+  assert.deepEqual(containedAliasKeys("oneword"), []);
+  assert.deepEqual(containedAliasKeys("two words"), []);
+
+  // Repeated phrases collapse to a single spaced/compact pair.
+  assert.deepEqual(containedAliasKeys("act act act"), ["act act", "actact"]);
+});
+
+test("searchLaws recovers a known alias embedded in a modifier-heavy query", () => {
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true });
+  assert.equal(store.load(), true);
+
+  // Each query carries an extra modifier token that is absent from the target
+  // law's title, so the exact-alias and strict AND paths cannot surface it; the
+  // contiguous-alias recovery keeps the known law at rank one.
+  const expectations = [
+    ["digital services act obligations", "32022R2065"],
+    ["digital markets act rules", "32022R1925"],
+    ["data governance act scope", "32022R0868"],
+  ];
+  for (const [query, expectedCelex] of expectations) {
+    const results = store.searchLaws(query, { limit: 5 }).map((result) => result.celex);
+    assert.equal(results[0], expectedCelex, `${query} should surface ${expectedCelex} first`);
+  }
+  store.close();
 });
