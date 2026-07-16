@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { GeneralRecitals } from "../RelatedRecitals.jsx";
 import { RelatedCaseLaw } from "../RelatedCaseLaw.jsx";
 import { CrossReferences } from "../CrossReferences.jsx";
+import { CitedByPanel } from "../CitedByPanel.jsx";
 
 // Count the references badge shows for an article: forward + external + back.
 function countReferences(crossReferences, articleNumber) {
@@ -84,6 +85,7 @@ export function LawViewerContextRail({
   onSelectArticle,
   onOpenExternalReference,
   isExternalReferencePending,
+  onOpenLaw,
   t,
 }) {
   const [tab, setTab] = useState("recitals");
@@ -94,6 +96,7 @@ export function LawViewerContextRail({
     { id: "recitals", label: t("lawViewer.tabRecitals"), count: recitalsCount },
     { id: "cases", label: t("lawViewer.tabCaseLaw"), count: null },
     { id: "references", label: t("lawViewer.tabReferences"), count: refsCount },
+    { id: "citedBy", label: t("lawViewer.tabCitedBy"), count: null },
   ];
 
   return (
@@ -167,6 +170,17 @@ export function LawViewerContextRail({
           ) : (
             <p className="py-6 text-center text-xs text-gray-400 dark:text-gray-500">{t("lawViewer.tabEmptyReferences")}</p>
           )
+        ) : null}
+
+        {tab === "citedBy" ? (
+          <div className={BARE}>
+            <CitedByPanel
+              celex={celex}
+              articleNumber={articleNumber}
+              currentLang={currentLang}
+              onOpenLaw={onOpenLaw}
+            />
+          </div>
         ) : null}
       </div>
     </div>
