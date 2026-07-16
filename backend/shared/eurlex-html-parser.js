@@ -127,7 +127,7 @@ function formatStructuredTitle(text, langConfig) {
     .replace(/\b(Eu|Ec|Eec|Euratom|Ue|We)\b/gi, (match) => match.toUpperCase());
 }
 
-function parseStructuredHtmlDefinitions(articleHtml, langConfig, parser) {
+function parseStructuredHtmlDefinitions(articleHtml, langConfig, parser, sourceArticle) {
   const definitions = [];
   const doc = parser.parseFromString(articleHtml, "text/html");
   const tables = doc.querySelectorAll("table");
@@ -147,6 +147,8 @@ function parseStructuredHtmlDefinitions(articleHtml, langConfig, parser) {
         definitions.push({
           term: normalizeText(match[1]),
           definition: normalizeText(text.replace(match[0], "")),
+          sourceArticle,
+          sourcePoint: normalizeText(cells[0].textContent) || null,
         });
       }
     }
@@ -321,7 +323,12 @@ function parseStructuredHtmlToCombined(document, langCode, langConfig, injectCro
 
   const definitionsArticle = articles.find((article) => article.article_title && langConfig?.definition?.test(article.article_title));
   const definitions = definitionsArticle
-    ? parseStructuredHtmlDefinitions(definitionsArticle.article_html, langConfig, parser)
+    ? parseStructuredHtmlDefinitions(
+      definitionsArticle.article_html,
+      langConfig,
+      parser,
+      definitionsArticle.article_number
+    )
     : [];
 
   recitals.sort((left, right) => {
@@ -348,14 +355,19 @@ function parseDefinitions(article) {
 
   return article.bodyParagraphs
     .map((paragraph) => normalizeText(paragraph))
-    .map((paragraph) => paragraph.match(/^\(([a-z])\)\s+(.*)$/i)?.[2] || null)
+    .map((paragraph) => {
+      const match = paragraph.match(/^\(([a-z0-9]+)\)\s+(.*)$/i);
+      return match ? { entryText: match[2], sourcePoint: match[1] } : null;
+    })
     .filter(Boolean)
-    .map((entryText) => {
+    .map(({ entryText, sourcePoint }) => {
       const quoted = entryText.match(/^["“'‘]?([^"”'’]+)["”'’]?\s+means\s+(.+)$/i);
       if (quoted) {
         return {
           term: normalizeText(quoted[1]),
           definition: normalizeText(quoted[2]).replace(/;$/, ""),
+          sourceArticle: article.article_number,
+          sourcePoint,
         };
       }
 
@@ -364,6 +376,8 @@ function parseDefinitions(article) {
         return {
           term: normalizeText(means[1]).replace(/^["“'‘]|["”'’]$/g, ""),
           definition: normalizeText(means[2]).replace(/;$/, ""),
+          sourceArticle: article.article_number,
+          sourcePoint,
         };
       }
 
@@ -1082,6 +1096,10 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
   // Populate the crossReferences map (empty as built by each branch) so the
   // CrossReferences panel works for HTML laws, not just FMX ones.
   const withCrossReferences = (parsed) => {
+    parsed.definitions = (parsed.definitions || []).map((entry) => ({
+      ...entry,
+      references: extractCrossRefsFromText(entry.definition || "", langConfig),
+    }));
     parsed.crossReferences = buildHtmlCrossReferences({
       articles: parsed.articles,
       recitals: parsed.recitals,
@@ -1090,7 +1108,10 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
       langConfig,
     });
     const checked = enforceInternalReferenceIntegrity(parsed);
-    repairCorroboratedTruncatedInstrumentIdentifiers(Object.values(checked.crossReferences).flat());
+    repairCorroboratedTruncatedInstrumentIdentifiers([
+      ...Object.values(checked.crossReferences).flat(),
+      ...checked.definitions.flatMap((entry) => entry.references || []),
+    ]);
     checked.parserVersion = PARSER_VERSION;
     return checked;
   };
@@ -1265,7 +1286,14 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
     // through that helper, so a stamp there would miss every pre-2004 OJ act.
     parserVersion: PARSER_VERSION,
   });
-  repairCorroboratedTruncatedInstrumentIdentifiers(Object.values(parsed.crossReferences).flat());
+  parsed.definitions = parsed.definitions.map((entry) => ({
+    ...entry,
+    references: extractCrossRefsFromText(entry.definition || "", langConfig),
+  }));
+  repairCorroboratedTruncatedInstrumentIdentifiers([
+    ...Object.values(parsed.crossReferences).flat(),
+    ...parsed.definitions.flatMap((entry) => entry.references || []),
+  ]);
   return parsed;
 }
 

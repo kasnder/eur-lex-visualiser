@@ -34,6 +34,7 @@ import { useRecitalMap } from "../hooks/law-viewer/useRecitalMap.js";
 import { useProcessedLawHtml } from "../hooks/law-viewer/useProcessedLawHtml.js";
 import { useLawViewerDerivedState } from "../hooks/law-viewer/useLawViewerDerivedState.js";
 import { useLawViewerPrint } from "../hooks/law-viewer/useLawViewerPrint.js";
+import { useDefinitionComparison } from "../hooks/law-viewer/useDefinitionComparison.js";
 import { EU_LANGUAGES } from "../utils/formexApi.js";
 import { getCanonicalLawRoute } from "../utils/lawRouting.js";
 import { buildChapterEyebrow } from "../utils/law-viewer/tocFormat.js";
@@ -45,6 +46,7 @@ import { DefinitionTooltip } from "./law-viewer/DefinitionTooltip.jsx";
 import { LawViewerReadingFooter } from "./law-viewer/LawViewerReadingFooter.jsx";
 import { LawViewerContextRail } from "./law-viewer/LawViewerContextRail.jsx";
 import { LawOverviewPage } from "./law-viewer/LawOverviewPage.jsx";
+import { DefinitionComparisonSheet } from "./law-viewer/DefinitionComparisonSheet.jsx";
 
 export function LawViewer() {
   const { locale: routeLocale, slug, key, kind, id } = useParams();
@@ -57,6 +59,8 @@ export function LawViewer() {
   const [isRailExpanded, setIsRailExpanded] = React.useState(false);
   const importCelex = searchParams.get("celex");
   const sourceUrl = searchParams.get("sourceUrl");
+  const definitionTerm = searchParams.get("definition") || "";
+  const definitionSource = searchParams.get("definitionSource") || "";
   const { allLaws, libraryVersion } = useLandingLibrary();
 
   const preferences = useLawViewerPreferences({
@@ -120,6 +124,7 @@ export function LawViewer() {
     data: primaryDocument.data,
     selected: selection.selected,
     selectedEntry: primarySelectedEntry,
+    activeDefinitionTerm: definitionTerm,
   });
   const secondarySelectedEntry = useMemo(
     () => getSelectedEntry(secondaryDocument.data, selection.selected),
@@ -161,6 +166,43 @@ export function LawViewer() {
     locale,
     t,
   });
+  const definitionComparisonState = useDefinitionComparison(definitionTerm, t);
+
+  const openDefinitionComparison = React.useCallback(({ term }) => {
+    const normalizedTerm = String(term || "").trim();
+    if (!normalizedTerm) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("definition", normalizedTerm);
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const closeDefinitionComparison = React.useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("definition");
+    nextParams.delete("definitionSource");
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const definitionComparison = definitionTerm ? {
+    term: definitionTerm,
+    comparison: definitionComparisonState.comparison,
+    selectedSource: definitionSource,
+    loading: definitionComparisonState.loading,
+    error: definitionComparisonState.error,
+    onRetry: definitionComparisonState.retry,
+    onClose: closeDefinitionComparison,
+    onOpenSource: (celex, sourceArticle, sourcePoint) => {
+      const sourceKey = `${String(celex || "").toUpperCase()}:${String(sourceArticle ?? "")}${sourcePoint ? `:${String(sourcePoint)}` : ""}`;
+      const comparisonParams = new URLSearchParams({
+        definition: definitionTerm,
+        definitionSource: sourceKey,
+      });
+      interactions.handleOpenLawByCelex(celex, {
+        articleNumber: sourceArticle,
+        queryParams: comparisonParams,
+      });
+    },
+  } : null;
 
   const { secondaryLang, setSecondaryLanguage } = preferences;
   useEffect(() => {
@@ -298,7 +340,7 @@ export function LawViewer() {
           hasCelex={derived.hasCelex}
           onToggleSecondLanguage={derived.hasCelex && !derived.isLegacyHtmlFallback ? preferences.toggleSecondLanguage : null}
           isSideBySide={derived.isSideBySide}
-          searchModes={["laws", "matches", "current"]}
+          searchModes={["laws", "matches", "definitions", "current"]}
           defaultSearchMode="current"
           persistenceKey="legalviz-law-reader-search"
         />
@@ -390,7 +432,12 @@ export function LawViewer() {
                     t={t}
                   />
 
-                  <DefinitionTooltip t={t} />
+                  <DefinitionTooltip
+                    t={t}
+                    onCompareDefinition={displayedFormexLang === "EN" || displayedFormexLang === "ENG"
+                      ? openDefinitionComparison
+                      : null}
+                  />
 
                   <LawViewerReadingFooter
                     selected={selection.selected}
@@ -489,7 +536,7 @@ export function LawViewer() {
             t={t}
           />
 
-          {selection.selected.kind === "article" && derived.hasLoadedContent ? (
+          {(selection.selected.kind === "article" || definitionComparison) && derived.hasLoadedContent ? (
             <aside className="order-3 hidden xl:block xl:w-80 xl:shrink-0">
               <div className="xl:sticky xl:top-20">
                 <LawViewerContextRail
@@ -506,6 +553,7 @@ export function LawViewer() {
                   onOpenExternalReference={interactions.handleOpenExternalLaw}
                   isExternalReferencePending={interactions.isExternalReferencePending}
                   onOpenLaw={interactions.handleOpenLawByCelex}
+                  definitionComparison={definitionComparison}
                   t={t}
                 />
               </div>
@@ -523,6 +571,11 @@ export function LawViewer() {
           recitals: primaryDocument.data.recitals?.length || 0,
           annexes: primaryDocument.data.annexes?.length || 0,
         }}
+      />
+      <DefinitionComparisonSheet
+        {...definitionComparison}
+        currentCelex={source.effectiveCelex}
+        t={t}
       />
     </div>
   );

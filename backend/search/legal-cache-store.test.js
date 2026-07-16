@@ -606,6 +606,72 @@ test("SQLite excerpt search handles punctuation and reads case-law details", () 
   store.close();
 });
 
+test("definition search and comparison work in JSON and SQLite stores", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-definitions-"));
+  const searchPath = path.join(tempDir, "search.json");
+  const caseLawPath = path.join(tempDir, "case-law.json");
+  const definitionsPath = path.join(tempDir, "definitions.json");
+  const sqlitePath = path.join(tempDir, "data.sqlite");
+  fs.writeFileSync(searchPath, JSON.stringify({ records: [
+    { celex: "32022L2555", title: "NIS 2 Directive", type: "directive", date: "2022-12-14", eli: "http://data.europa.eu/eli/dir/2022/2555/oj" },
+    { celex: "32022L2557", title: "CER Directive", type: "directive", date: "2022-12-14", eli: "http://data.europa.eu/eli/dir/2022/2557/oj" },
+    { celex: "32024R0001", title: "Imported Risk Regulation", type: "regulation", date: "2024-01-01" },
+  ] }), "utf8");
+  fs.writeFileSync(caseLawPath, "{}", "utf8");
+  fs.writeFileSync(definitionsPath, JSON.stringify({ occurrences: [
+    { occurrenceId: "risk-a", normalizedTerm: "risk", term: "risk", definition: "the potential for loss", definitionHash: "a", classification: "substantive", celex: "32022L2555", sourceArticle: "6" },
+    { occurrenceId: "risk-b", normalizedTerm: "risk", term: "risk", definition: "a possible harmful event", definitionHash: "b", classification: "hybrid", celex: "32022L2557", sourceArticle: "3" },
+    { occurrenceId: "risk-import", normalizedTerm: "risk", term: "risk", definition: "risk as defined in Article 6 of Directive (EU) 2022/2555", definitionHash: "import", classification: "imported", celex: "32024R0001", sourceArticle: "2", referenceEdges: [{ edgeType: "definition_import", sourceOccurrenceId: "risk-import", targetCelex: "32022L2555", targetArticle: "6", targetOccurrenceId: "risk-a", resolution: "definition" }] },
+    { occurrenceId: "stable-a", normalizedTerm: "stable", term: "stable", definition: "unlikely to change", definitionHash: "stable", classification: "substantive", celex: "32022L2555", sourceArticle: "2" },
+  ] }), "utf8");
+  buildSqliteData({
+    searchCachePath: searchPath, caseLawCachePath: caseLawPath, definitionsPath,
+    citationGraphPath: path.join(tempDir, "absent-graph.json"), outputPath: sqlitePath, log: () => {},
+  });
+
+  const stores = [
+    new JsonLegalCacheStore(searchPath, { preferJson: true, definitionsPath }),
+    new JsonLegalCacheStore(searchPath, { sqlitePath, requireSqlite: true }),
+  ];
+  for (const store of stores) {
+    assert.equal(store.load(), true);
+    const results = store.searchDefinitions("risk");
+    assert.equal(results.length, 1);
+    assert.equal(results[0].lawCount, 3);
+    assert.equal(results[0].substantiveLawCount, 2);
+    assert.equal(results[0].importCount, 1);
+    assert.equal(results[0].wordingCount, 2);
+    assert.equal(results[0].representativeSource.celex, "32022L2555");
+    assert.equal(store.searchDefinitions("stable", { filter: "different" }).length, 0);
+    assert.equal(store.searchDefinitions("stable", { filter: "reused" }).length, 0);
+    assert.equal(store.searchDefinitions("", { filter: "different" })[0].normalizedTerm, "risk");
+    assert.equal(store.searchDefinitions("", { filter: "reused" })[0].importCount, 1);
+    if (store.database) {
+      const usageStatement = store.definitionUsageStatement;
+      store.definitionUsageStatement = { all() { throw new Error("search must not load usage edges"); } };
+      assert.equal(store.searchDefinitions("risk").length, 1);
+      store.definitionUsageStatement = usageStatement;
+    }
+    const comparison = store.compareDefinitions(" ‘RISK’ ");
+    assert.equal(comparison.occurrences.length, 3);
+    assert.equal(comparison.wordings.length, 2);
+    assert.equal(comparison.importCount, 1);
+    assert.equal(comparison.usageEdges.length, 1);
+    assert.equal(comparison.occurrences[0].law.title, "NIS 2 Directive");
+    store.close();
+  }
+});
+
+test("definition methods distinguish an unavailable optional index", () => {
+  const store = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    definitionsPath: path.join(os.tmpdir(), `missing-definitions-${process.pid}.json`),
+  });
+  assert.equal(store.load(), true);
+  assert.equal(store.getDefinitionsStatus().ready, false);
+  assert.throws(() => store.searchDefinitions("risk"), { code: "definition_index_unavailable" });
+});
+
 test("legal cache store searchLaws keeps a title match ahead of an excerpt-only match for the same term", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-excerpt-boost-"));
   const tempPath = path.join(tempDir, "excerpt-boost.json");

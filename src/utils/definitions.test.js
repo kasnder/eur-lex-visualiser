@@ -28,6 +28,13 @@ describe("injectDefinitionTooltips", () => {
     expect(result).not.toContain("title=");
   });
 
+  it("makes injected definition terms keyboard accessible", () => {
+    const result = injectDefinitionTooltips("<p>The controller acts.</p>", DEFINITIONS);
+    expect(result).toContain('role="button"');
+    expect(result).toContain('tabindex="0"');
+    expect(result).toContain('aria-haspopup="dialog"');
+  });
+
   it("returns html unchanged when definitions array is empty", () => {
     const html = "<p>Some text.</p>";
     expect(injectDefinitionTooltips(html, [])).toBe(html);
@@ -65,6 +72,25 @@ describe("injectDefinitionTooltips", () => {
     expect(result).not.toContain('class="defined-term"');
   });
 
+  it("highlights the selected entry in a definitions article", () => {
+    const html = '<p class="oj-sti-art">Definitions</p><ol><li class="fmx-list-item" data-marker="(1)">\u2018controller\u2019 means a person</li><li class="fmx-list-item" data-marker="(2)">\u2018processor\u2019 means another person</li></ol>';
+    const result = injectDefinitionTooltips(html, [
+      { term: "controller", definition: "a person", sourcePoint: "(1)" },
+      { term: "processor", definition: "another person", sourcePoint: "(2)" },
+    ], { skipDefinitionsArticle: true, activeTerm: "controller" });
+
+    expect(result).toContain('class="definition-comparison-active fmx-list-item" data-marker="(1)"');
+    expect(result).not.toContain('class="definition-comparison-active fmx-list-item" data-marker="(2)"');
+  });
+
+  it("strongly highlights the compared term in ordinary text", () => {
+    const result = injectDefinitionTooltips("<p>Controller duties.</p>", DEFINITIONS, {
+      activeTerm: "controller",
+    });
+
+    expect(result).toContain('class="defined-term defined-term--active"');
+  });
+
   it("does NOT skip articles that just mention 'definition' in text", () => {
     const html = "<p>This is about the definition of scope.</p>";
     const result = injectDefinitionTooltips(html, DEFINITIONS, { skipDefinitionsArticle: true });
@@ -82,6 +108,27 @@ describe("injectDefinitionTooltips", () => {
     const result = injectDefinitionTooltips(html, defs);
     // "personal data" should match as one term, not "data" separately
     expect(result).toContain(">personal data</span>");
+  });
+
+  it("does not nest a shorter definition inside an active multi-word definition", () => {
+    const defs = [
+      { term: "data", definition: "information" },
+      { term: "personal data", definition: "data about a person" },
+    ];
+    const result = injectDefinitionTooltips("<p>This concerns personal data.</p>", defs, {
+      activeTerm: "personal data",
+    });
+
+    expect(result.match(/\bclass="[^"]*\bdefined-term\b/g)).toHaveLength(1);
+    expect(result).toContain(">personal data</span>");
+  });
+
+  it("leaves definition terms inside links as links only", () => {
+    const html = '<p>See the <a href="#controller">controller</a>.</p>';
+    const result = injectDefinitionTooltips(html, DEFINITIONS);
+
+    expect(result).toBe(html);
+    expect(result).not.toContain('role="button"');
   });
 
   it("handles inflected languages (Polish)", () => {
