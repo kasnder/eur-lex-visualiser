@@ -536,6 +536,31 @@ describe("extractCrossRefsFromText — multilingual instruments", () => {
     }));
   });
 
+  it("repairs a footnote digit flattened onto a two-digit historical year", () => {
+    const refs = extractCrossRefsFromText(
+      "Regulation (EEC) No 4136/896; Regulation (EEC) No 4136/86",
+      getLangConfig("EN"),
+    );
+    expect(refs).toContainEqual(expect.objectContaining({
+      target: "4136/86",
+      actCelex: "31986R4136",
+    }));
+  });
+
+  it("repairs a historical year footnote when the adjacent citation date corroborates it", () => {
+    const refs = extractCrossRefsFromText(
+      "Council Regulation No 136/661 EEC of 22 September 1966; " +
+      "Council Regulation (EEC) No 729/702 of 21 April 1970; " +
+      "Council Regulation (EEC) No 827/681 of 28 June 1968.",
+      getLangConfig("EN"),
+    );
+    expect(refs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target: "136/66", actCelex: "31966R0136" }),
+      expect.objectContaining({ target: "729/70", actCelex: "31970R0729" }),
+      expect.objectContaining({ target: "827/68", actCelex: "31968R0827" }),
+    ]));
+  });
+
   it("repairs a two-digit year split across adjacent old HTML fragments", () => {
     const refs = extractCrossRefsFromText("Council Regulation (EEC) No 2894/7 // 9 ,", getLangConfig("EN"));
     expect(refs).toContainEqual(expect.objectContaining({
@@ -550,6 +575,17 @@ describe("extractCrossRefsFromText — multilingual instruments", () => {
     expect(refs).toContainEqual(expect.objectContaining({
       target: "2192/81",
       actCelex: "31981R2192",
+    }));
+  });
+
+  it("repairs a year-first directive when its adjacent OJ date corroborates the year", () => {
+    const refs = extractCrossRefsFromText(
+      "Directive No 667/654/EEC OJ No 263, 30 October 1967, p. 6",
+      getLangConfig("EN"),
+    );
+    expect(refs).toContainEqual(expect.objectContaining({
+      target: "67/654/EEC",
+      actCelex: "31967L0654",
     }));
   });
 
@@ -622,6 +658,44 @@ describe("extractCrossRefsFromText — multilingual instruments", () => {
     const refs = extractCrossRefsFromText("Council Regulation 2040/2000", getLangConfig("EN"));
     expect(refs).toContainEqual(expect.objectContaining({
       actCelex: "32000R2040",
+    }));
+  });
+
+  it("resolves an unlabelled historical short form when the same text corroborates it", () => {
+    const refs = extractCrossRefsFromText(
+      "Regulation (EEC) No 1408/71; Regulation 1408/71.",
+      getLangConfig("EN"),
+    );
+    expect(refs.filter((ref) => ref.target === "1408/71")).toEqual([
+      expect.objectContaining({ actCelex: "31971R1408" }),
+    ]);
+  });
+
+  it("repairs a missing identifier digit only when the complete form is locally corroborated", () => {
+    const refs = extractCrossRefsFromText(
+      "Regulation (EC) No 1493/199; Regulation (EC) No 1493/1999.",
+      getLangConfig("EN"),
+    );
+    expect(refs.filter((ref) => ref.target === "1493/1999")).toEqual([
+      expect.objectContaining({ actCelex: "31999R1493" }),
+    ]);
+  });
+});
+
+describe("parseFmxToCombined — preamble citation context", () => {
+  it("uses a fully-qualified visa citation to resolve a recital short form", () => {
+    const xml =
+      `<ACT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://formex.publications.europa.eu/schema/formex-05.59-20170418.xd">` +
+      `<BIB.INSTANCE><LG.DOC>EN</LG.DOC></BIB.INSTANCE>` +
+      `<PREAMBLE><GR.VISA><VISA><P>Having regard to Council Regulation (EC) No 3286/94.</P></VISA></GR.VISA>` +
+      `<GR.CONSID><CONSID><NP><NO.P>(1)</NO.P><TXT>That investigation was not conducted under Regulation 3286/94.</TXT></NP></CONSID></GR.CONSID></PREAMBLE>` +
+      `<ENACTING.TERMS><DIVISION><ARTICLE IDENTIFIER="001"><TI.ART>Article 1</TI.ART><ALINEA><P>Text.</P></ALINEA></ARTICLE></DIVISION></ENACTING.TERMS>` +
+      `</ACT>`;
+    const result = parseFmxToCombined(xml);
+    expect(result.crossReferences.preamble).toContainEqual(expect.objectContaining({ actCelex: "31994R3286" }));
+    expect(result.crossReferences.recital_1).toContainEqual(expect.objectContaining({
+      target: "3286/94",
+      actCelex: "31994R3286",
     }));
   });
 });

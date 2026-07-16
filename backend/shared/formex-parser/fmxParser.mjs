@@ -33,7 +33,7 @@ import {
  * Bump this whenever the parser output changes (new fields, bug fixes, etc.)
  * so that cached parsed results are automatically re-parsed from raw XML.
  */
-export const PARSER_VERSION = 14;
+export const PARSER_VERSION = 16;
 
 // ---------------------------------------------------------------------------
 // FMX → HTML conversion helpers
@@ -538,7 +538,7 @@ function inferExternalActType(raw = "") {
   return null;
 }
 
-function normalizeFlattenedFootnoteIdentifier(identifier = "", followingText = "") {
+function normalizeFlattenedFootnoteIdentifier(identifier = "", followingText = "", citation = "") {
   // Formex prose can flatten a footnote marker directly onto a four-digit year:
   // "Regulation (EC) No 1864/2004" + note 2 becomes "1864/20042". A five-
   // digit tail beginning with a plausible 19xx/20xx year has no valid EU
@@ -552,7 +552,36 @@ function normalizeFlattenedFootnoteIdentifier(identifier = "", followingText = "
   // than a separate numbered provision.
   const splitYear = String(identifier).match(/^(\d{1,4})\/(\d)$/);
   const continuation = String(followingText).match(/^\s*(?:\/\/\s*)?(\d)(?=\s*(?:[,.;)]|\(\d+\)))/);
-  return splitYear && continuation ? `${splitYear[1]}/${splitYear[2]}${continuation[1]}` : identifier;
+  if (splitYear && continuation) return `${splitYear[1]}/${splitYear[2]}${continuation[1]}`;
+
+  // Old Regulation/Decision text can flatten a footnote marker onto a
+  // two-digit year: "No 729/702 ... 21 April 1970".  The date immediately
+  // following the citation makes the repair bounded: delete one digit only
+  // when exactly one result matches that year.  Keep directives out of this
+  // branch because their normal order is year/number and is handled below.
+  const numberFirstFootnote = String(identifier).match(/^(\d{3,4})\/(\d{3})(\/[^/\s]+)?$/);
+  const citedYear = String(followingText).slice(0, 180).match(/\b(?:19|20)(\d{2})\b/);
+  if (numberFirstFootnote && citedYear && inferExternalActType(citation) !== "directive") {
+    const candidates = [...new Set([...numberFirstFootnote[2]].map((_, index) => (
+      `${numberFirstFootnote[2].slice(0, index)}${numberFirstFootnote[2].slice(index + 1)}`
+    )))].filter((year) => year === citedYear[1]);
+    if (candidates.length === 1) return `${numberFirstFootnote[1]}/${candidates[0]}${numberFirstFootnote[3] || ""}`;
+  }
+
+  // A few early directives have a footnote digit flattened into their
+  // year-first two-digit identifier ("667/654/EEC" for "67/654/EEC"). The
+  // immediately following Official Journal publication year supplies strict
+  // corroboration: only remove a digit when exactly one possible two-digit
+  // year agrees with that date.
+  const yearFirstFootnote = String(identifier).match(/^(\d{3})\/(\d{3,4})(\/[^/\s]+)?$/);
+  const ojYear = String(followingText).slice(0, 180).match(/\b(?:19|20)(\d{2})\b/);
+  if (yearFirstFootnote && ojYear) {
+    const candidates = [...new Set([...yearFirstFootnote[1]].map((_, index) => (
+      `${yearFirstFootnote[1].slice(0, index)}${yearFirstFootnote[1].slice(index + 1)}`
+    )))].filter((year) => year === ojYear[1]);
+    if (candidates.length === 1) return `${candidates[0]}/${yearFirstFootnote[2]}${yearFirstFootnote[3] || ""}`;
+  }
+  return identifier;
 }
 
 function isClearlyNationalInstrumentContext(text, index) {
@@ -581,22 +610,25 @@ function parseExternalLawMeta(raw, target, { ecscAuthority = false, institutiona
   const actType = inferExternalActType(raw);
   const hasNo = /\bN(?:o)?\.?\s/i.test(raw);
   const allowHistoricalNoLabel = /\(\s*(?:EEC|EC|CEE)\s*\)/i.test(raw);
-  const actCelex = resolveInstrumentCelex({
+  // A three-digit tail on a number-first historical instrument is commonly a
+  // footnote digit flattened into its two-digit year. Do not let the generic
+  // resolver silently reinterpret it as a different year; a later document
+  // corroboration pass may repair it when there is exact local evidence.
+  const malformedHistoricalYear = /^\d{3,4}\/\d{3}$/.test(String(target || ""))
+    && !/^(?:19|20)\d{2}\//.test(String(target || ""));
+  const resolverInput = {
     actType,
     identifier: target,
     hasNo,
     allowHistoricalNoLabel,
     ecscAuthority,
     institutionalIssuer,
-  });
-  const { year, number, suffix } = parseInstrumentIdentifier({
-    actType,
-    identifier: target,
-    hasNo,
-    allowHistoricalNoLabel,
-    ecscAuthority,
-    institutionalIssuer,
-  });
+  };
+  const actCelex = malformedHistoricalYear ? null : resolveInstrumentCelex(resolverInput);
+  const parsed = malformedHistoricalYear
+    ? { year: null, number: null, suffix: null }
+    : parseInstrumentIdentifier(resolverInput);
+  const { year, number, suffix } = parsed;
 
   return {
     actType,
@@ -606,6 +638,114 @@ function parseExternalLawMeta(raw, target, { ecscAuthority = false, institutiona
     number,
     suffix,
   };
+}
+
+/**
+ * A legal act commonly gives the full institutional form once, then repeats a
+ * short form such as "Regulation 1408/71". The number/year order is genuinely
+ * ambiguous for old instruments, so never guess it in isolation. Within one
+ * parsed document, though, an exact same-type/same-identifier match is safe
+ * when every resolved occurrence names the same CELEX act.
+ */
+export function repairCorroboratedTruncatedInstrumentIdentifiers(refs) {
+  for (const ref of refs) {
+    if (
+      ref.type !== "external"
+      || !ref.actType
+      || ref.actCelex
+      || ref.externalInstitutional
+      || ref.externalNational
+      || ref.externalCaseLaw
+    ) continue;
+
+    const candidates = [...new Map(refs
+      .filter((candidate) => (
+        candidate.type === "external"
+        && candidate.actType === ref.actType
+        && candidate.target === ref.target
+        && candidate.actCelex
+        && !candidate.externalInstitutional
+        && !candidate.externalNational
+        && !candidate.externalCaseLaw
+      ))
+      .map((candidate) => [candidate.actCelex, candidate])).values()];
+
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0];
+    Object.assign(ref, {
+      actCelex: candidate.actCelex,
+      identifier: candidate.identifier,
+      year: candidate.year,
+      number: candidate.number,
+      suffix: candidate.suffix,
+    });
+  }
+
+  // A dropped digit can leave an otherwise valid identifier ("1493/199" for
+  // "1493/1999"). As with every other repair here, require one uniquely
+  // corroborated same-type citation in the same document; never infer it from
+  // the damaged token in isolation.
+  const isOmissionVariant = (shortValue, longValue) => {
+    if (shortValue.length > longValue.length || longValue.length - shortValue.length > 2) return false;
+    let shortIndex = 0;
+    for (const char of longValue) if (char === shortValue[shortIndex]) shortIndex += 1;
+    return shortIndex === shortValue.length;
+  };
+  for (const ref of refs) {
+    if (ref.type !== "external" || ref.actCelex || !ref.actType || !/^\d{1,4}\/\d{1,4}(?:\/[A-Z]+)?$/i.test(ref.target || "")) continue;
+    const candidates = [...new Map(refs.filter((candidate) => {
+      if (candidate.type !== "external" || candidate.actType !== ref.actType || !candidate.actCelex) return false;
+      const shortParts = String(ref.target).split("/");
+      const longParts = String(candidate.target || "").split("/");
+      return shortParts.length === longParts.length
+        && shortParts.every((part, index) => isOmissionVariant(part, longParts[index]))
+        && shortParts.some((part, index) => part !== longParts[index]);
+    }).map((candidate) => [candidate.actCelex, candidate])).values()];
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0];
+    Object.assign(ref, {
+      target: candidate.target,
+      actCelex: candidate.actCelex,
+      identifier: candidate.identifier,
+      year: candidate.year,
+      number: candidate.number,
+      suffix: candidate.suffix,
+    });
+  }
+
+  // A superscript footnote may be flattened into a two-digit historical year
+  // at an arbitrary position ("4136/896" instead of "4136/86"). It would be
+  // unsafe to decide which digit is the footnote from that token alone. Repair
+  // only when deleting one digit yields a uniquely corroborated, resolved
+  // same-type citation elsewhere in this document.
+  for (const ref of refs) {
+    if (ref.type !== "external" || ref.actCelex || !ref.actType) continue;
+    const match = String(ref.target || "").match(/^(\d{3,4})\/(\d{3})$/);
+    if (!match) continue;
+    const [number, yearWithFootnote] = match.slice(1);
+    const possibleTargets = new Set([...yearWithFootnote].map((_, index) => (
+      `${number}/${yearWithFootnote.slice(0, index)}${yearWithFootnote.slice(index + 1)}`
+    )));
+    const candidates = [...new Map(refs
+      .filter((candidate) => (
+        candidate.type === "external"
+        && candidate.actType === ref.actType
+        && possibleTargets.has(candidate.target)
+        && candidate.actCelex
+      ))
+      .map((candidate) => [candidate.actCelex, candidate])).values()];
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0];
+    Object.assign(ref, {
+      target: candidate.target,
+      actCelex: candidate.actCelex,
+      identifier: candidate.identifier,
+      year: candidate.year,
+      number: candidate.number,
+      suffix: candidate.suffix,
+    });
+  }
+  return refs;
 }
 
 // Canonical dedup key for a cross-reference. Crucially includes articleNumber so
@@ -866,7 +1006,7 @@ export function extractCrossRefsFromText(text, lang) {
     const institutionalContext = text.slice(Math.max(0, m.index - 120), m.index + 220);
     const ecscAuthority = /\bHigh Authority\b/i.test(text.slice(Math.max(0, m.index - 80), m.index + 80));
     const institutionalIssuer = hasInstitutionalIssuerContext(text, m.index);
-    const target = normalizeFlattenedFootnoteIdentifier(m[1], text.slice(m.index + m[0].length));
+    const target = normalizeFlattenedFootnoteIdentifier(m[1], text.slice(m.index + m[0].length), m[0]);
     externalRefs.push({
       type: "external",
       target,
@@ -934,6 +1074,10 @@ export function extractCrossRefsFromText(text, lang) {
     seriesRefs.externalRefs,
     lang.code,
   );
+  repairCorroboratedTruncatedInstrumentIdentifiers([
+    ...mergedRefs.externalRefs,
+    ...thereofRefs.externalRefs,
+  ]);
 
   for (const ref of mergedRefs.articleRefs) addRef(ref);
   for (const ref of recitalRefs) addRef(ref);
@@ -1046,7 +1190,7 @@ export function injectCrossRefLinks(html, lang) {
     EXTERNAL_LAW_RE.lastIndex = 0;
     let match;
     while ((match = EXTERNAL_LAW_RE.exec(text)) !== null) {
-      const target = normalizeFlattenedFootnoteIdentifier(match[1], text.slice(match.index + match[0].length));
+      const target = normalizeFlattenedFootnoteIdentifier(match[1], text.slice(match.index + match[0].length), match[0]);
       const ecscAuthority = /\bHigh Authority\b/i.test(text.slice(Math.max(0, match.index - 80), match.index + 80));
       const institutionalIssuer = hasInstitutionalIssuerContext(text, match.index);
       const meta = parseExternalLawMeta(match[0], target, { ecscAuthority, institutionalIssuer });
@@ -1332,6 +1476,21 @@ export function parseFmxToCombined(xmlText) {
   // --- Articles with chapter/section tracking ---
   const articles = [];
   const crossReferences = {};  // articleNumber → [refs]
+
+  // The legal basis in a preamble is often the sole fully-qualified occurrence
+  // of an instrument subsequently cited in a recital using a short form. Keep
+  // those source citations visible in the graph and make them available to the
+  // final document-wide corroboration pass below.
+  const visaSeen = new Set();
+  const visaRefs = Array.from(root.querySelectorAll("PREAMBLE > GR\\.VISA > VISA, PREAMBLE > VISA"))
+    .flatMap((visa) => extractCrossRefsFromText(allText(visa), lang))
+    .filter((ref) => {
+      const key = crossRefDedupeKey(ref);
+      if (visaSeen.has(key)) return false;
+      visaSeen.add(key);
+      return true;
+    });
+  if (visaRefs.length) crossReferences.preamble = visaRefs;
 
   function classifyDivisionRole(tiText, depth) {
     if (lang.chapter.test(tiText)) return "chapter";
@@ -1624,6 +1783,7 @@ export function parseFmxToCombined(xmlText) {
   // Shared with the EUR-Lex HTML parser so both source formats enforce the same
   // invariant (and defensively covers article.paragraphs[].html).
   enforceInternalReferenceIntegrity({ articles, recitals, annexes, crossReferences });
+  repairCorroboratedTruncatedInstrumentIdentifiers(Object.values(crossReferences).flat());
 
   return { title, articles, recitals, annexes, definitions, langCode, crossReferences, parserVersion: PARSER_VERSION };
 }

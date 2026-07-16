@@ -17,7 +17,7 @@ const { execFileSync } = require("child_process");
 
 const { parseFmxXml } = require("../shared/fmx-parser-node.js");
 const { parseEurlexHtmlToCombined } = require("../shared/eurlex-html-parser.js");
-const { wrapForParsing, buildExcerptFromCombined } = require("./search-build.js");
+const { DEFAULT_PROGRESS_FILE, recordAudit } = require("./corpus-audit-progress.js");
 
 const DATA_DIR = path.join(__dirname, "data");
 const CORPORA = {
@@ -27,6 +27,21 @@ const CORPORA = {
 // Keep aligned with search-build's DOM safety limit. The app intentionally
 // leaves these raw FMX blobs available but does not parse them into a DOM.
 const MAX_FMX_PARSE_BYTES = 6 * 1024 * 1024;
+
+// Keep this tool independent of search-build: the audit parses raw law files
+// directly and must not require optional search-index/database dependencies.
+function wrapForParsing(xml) {
+  const withoutDecls = String(xml || "").replace(/<\?xml[\s\S]*?\?>/g, "").trim();
+  return `<FMX.COLLECTION>${withoutDecls}</FMX.COLLECTION>`;
+}
+
+function hasExtractedText(parsed) {
+  return [
+    ...(parsed.articles || []).map((article) => article.article_html),
+    ...(parsed.recitals || []).map((recital) => recital.recital_html),
+    ...(parsed.annexes || []).map((annex) => annex.annex_html),
+  ].some((html) => String(html || "").replace(/<[^>]+>/g, "").trim());
+}
 
 function listCorpusFiles({ root, extension }) {
   if (!fs.existsSync(root)) return [];
@@ -46,6 +61,17 @@ function evenSample(files, cap) {
   const sample = [];
   for (let index = 0; sample.length < cap; index += step) sample.push(files[Math.floor(index)]);
   return sample;
+}
+
+function filterByYears(files, value) {
+  if (!value) return files;
+  const years = new Set(String(value).split(",").map((year) => year.trim()).filter((year) => /^\d{4}$/.test(year)));
+  return files.filter((file) => years.has(path.basename(path.dirname(file))));
+}
+
+function requestedYears(value) {
+  if (!value) return [];
+  return [...new Set(String(value).split(",").map((year) => year.trim()).filter((year) => /^\d{4}$/.test(year)))];
 }
 
 function emptyStats() {
@@ -72,7 +98,7 @@ function addSample(stats, text) {
 
 function inspectParsedLaw(parsed, file, stats, knownCelex) {
   const validArticles = new Set((parsed.articles || []).map((article) => String(article.article_number)));
-  if (!(buildExcerptFromCombined(parsed) || "")) {
+  if (!hasExtractedText(parsed)) {
     stats.empty += 1;
     addSample(stats, `${path.basename(file)}: no searchable extracted text`);
   }
@@ -84,7 +110,7 @@ function inspectParsedLaw(parsed, file, stats, knownCelex) {
         stats.invalidInternalRefs += 1;
         addSample(stats, `${path.basename(file)} ${location}: invalid Article ${ref.target}`);
       }
-      if (ref.type === "external" && (ref.externalInstitutional || ref.externalNational || ref.nationalLaw || ref.externalCaseLaw)) {
+      if (ref.type === "external" && (ref.externalInstitutional || ref.externalNational || ref.nationalLaw || ref.externalCaseLaw || ref.treaty || ref.protocol)) {
         if (ref.externalInstitutional) stats.externalInstitutional += 1;
         if (ref.externalNational || ref.nationalLaw) stats.externalNational += 1;
         if (ref.externalCaseLaw) stats.externalCaseLaw += 1;
@@ -218,6 +244,7 @@ async function auditCorpus(options = {}) {
   const maxPerCorpus = Number.parseInt(options.maxPerCorpus, 10) || 0;
   const offset = Math.max(0, Number.parseInt(options.offset, 10) || 0);
   const limit = Math.max(0, Number.parseInt(options.limit, 10) || 0);
+  const progressFile = options.progressFile || DEFAULT_PROGRESS_FILE;
   const requestedKinds = options.kind
     ? new Set(String(options.kind).split(",").map((kind) => kind.trim()).filter(Boolean))
     : null;
@@ -235,8 +262,12 @@ async function auditCorpus(options = {}) {
   const result = {};
   try {
     for (const [kind, corpus] of corpora) {
-      const availableFiles = evenSample(listCorpusFiles(corpus), maxPerCorpus);
+      const allFiles = listCorpusFiles(corpus);
+      const availableFiles = evenSample(filterByYears(allFiles, options.year), maxPerCorpus);
       const files = availableFiles.slice(offset, limit ? offset + limit : undefined);
+      const years = [...new Set(files.map((file) => path.basename(path.dirname(file))))];
+      const presentYears = new Set(availableFiles.map((file) => path.basename(path.dirname(file))));
+      const emptyYears = requestedYears(options.year).filter((year) => !presentYears.has(year));
       const stats = emptyStats();
       for (let start = 0; start < files.length; start += batchSize) {
         mergeStats(stats, runBatchWithFallback(kind, files.slice(start, start + batchSize), {
@@ -247,7 +278,18 @@ async function auditCorpus(options = {}) {
         }));
         console.log(`[corpus-reference-audit] ${kind} ${offset + Math.min(start + batchSize, files.length)}/${availableFiles.length}`);
       }
-      result[kind] = { ...stats, available: availableFiles.length, selected: files.length, offset };
+      result[kind] = { ...stats, available: allFiles.length, eligible: availableFiles.length, selected: files.length, offset };
+      recordAudit({
+        file: progressFile,
+        kind,
+        available: allFiles.length,
+        offset,
+        selected: files.length,
+        stats,
+        years,
+        emptyYears,
+        rangeStable: !options.year && !maxPerCorpus,
+      });
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -268,4 +310,4 @@ if (require.main === module) {
   main().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
 }
 
-module.exports = { auditCorpus, evenSample, listCorpusFiles };
+module.exports = { auditCorpus, evenSample, filterByYears, listCorpusFiles, requestedYears };
