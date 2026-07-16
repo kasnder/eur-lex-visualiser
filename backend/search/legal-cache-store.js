@@ -13,7 +13,7 @@ const {
 const BUILTIN_SEARCH_CACHE_PATH = path.join(__dirname, "data", "search-cache.json");
 const DEFAULT_SEARCH_CACHE_PATH = process.env.SEARCH_CACHE_PATH || BUILTIN_SEARCH_CACHE_PATH;
 const DEFAULT_SQLITE_DATA_PATH = path.join(__dirname, "data", "data.sqlite");
-const SQLITE_SCHEMA_VERSION = 1;
+const SQLITE_SCHEMA_VERSION = 2;
 
 const SUPPLEMENTAL_RECORDS = [
   {
@@ -527,6 +527,25 @@ class JsonLegalCacheStore {
 
   getByOfficialReference(reference) {
     return getDeterministicMatch(this.byOfficialReference, normalizeOfficialReferenceLookupKey(reference));
+  }
+
+  // Reference resolution reduced to plain, cloneable data. Consumers that only
+  // resolve citations (the citation graph builder's workers) can rebuild these
+  // lookups in milliseconds instead of re-reading the cache and re-indexing
+  // MiniSearch, which dominates load() and which they never query. Ambiguous keys
+  // are dropped here so the index resolves exactly as getDeterministicMatch does.
+  exportReferenceIndex() {
+    const officialRef = {};
+    for (const [key, matches] of this.byOfficialReference) {
+      if (matches.length === 1 && matches[0]?.celex) {
+        officialRef[key] = String(matches[0].celex).toUpperCase();
+      }
+    }
+    const celexTitle = {};
+    for (const [key, matches] of this.byCelex) {
+      if (matches.length === 1) celexTitle[key] = matches[0]?.title ?? null;
+    }
+    return { officialRef, celexTitle };
   }
 
   searchExcerpts(expression) {
