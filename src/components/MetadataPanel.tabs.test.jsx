@@ -85,6 +85,7 @@ describe("MetadataPanel tabs", () => {
     expect(labels[0]).toContain("Cited by");
     expect(labels.some((l) => l.includes("Cites"))).toBe(true);
     expect(labels.some((l) => l.includes("Amendments"))).toBe(true);
+    expect(tabs().every((tab) => tab.classList.contains("items-baseline"))).toBe(true);
     expect(activeTab().textContent).toContain("Cited by");
     // The active panel lists the citing laws + totals footer.
     expect(container.textContent).toContain("Digital Markets Act");

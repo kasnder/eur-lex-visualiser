@@ -241,7 +241,7 @@ export function MetadataPanel({
               }}
               onClick={() => setActiveTab(entry.id)}
               onKeyDown={handleTabKeyDown}
-              className={`-mb-px flex items-center gap-1.5 whitespace-nowrap rounded-sm border-b-2 px-3 py-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-eu-blue/40 ${
+              className={`-mb-px flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border-b-2 px-3 py-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-eu-blue/40 ${
                 isActive
                   ? "border-eu-blue text-eu-blue dark:border-eu-blue-bright dark:text-eu-blue-bright"
                   : "border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-500 dark:hover:text-gray-300"
