@@ -6,6 +6,7 @@
  */
 
 import { PARSER_VERSION, parseFmxToCombined, isFmxDocument } from "./fmxParser.js";
+import lawSummaryCacheVersion from "../../backend/shared/law-summary-cache-version.json" with { type: "json" };
 
 export const API_BASE = (() => {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_FORMEX_API_BASE) {
@@ -257,6 +258,7 @@ async function fetchJsonWithCache({
   errorLabel,
   cacheFirst = false,
   maxAgeMs = API_JSON_CACHE_MAX_AGE_MS,
+  validatePayload = null,
 }) {
   const cached = await cacheGet(cacheKey);
   const envelope = isApiJsonEnvelope(cached) ? cached : null;
@@ -272,6 +274,12 @@ async function fetchJsonWithCache({
       await readApiError(res, `${errorLabel} (${res.status})`);
     }
     const payload = await res.json();
+    if (typeof validatePayload === "function" && !validatePayload(payload)) {
+      throw new FormexApiError(`${errorLabel} returned an incompatible version`, {
+        status: 409,
+        code: "cache_version_mismatch",
+      });
+    }
     await cacheSet(cacheKey, createApiJsonEnvelope(payload));
     return payload;
   } catch (error) {
@@ -874,13 +882,25 @@ export async function fetchRecitalTitles(celex, lang = "EN") {
 
 // Law summaries are generated in English only for now, regardless of the
 // reading language.
+export function makeLawSummaryCacheKey(celex) {
+  const { cacheVersion, schemaVersion, promptVersion } = lawSummaryCacheVersion;
+  return `${celex}_ENG_summary_v${cacheVersion}_schema${schemaVersion}_prompt${promptVersion}`;
+}
+
+function isCurrentLawSummaryPayload(payload) {
+  return payload?.cacheVersion === lawSummaryCacheVersion.cacheVersion
+    && payload?.schemaVersion === lawSummaryCacheVersion.schemaVersion
+    && payload?.promptVersion === lawSummaryCacheVersion.promptVersion;
+}
+
 export async function fetchLawSummary(celex) {
-  const key = `${celex}_ENG_summary`;
+  const key = makeLawSummaryCacheKey(celex);
   return getInFlightRequest(`law-summary:${key}`, () => fetchJsonWithCache({
     cacheKey: key,
     url: `${API_BASE}/api/laws/${encodeURIComponent(celex)}/summary?lang=ENG`,
     errorLabel: "Law summary fetch failed",
     cacheFirst: true,
+    validatePayload: isCurrentLawSummaryPayload,
   }));
 }
 

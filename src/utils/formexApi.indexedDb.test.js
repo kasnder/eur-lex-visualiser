@@ -67,3 +67,32 @@ describe("Formex IndexedDB connection lifecycle", () => {
     expect(lateDb.close).toHaveBeenCalledOnce();
   });
 });
+
+describe("law summary cache versioning", () => {
+  it("uses the backend cache, schema, and prompt versions in the browser key", async () => {
+    const { makeLawSummaryCacheKey } = await importFormexApi();
+
+    expect(makeLawSummaryCacheKey("32016R0679"))
+      .toBe("32016R0679_ENG_summary_v2_schema3_prompt3");
+  });
+
+  it("does not cache a response from a mismatched backend version", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        celex: "32016R0679",
+        lang: "ENG",
+        cacheVersion: 1,
+        schemaVersion: 3,
+        promptVersion: 3,
+        summary: { purpose: { text: "stale", citations: [] } },
+      }),
+    }));
+
+    const { fetchLawSummary } = await importFormexApi();
+    await expect(fetchLawSummary("32016R0679")).rejects.toMatchObject({
+      code: "cache_version_mismatch",
+      status: 409,
+    });
+  });
+});

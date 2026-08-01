@@ -10,7 +10,12 @@ const { createDefinitionCompareHandler, createDefinitionSearchHandler } = requir
 const { fetchMetadata, fetchAmendments, fetchImplementing, fetchCaseLaw } = require("../shared/law-queries");
 const { ChatProviderError } = require("../shared/openrouter-chat");
 const { ensureRecitalTitles } = require("../shared/recital-title-service");
-const { ensureLawSummary } = require("../shared/law-summary-service");
+const {
+  CACHE_VERSION: LAW_SUMMARY_CACHE_VERSION,
+  PROMPT_VERSION: LAW_SUMMARY_PROMPT_VERSION,
+  SCHEMA_VERSION: LAW_SUMMARY_SCHEMA_VERSION,
+  ensureLawSummary,
+} = require("../shared/law-summary-service");
 const { ensureArticleDigest } = require("../shared/article-digest-service");
 const { ensureCaseLawDigest } = require("../shared/case-law-digest-service");
 
@@ -101,6 +106,7 @@ function registerApiRoutes(app, deps) {
     legalCacheStore,
     resolveEurlexUrl,
     resolveParsedLaw,
+    ensureLawSummary: ensureLawSummaryImpl = ensureLawSummary,
     resolveReference,
     runSparqlQuery,
     safeErrorResponse,
@@ -453,7 +459,7 @@ function registerApiRoutes(app, deps) {
       }
 
       const skipFmxProbe = req.query.skipFmxProbe === '1';
-      const result = await ensureLawSummary({
+      const result = await ensureLawSummaryImpl({
         celex,
         lang,
         cacheDir: FMX_DIR,
@@ -497,6 +503,9 @@ function registerApiRoutes(app, deps) {
       res.json({
         celex,
         lang,
+        cacheVersion: LAW_SUMMARY_CACHE_VERSION,
+        schemaVersion: LAW_SUMMARY_SCHEMA_VERSION,
+        promptVersion: LAW_SUMMARY_PROMPT_VERSION,
         model: result.model,
         cached: result.cached,
         generatedAt: result.generatedAt,
