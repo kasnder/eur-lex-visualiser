@@ -1196,3 +1196,69 @@ describe("extractCrossRefsFromText — multi-article citations", () => {
     expect(boundTo1725).toBeFalsy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recital extraction: not every CONSID is a recital
+// ---------------------------------------------------------------------------
+
+describe("recital extraction", () => {
+  /** Mirrors the Data Act (32023R2854) preamble shape. */
+  function buildAct(considXml) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<COMBINED.FMX>
+  <ACT>
+    <TITLE><TI><P>Regulation (EU) 2020/1 of the European Parliament</P></TI></TITLE>
+    <PREAMBLE>
+      <GR.CONSID>
+        <GR.CONSID.INIT>Acting in accordance with the ordinary legislative procedure</GR.CONSID.INIT>
+        ${considXml}
+      </GR.CONSID>
+    </PREAMBLE>
+    <ENACTING.TERMS>
+      <ARTICLE IDENTIFIER="001">
+        <TI.ART>Article 1</TI.ART>
+        <ALINEA><P>This Regulation lays down rules.</P></ALINEA>
+      </ARTICLE>
+    </ENACTING.TERMS>
+  </ACT>
+</COMBINED.FMX>`;
+  }
+
+  const numbered = (n, text) => `<CONSID><NP><NO.P>(${n})</NO.P><TXT>${text}</TXT></NP></CONSID>`;
+
+  it("skips a 'Whereas:' lead-in wrapped in its own CONSID", () => {
+    // The Data Act puts the lead-in in <CONSID><P>Whereas:</P></CONSID> rather
+    // than in GR.CONSID.INIT. That used to parse as a text-less recital which
+    // took number 1, leaving the real recital 1 as a duplicate and the act
+    // with one more entry than its highest number (120 entries, numbered to
+    // 119) — which in turn produced a prerendered page for a recital that
+    // does not exist.
+    const result = parseFmxToCombined(buildAct(
+      `<CONSID><P>Whereas:</P></CONSID>${numbered(1, "First recital.")}${numbered(2, "Second recital.")}`,
+    ));
+
+    expect(result.recitals).toHaveLength(2);
+    expect(result.recitals.map((r) => r.recital_number)).toEqual(["1", "2"]);
+    expect(result.recitals[0].recital_text).toBe("First recital.");
+    expect(new Set(result.recitals.map((r) => r.recital_number)).size).toBe(result.recitals.length);
+  });
+
+  it("keeps recitals whose CONSID carries no number, counting only real ones", () => {
+    const result = parseFmxToCombined(buildAct(
+      `<CONSID><P>Whereas:</P></CONSID>`
+      + `<CONSID><NP><TXT>Unnumbered recital text.</TXT></NP></CONSID>`
+      + `<CONSID><NP><TXT>Another unnumbered recital.</TXT></NP></CONSID>`,
+    ));
+
+    // The positional fallback must not count the skipped lead-in, or every
+    // unnumbered recital in the act shifts by one.
+    expect(result.recitals.map((r) => r.recital_number)).toEqual(["1", "2"]);
+    expect(result.recitals[0].recital_text).toBe("Unnumbered recital text.");
+  });
+
+  it("still extracts an ordinary numbered preamble unchanged", () => {
+    const result = parseFmxToCombined(buildAct(numbered(1, "Only recital.")));
+    expect(result.recitals).toHaveLength(1);
+    expect(result.recitals[0]).toMatchObject({ recital_number: "1", recital_text: "Only recital." });
+  });
+});

@@ -33,7 +33,7 @@ import {
  * Bump this whenever the parser output changes (new fields, bug fixes, etc.)
  * so that cached parsed results are automatically re-parsed from raw XML.
  */
-export const PARSER_VERSION = 19;
+export const PARSER_VERSION = 20;
 
 // ---------------------------------------------------------------------------
 // FMX → HTML conversion helpers
@@ -1528,10 +1528,19 @@ export function parseFmxToCombined(xmlText) {
   // --- Recitals ---
   const recitals = [];
   for (const consid of root.querySelectorAll("GR\\.CONSID > CONSID")) {
-    const noP = consid.querySelector("NP > NO\\.P");
-    const num = noP ? allText(noP).replace(/[()]/g, "").trim() : String(recitals.length + 1);
     const txtEl = consid.querySelector("NP > TXT") || consid.querySelector("NP");
     const recitalText = txtEl ? allText(txtEl) : "";
+    // Not every CONSID is a recital. Some acts (the Data Act, 32023R2854) wrap
+    // the "Whereas:" lead-in in its own <CONSID><P>Whereas:</P></CONSID> with
+    // no NP, which yielded a text-less recital that consumed number 1 and
+    // pushed the real recital 1 into a duplicate — 120 entries numbered only
+    // to 119. An entry with no text is never worth keeping, and skipping it
+    // before the number is assigned also keeps the index fallback below
+    // counting only real recitals.
+    if (!recitalText.trim()) continue;
+
+    const noP = consid.querySelector("NP > NO\\.P");
+    const num = noP ? allText(noP).replace(/[()]/g, "").trim() : String(recitals.length + 1);
     const recitalHtmlRaw = txtEl ? renderWithFootnotes(txtEl, `recital-${num}`) : "";
     recitals.push({
       recital_number: num,
