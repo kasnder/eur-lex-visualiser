@@ -33,7 +33,10 @@ const EN = {
   definition: /definitions?/i,
   recital: /[Rr]ecitals?/,
   quoteChars: "\u2018\u2019'\"",
-  meansVerb: "means",
+  // Pre-2000 drafting says "'term' shall mean \u2026" where modern acts say
+  // "'term' means \u2026" \u2014 both spellings appear across the corpus, so the verb
+  // has to cover them or every older directive's definitions article is lost.
+  meansVerb: "shall\\s+mean|means",
   definitionFormat: "term_first",
   titleSplit: /\s+of\s+/i,
   parliamentSplit: /\s+of the European Parliament\b/i,
@@ -697,6 +700,22 @@ export function getLangConfig(code) {
 }
 
 /**
+ * The quote characters a definition term may be wrapped in, as the body of a
+ * character class.
+ *
+ * On top of each language's own quoteChars this admits three marks everywhere:
+ * the backtick, which the pre-1999 Official Journal HTML renderer used as the
+ * opening quote in every language (`distance contract\' in Directive 97/7/EC),
+ * and the low quotes U+201E/U+201A, which several configs list and several
+ * others (NL, notably) omit even though the rendered text uses them. None of
+ * the three appears in running legal text, so admitting them costs nothing and
+ * spares the per-language audit.
+ */
+function quoteCharClass(lang) {
+  return `${lang.quoteChars}\u0060\u201E\u201A`;
+}
+
+/**
  * Build the "means" regex for definition extraction from the language config.
  *
  * Two formats:
@@ -706,13 +725,65 @@ export function getLangConfig(code) {
  * Capture group 1 = the term text (without quotes).
  */
 export function buildMeansRegex(lang) {
-  const q = lang.quoteChars; // raw chars, no brackets
+  const q = quoteCharClass(lang);
+  // Several languages spell meansVerb as an alternation ("wordt verstaan|
+  // verstaat men"). Interpolated bare, that alternation would swallow the
+  // whole pattern — the anchor and the term group would bind to the first
+  // branch only, so a later branch could match anywhere in the item and
+  // leave capture group 1 undefined. Always group it.
+  const verb = `(?:${lang.meansVerb})`;
   if (lang.definitionFormat === "verb_first") {
     // "meansVerb [q]term[q]" — term comes AFTER the verb
-    return new RegExp(`^${lang.meansVerb}\\s+[${q}]([^${q}]+)[${q}]`, "i");
+    return new RegExp(`^${verb}\\s+[${q}]([^${q}]+)[${q}]`, "i");
   }
   // Default: "'term' meansVerb definition"
-  return new RegExp(`^[${q}]([^${q}]+)[${q}]\\s+${lang.meansVerb}\\s+`, "i");
+  //
+  // The term is matched lazily rather than as a run of non-quote characters
+  // because the apostrophe is itself a quote character in several languages:
+  // "'the data subject's consent' shall mean …" would otherwise define "the
+  // data subject". Requiring the verb right after the closing quote is what
+  // keeps the lazy match honest — it reopens on "subject's" and settles on the
+  // quote that the verb actually follows.
+  //
+  // Older acts also gloss a short alias between the term and the verb
+  // ("'processing of personal data' ('processing') shall mean …"); that
+  // parenthetical is consumed so it lands in neither the term nor the
+  // definition.
+  // The trailing punctuation covers "'health and safety' means, in relation
+  // to a recipient, …" and "'main establishment' means: (a) … (b) …" — without
+  // it the verb is left glued to the definition, or the item is missed.
+  //
+  // The tail ends on `\\s+|$` rather than plain `\\s+` so that an item whose
+  // definition lives in the *following* paragraphs still matches here, with an
+  // empty group 2: "(4) 'night worker' means:" followed by (a)/(b) sub-points.
+  // Alternation keeps the word boundary that a bare `\\s*` would drop.
+  return new RegExp(`^[${q}](.+?)[${q}]\\s*(?:\\([^)]*\\)\\s*)?${verb}\\s*[:,]?(?:\\s+|$)`, "i");
+}
+
+/**
+ * Build an *unanchored* definition regex, for prose that packs several
+ * definitions into one paragraph instead of one lettered point each:
+ *
+ *   For the purpose of this Directive 'product' means all movables …
+ *   'Primary agricultural products' means the products of the soil …
+ *
+ * (Directive 85/374/EEC, Article 2 — a shape that only occurs in the older,
+ * pre-Formex acts.)
+ *
+ * Unlike buildMeansRegex this may match mid-string, so it *requires* the
+ * quote characters around the term: an unquoted `(.+?) means (.+)` would
+ * happily split on the "means" in "the purposes and means of the processing"
+ * and yield a sentence fragment as the term. Returns a global RegExp with
+ * capture group 1 = the term text; callers read `.index`/`[0].length` to
+ * slice out the definition that follows.
+ */
+export function buildInlineDefRegex(lang) {
+  const q = quoteCharClass(lang);
+  const verb = `(?:${lang.meansVerb})`;
+  if (lang.definitionFormat === "verb_first") {
+    return new RegExp(`${verb}\\s+[${q}]([^${q}]+)[${q}]\\s*`, "gi");
+  }
+  return new RegExp(`[${q}]([^${q}]+)[${q}]\\s+${verb}\\s+`, "gi");
 }
 
 /**
@@ -739,7 +810,7 @@ export function buildMeansRegex(lang) {
  * string is the definition.
  */
 export function buildFallbackDefRegex(lang) {
-  const q = lang.quoteChars;
+  const q = quoteCharClass(lang);
 
   // For LT and SV the term is NOT wrapped in QUOT markers.  Detect them by
   // code so we don't need to add per-language flags.
@@ -758,6 +829,27 @@ export function buildFallbackDefRegex(lang) {
     `^[${q}]([^${q}]+)[${q}]\\s*[:\\u2013\\u2014,]?\\s*`,
     "i"
   );
+}
+
+/**
+ * Build a regex for the *unquoted* colon shape, where the term carries no
+ * quotation marks at all and the colon is the only separator:
+ *
+ *   1. Proprietary medicinal product: Any ready-prepared medicinal product …
+ *   (a) consumer: shall mean any natural person who …
+ *
+ * (Directives 2001/83/EC and 1999/44/EC.) This is the loosest shape we accept
+ * and it cannot be told apart from ordinary prose by pattern alone — "(a)
+ * Member States shall ensure that: …" fits it just as well. The pattern is
+ * therefore deliberately narrow (no sentence punctuation inside the term, and
+ * see the caller for the word-count and corroboration limits), and callers must
+ * only offer it text that is already a numbered or lettered point.
+ *
+ * Capture group 1 = the term text; the trailing meansVerb, when the drafting
+ * repeats it after the colon, is consumed.
+ */
+export function buildColonDefRegex(lang) {
+  return new RegExp(`^([^:;.,\\u2013\\u2014]{2,60}?)\\s*:\\s*(?:(?:${lang.meansVerb})\\s*,?\\s+)?(?=\\S)`, "i");
 }
 
 /**

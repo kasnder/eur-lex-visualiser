@@ -3,6 +3,16 @@ const { createRequire } = require("module");
 
 const { ClientError } = require("./api-utils");
 const { referenceDedupeKey, enforceInternalReferenceIntegrity } = require("./legal-reference-core.mjs");
+// languages.mjs is pure data + regex builders with no DOM dependency, so it can
+// be require(esm)'d at load time — unlike fmxParser.mjs, which needs the
+// DOMParser shim installed by loadHelpers() first.
+const {
+  getLangConfig,
+  buildMeansRegex,
+  buildFallbackDefRegex,
+  buildInlineDefRegex,
+  buildColonDefRegex,
+} = require("./formex-parser/languages.mjs");
 
 const LANG_3_TO_2 = {
   BUL: "BG",
@@ -128,34 +138,270 @@ function formatStructuredTitle(text, langConfig) {
     .replace(/\b(Eu|Ec|Eec|Euratom|Ue|We)\b/gi, (match) => match.toUpperCase());
 }
 
-function parseStructuredHtmlDefinitions(articleHtml, langConfig, parser, sourceArticle) {
+// --- Definitions -----------------------------------------------------------
+//
+// Definitions in legacy HTML come in many more shapes than the Formex ones, and
+// the older the act the less it looks like a modern regulation:
+//
+//   (a) 'personal data' shall mean any information …   95/46/EC  — "shall mean"
+//   (c) "established service provider": a service …    2000/31/EC — colon, no verb
+//   (a) 'television broadcasting' means the initial …  89/552/EEC — untitled article
+//   For the purpose of this Directive 'product' means … 85/374/EEC — prose, no points
+//   1. Proprietary medicinal product: Any ready-prepared … 2001/83/EC — unquoted
+//
+// Two rules keep this from degenerating into false positives. The term is
+// normally quote-delimited (see buildInlineDefRegex for why), and an article
+// that does not declare itself as the definitions article by title has to
+// corroborate itself with two or more entries. The unquoted shape has no
+// pattern of its own to rely on, so it carries the extra restrictions in
+// unquotedDefinitionEntry() and a corroboration bar of its own.
+
+const definitionMatcherCache = new Map();
+
+function definitionMatchers(langConfig) {
+  const lang = langConfig?.code ? langConfig : getLangConfig("EN");
+  let matchers = definitionMatcherCache.get(lang.code);
+  if (!matchers) {
+    matchers = {
+      lang,
+      means: buildMeansRegex(lang),
+      fallback: buildFallbackDefRegex(lang),
+      inline: buildInlineDefRegex(lang),
+      colon: buildColonDefRegex(lang),
+    };
+    definitionMatcherCache.set(lang.code, matchers);
+  }
+  return matchers;
+}
+
+// "(a) ", "a) ", "(1) ", "1. " — the point label introducing one definition.
+const DEFINITION_POINT_MARKER = /^\(?\s*([a-z]{1,2}|\d{1,3})\s*[).]\s+/i;
+// The same label alone in its own paragraph, with the definition following in
+// the next one (how tabulated points flatten when the table is stripped).
+const DEFINITION_POINT_ONLY = /^\(?\s*([a-z]{1,2}|\d{1,3})\s*\)?\.?$/i;
+
+// "(a)" / "1." / "—" → "a" / "1" / null. Dash-bulleted definition lists carry
+// no point label, and a bullet character is not one.
+function definitionPointLabel(text) {
+  const label = normalizeText(text).replace(/^\(|[).]+$/g, "");
+  return /^(?:[a-z]{1,2}|\d{1,3})$/i.test(label) ? label : null;
+}
+
+function cleanDefinitionText(text) {
+  return normalizeText(text).replace(/[;,]+$/, "").trim();
+}
+
+// One point's text ("'term' shall mean …") into { term, definition }, or null.
+// A `definition` of "" means the point opened with "'term' means:" and its body
+// is in the paragraphs that follow — the caller closes it.
+function splitDefinitionEntry(text, matchers, { allowUnquoted = false } = {}) {
+  const entryText = normalizeText(text);
+  if (!entryText) return null;
+
+  const meansMatch = entryText.match(matchers.means);
+  if (meansMatch?.[1]) {
+    return {
+      term: normalizeText(meansMatch[1]),
+      definition: cleanDefinitionText(entryText.slice(meansMatch[0].length)),
+    };
+  }
+
+  const fallbackMatch = entryText.match(matchers.fallback);
+  if (fallbackMatch?.[1]) {
+    const definition = cleanDefinitionText(entryText.slice(fallbackMatch[0].length));
+    const term = normalizeText(fallbackMatch[1]);
+    if (term && definition) return { term, definition };
+  }
+
+  return allowUnquoted ? unquotedDefinitionEntry(entryText, matchers) : null;
+}
+
+// Maximum words in an unquoted term. Definienda are noun phrases ("proprietary
+// medicinal product"); a clause long enough to need more words than this is
+// prose that happens to contain a colon.
+const MAX_UNQUOTED_TERM_WORDS = 6;
+
+// "consumer: shall mean any natural person …" — no quotation marks anywhere, so
+// nothing but the shape of the text says this is a definition. Kept separate
+// from the quoted forms because the caller has to hold it to a higher bar.
+function unquotedDefinitionEntry(entryText, matchers) {
+  const colonMatch = entryText.match(matchers.colon);
+  if (!colonMatch?.[1]) return null;
+  const term = normalizeText(colonMatch[1]);
+  if (!term || term.split(/\s+/).length > MAX_UNQUOTED_TERM_WORDS) return null;
+  const definition = cleanDefinitionText(entryText.slice(colonMatch[0].length));
+  if (definition.length < 20) return null;
+  return { term, definition, unquoted: true };
+}
+
+// Sentence-per-definition prose: each quoted term runs to the end of its own
+// sentence. Only used when the article has no lettered points at all, since a
+// pointed definition routinely spans several sentences.
+function extractInlineDefinitions(text, matchers, sourceArticle) {
   const definitions = [];
-  const doc = parser.parseFromString(articleHtml, "text/html");
-  const tables = doc.querySelectorAll("table");
-  const meansRegex = langConfig?.meansVerb
-    ? new RegExp(`^[${langConfig.quoteChars || "\\u2018\\u2019'\""}]?([^${langConfig.quoteChars || "\\u2018\\u2019'\"" }]+)[${langConfig.quoteChars || "\\u2018\\u2019'\""}]?\\s+(?:${langConfig.meansVerb})\\s+`, "i")
-    : null;
+  for (const sentence of String(text).split(/(?<=\.)\s+(?=[‘“«"'A-Z])/)) {
+    matchers.inline.lastIndex = 0;
+    const match = matchers.inline.exec(sentence);
+    if (!match?.[1]) continue;
+    const definition = cleanDefinitionText(sentence.slice(match.index + match[0].length))
+      .replace(/\.$/, "");
+    if (!definition) continue;
+    definitions.push({
+      term: normalizeText(match[1]),
+      definition,
+      sourceArticle,
+      sourcePoint: null,
+    });
+  }
+  return definitions;
+}
 
-  for (const table of tables) {
-    const cells = table.querySelectorAll("td");
-    if (cells.length < 2) continue;
-    const text = normalizeText(cells[1].textContent);
-    if (!text) continue;
+// How many paragraphs an open "'term' means:" may absorb before we assume the
+// definition ended and we are just eating the rest of the article.
+const MAX_DEFINITION_CONTINUATION_PARAGRAPHS = 8;
 
-    if (meansRegex) {
-      const match = text.match(meansRegex);
-      if (match) {
-        definitions.push({
-          term: normalizeText(match[1]),
-          definition: normalizeText(text.replace(match[0], "")),
-          sourceArticle,
-          sourcePoint: normalizeText(cells[0].textContent) || null,
-        });
-      }
+function parseDefinitionParagraphs(paragraphs, sourceArticle, matchers) {
+  const items = [];
+  let pendingPoint = null;
+
+  for (const raw of paragraphs) {
+    const paragraph = normalizeText(raw);
+    if (!paragraph) continue;
+
+    if (pendingPoint) {
+      items.push({ sourcePoint: pendingPoint, text: paragraph });
+      pendingPoint = null;
+      continue;
+    }
+
+    // A point label alone in its paragraph, with its text in the next one.
+    const pointOnly = paragraph.match(DEFINITION_POINT_ONLY);
+    if (pointOnly) {
+      pendingPoint = normalizeText(pointOnly[1]);
+      continue;
+    }
+
+    const marker = paragraph.match(DEFINITION_POINT_MARKER);
+    items.push(marker
+      ? { sourcePoint: normalizeText(marker[1]), text: paragraph.slice(marker[0].length) }
+      : { sourcePoint: null, text: paragraph, unmarked: true });
+  }
+
+  const definitions = [];
+  let open = null;
+
+  const closeOpen = () => {
+    if (!open) return;
+    const definition = cleanDefinitionText(open.body.join(" "));
+    if (definition) definitions.push({ ...open.entry, definition });
+    open = null;
+  };
+
+  for (const item of items) {
+    // The unquoted shape is only offered numbered/lettered points — in loose
+    // prose it would match almost any sentence containing a colon.
+    const parsed = splitDefinitionEntry(item.text, matchers, { allowUnquoted: !item.unmarked });
+
+    if (parsed) {
+      closeOpen();
+      const entry = { ...parsed, sourceArticle, sourcePoint: item.sourcePoint };
+      // "'term' means:" — the body is in the paragraphs that follow.
+      if (entry.definition) definitions.push(entry);
+      else open = { entry, body: [] };
+      continue;
+    }
+
+    if (open && open.body.length < MAX_DEFINITION_CONTINUATION_PARAGRAPHS) {
+      const line = item.sourcePoint ? `(${item.sourcePoint}) ${item.text}` : item.text;
+      // Some renderings emit each sub-point twice (tabulated, then flattened).
+      if (line !== open.body[open.body.length - 1]) open.body.push(line);
+    }
+  }
+  closeOpen();
+
+  if (!definitions.length) {
+    for (const item of items) {
+      if (!item.unmarked) continue;
+      definitions.push(...extractInlineDefinitions(item.text, matchers, sourceArticle));
     }
   }
 
   return definitions;
+}
+
+// How many unquoted "term: definition" points an untitled article must carry
+// before they are believed.
+const MIN_UNQUOTED_DEFINITIONS = 3;
+
+// An article titled "Definitions" is self-declaring and a single entry is
+// enough. Pre-2000 acts frequently carry no article titles at all, so there
+// the only available signal is repetition — one lone match in an untitled
+// article is more likely a quotation than a definitions list.
+function acceptArticleDefinitions(article, definitions, matchers) {
+  // EUR-Lex nests the definition tables inside a layout table in some
+  // renderings, and repeats them as flat paragraphs in others, so one point can
+  // be reached twice within an article. The copies are not equivalent — the
+  // outer one carries any sub-points the inner row cuts off ("'main
+  // establishment' means: (a) … (b) …") — so keep the fullest text rather than
+  // the first one seen.
+  const titled = matchers.lang.definition?.test(article?.article_title || "");
+
+  // An unquoted term rests on nothing but a colon, so a couple of them could
+  // easily be ordinary prose. Require either a self-declaring article title or
+  // a run of them — a genuine unquoted definitions list is never two items
+  // long in practice.
+  const unquotedCount = definitions.filter((entry) => entry.unquoted).length;
+  const keepUnquoted = titled || unquotedCount >= MIN_UNQUOTED_DEFINITIONS;
+
+  const byPoint = new Map();
+  for (const entry of definitions) {
+    if (entry.unquoted && !keepUnquoted) continue;
+    const key = `${entry.sourcePoint || ""} ${entry.term.toLowerCase()}`;
+    const kept = byPoint.get(key);
+    if (!kept || entry.definition.length > kept.definition.length) byPoint.set(key, entry);
+  }
+  const unique = [...byPoint.values()].map(({ unquoted, ...entry }) => entry);
+
+  if (!unique.length) return [];
+  if (titled) return unique;
+  return unique.length >= 2 ? unique : [];
+}
+
+function parseStructuredHtmlDefinitions(article, langConfig, parser) {
+  const html = article?.article_html || "";
+  const matchers = definitionMatchers(langConfig);
+  const titled = matchers.lang.definition?.test(article?.article_title || "");
+  // Every candidate needs either a quoted term or a tabulated layout; skipping
+  // the rest keeps this off the DOM for most articles during bulk corpus runs.
+  if (!titled && !/<table/i.test(html) && !/[‘’“”«»"'`]/.test(html)) {
+    return [];
+  }
+
+  const doc = parser.parseFromString(html, "text/html");
+  const sourceArticle = article.article_number;
+  const definitions = [];
+
+  for (const table of doc.querySelectorAll("table")) {
+    const cells = table.querySelectorAll("td");
+    if (cells.length < 2) continue;
+    const parsed = splitDefinitionEntry(normalizeText(cells[1].textContent), matchers);
+    if (!parsed) continue;
+    definitions.push({
+      ...parsed,
+      sourceArticle,
+      sourcePoint: definitionPointLabel(cells[0].textContent),
+    });
+  }
+
+  // Untabulated (or tabulated-but-unparsed) articles: fall back to the flat
+  // paragraph shape, which is also how the tables flatten in some renderings.
+  if (!definitions.length) {
+    const paragraphs = Array.from(doc.querySelectorAll("p"))
+      .map((paragraph) => normalizeText(paragraph.textContent));
+    definitions.push(...parseDefinitionParagraphs(paragraphs, sourceArticle, matchers));
+  }
+
+  return acceptArticleDefinitions(article, definitions, matchers);
 }
 
 function parseStructuredHtmlToCombined(document, langCode, langConfig, injectCrossRefLinks) {
@@ -322,15 +568,12 @@ function parseStructuredHtmlToCombined(document, langCode, langConfig, injectCro
     }
   }
 
-  const definitionsArticle = articles.find((article) => article.article_title && langConfig?.definition?.test(article.article_title));
-  const definitions = definitionsArticle
-    ? parseStructuredHtmlDefinitions(
-      definitionsArticle.article_html,
-      langConfig,
-      parser,
-      definitionsArticle.article_number
-    )
-    : [];
+  // Scanned across every article rather than only the one titled
+  // "Definitions": older acts carry no article titles at all, so the title
+  // lookup found nothing and silently returned no definitions for them.
+  const definitions = articles.flatMap(
+    (article) => parseStructuredHtmlDefinitions(article, langConfig, parser),
+  );
 
   recitals.sort((left, right) => {
     const leftNum = Number.parseInt(String(left.recital_number).replace(/\D+/g, ""), 10) || 0;
@@ -349,42 +592,12 @@ function parseStructuredHtmlToCombined(document, langCode, langConfig, injectCro
   };
 }
 
-function parseDefinitions(article) {
-  if (!/definitions?/i.test(article?.article_title || "")) {
-    return [];
-  }
-
-  return article.bodyParagraphs
-    .map((paragraph) => normalizeText(paragraph))
-    .map((paragraph) => {
-      const match = paragraph.match(/^\(([a-z0-9]+)\)\s+(.*)$/i);
-      return match ? { entryText: match[2], sourcePoint: match[1] } : null;
-    })
-    .filter(Boolean)
-    .map(({ entryText, sourcePoint }) => {
-      const quoted = entryText.match(/^["“'‘]?([^"”'’]+)["”'’]?\s+means\s+(.+)$/i);
-      if (quoted) {
-        return {
-          term: normalizeText(quoted[1]),
-          definition: normalizeText(quoted[2]).replace(/;$/, ""),
-          sourceArticle: article.article_number,
-          sourcePoint,
-        };
-      }
-
-      const means = entryText.match(/^(.+?)\s+means\s+(.+)$/i);
-      if (means) {
-        return {
-          term: normalizeText(means[1]).replace(/^["“'‘]|["”'’]$/g, ""),
-          definition: normalizeText(means[2]).replace(/;$/, ""),
-          sourceArticle: article.article_number,
-          sourcePoint,
-        };
-      }
-
-      return null;
-    })
-    .filter((definition) => definition?.term && definition?.definition);
+function parseDefinitions(article, langConfig) {
+  const paragraphs = article?.bodyParagraphs || [];
+  if (!paragraphs.length) return [];
+  const matchers = definitionMatchers(langConfig);
+  const definitions = parseDefinitionParagraphs(paragraphs, article.article_number, matchers);
+  return acceptArticleDefinitions(article, definitions, matchers);
 }
 
 function buildRecital(recitalNumber, text, html) {
@@ -795,7 +1008,7 @@ function parseLegacyXhtmlToCombined(document, langCode, langConfig, injectCrossR
   finalizeArticle();
   finalizeAnnex();
 
-  const definitions = articles.flatMap((article) => parseDefinitions(article));
+  const definitions = articles.flatMap((article) => parseDefinitions(article, langConfig));
 
   return {
     title,
@@ -937,7 +1150,7 @@ function parseLegisWriteToCombined(document, langCode, langConfig, injectCrossRe
   finalizeArticle();
   finalizeAnnex();
 
-  const definitions = articles.flatMap((article) => parseDefinitions(article));
+  const definitions = articles.flatMap((article) => parseDefinitions(article, langConfig));
 
   recitals.sort((left, right) => {
     const leftNum = Number.parseInt(String(left.recital_number).replace(/\D+/g, ""), 10) || 0;
@@ -1064,16 +1277,12 @@ async function loadHelpers() {
         global.NodeFilter = shimDom.window.NodeFilter;
       }
 
-      const [parserMod, langMod] = await Promise.all([
-        import("./formex-parser/fmxParser.mjs"),
-        import("./formex-parser/languages.mjs"),
-      ]);
+      const parserMod = await import("./formex-parser/fmxParser.mjs");
 
       return {
         injectCrossRefLinks: parserMod.injectCrossRefLinks,
         extractCrossRefsFromText: parserMod.extractCrossRefsFromText,
         repairCorroboratedTruncatedInstrumentIdentifiers: parserMod.repairCorroboratedTruncatedInstrumentIdentifiers,
-        getLangConfig: langMod.getLangConfig,
         // This parser reads a different document format, but its cross-references come
         // from the Formex parser's grammar above — so PARSER_VERSION versions this
         // output too, and is taken from there rather than declared a second time.
@@ -1093,7 +1302,6 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
     injectCrossRefLinks,
     extractCrossRefsFromText,
     repairCorroboratedTruncatedInstrumentIdentifiers,
-    getLangConfig,
     PARSER_VERSION,
   } = await loadHelpers();
   const langConfig = getLangConfig(langCode);
@@ -1253,7 +1461,7 @@ async function parseEurlexHtmlToCombined(htmlText, lang = "ENG") {
       };
     });
 
-  const definitions = articles.flatMap((article) => parseDefinitions(article));
+  const definitions = articles.flatMap((article) => parseDefinitions(article, langConfig));
 
   const annexes = annexStartIndex >= 0
     ? parseTxtTeAnnexes(paragraphs, annexStartIndex, langConfig, injectCrossRefLinks)

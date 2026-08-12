@@ -33,7 +33,7 @@ import {
  * Bump this whenever the parser output changes (new fields, bug fixes, etc.)
  * so that cached parsed results are automatically re-parsed from raw XML.
  */
-export const PARSER_VERSION = 19;
+export const PARSER_VERSION = 20;
 
 // ---------------------------------------------------------------------------
 // FMX → HTML conversion helpers
@@ -1528,10 +1528,19 @@ export function parseFmxToCombined(xmlText) {
   // --- Recitals ---
   const recitals = [];
   for (const consid of root.querySelectorAll("GR\\.CONSID > CONSID")) {
-    const noP = consid.querySelector("NP > NO\\.P");
-    const num = noP ? allText(noP).replace(/[()]/g, "").trim() : String(recitals.length + 1);
     const txtEl = consid.querySelector("NP > TXT") || consid.querySelector("NP");
     const recitalText = txtEl ? allText(txtEl) : "";
+    // Not every CONSID is a recital. Some acts (the Data Act, 32023R2854) wrap
+    // the "Whereas:" lead-in in its own <CONSID><P>Whereas:</P></CONSID> with
+    // no NP, which yielded a text-less recital that consumed number 1 and
+    // pushed the real recital 1 into a duplicate — 120 entries numbered only
+    // to 119. An entry with no text is never worth keeping, and skipping it
+    // before the number is assigned also keeps the index fallback below
+    // counting only real recitals.
+    if (!recitalText.trim()) continue;
+
+    const noP = consid.querySelector("NP > NO\\.P");
+    const num = noP ? allText(noP).replace(/[()]/g, "").trim() : String(recitals.length + 1);
     const recitalHtmlRaw = txtEl ? renderWithFootnotes(txtEl, `recital-${num}`) : "";
     recitals.push({
       recital_number: num,
@@ -1754,31 +1763,24 @@ export function parseFmxToCombined(xmlText) {
           ],
         });
 
-        if (lang.definitionFormat === "verb_first") {
-          // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition
-          const termMatch = text.match(meansRegex);
-          if (termMatch) {
-            const term = termMatch[1].trim();
-            const definition = text.slice(termMatch[0].length).trim();
-            definitions.push(makeDefinition(term, definition));
-          }
+        // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition.
+        // Term-first languages: 'term' meansVerb definition.
+        // Either way, try the configured meansVerb first, then fall back to the
+        // quoted-term pattern for languages where the verb appears only in the
+        // article intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
+        // The verb-first languages need that fallback too: FR/IT/ES/PT state
+        // the verb once ("on entend par:") and then list «terme», définition.
+        const termMatch = text.match(meansRegex);
+        if (termMatch?.[1]) {
+          const term = termMatch[1].trim();
+          const definition = text.slice(termMatch[0].length).trim();
+          definitions.push(makeDefinition(term, definition));
         } else {
-          // Term-first languages: 'term' meansVerb definition
-          // Try the configured meansVerb first; fall back to the quoted-term
-          // pattern for languages where the verb only appears in the article
-          // intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
-          let termMatch = text.match(meansRegex);
-          if (termMatch) {
-            const term = termMatch[1].trim();
-            const definition = text.replace(termMatch[0], "").trim();
-            definitions.push(makeDefinition(term, definition));
-          } else {
-            const fbMatch = text.match(fallbackDefRegex);
-            if (fbMatch) {
-              const term = fbMatch[1].trim();
-              const definition = text.slice(fbMatch[0].length).trim();
-              if (term && definition) definitions.push(makeDefinition(term, definition));
-            }
+          const fbMatch = text.match(fallbackDefRegex);
+          if (fbMatch?.[1]) {
+            const term = fbMatch[1].trim();
+            const definition = text.slice(fbMatch[0].length).trim();
+            if (term && definition) definitions.push(makeDefinition(term, definition));
           }
         }
       }

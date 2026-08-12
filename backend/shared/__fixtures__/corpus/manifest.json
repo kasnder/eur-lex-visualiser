@@ -79,8 +79,8 @@
       "celex": "31995L0046",
       "year": 1995,
       "format": "EUR-Lex HTML — <TXT_TE>, numbered '(N) Whereas …' recitals",
-      "note": "Directive 95/46/EC. 1990s acts number recitals '(N) Whereas …' under a 'Having regard to …' block with no standalone 'Whereas:' heading; the whole preamble must be scanned. This is the regression that motivated the fixture library. Also the guard for HTML cross-reference extraction: recital preambles get cross-ref links injected, the crossReferences map is populated, and trailing '(N) OJ No L …' footnote lines are captured as OJ references.",
-      "expect": { "minArticles": 34, "minRecitals": 72, "minDefinitions": 1, "minCrossRefKeys": 15, "minOjRefs": 5, "minTreatyRefs": 1 }
+      "note": "Directive 95/46/EC. 1990s acts number recitals '(N) Whereas …' under a 'Having regard to …' block with no standalone 'Whereas:' heading; the whole preamble must be scanned. This is the regression that motivated the fixture library. Also the guard for HTML cross-reference extraction: recital preambles get cross-ref links injected, the crossReferences map is populated, and trailing '(N) OJ No L …' footnote lines are captured as OJ references. Its Article 2 is the definitions guard for the pre-2000 drafting style: eight points written in the 'term' shall mean … form, one of them (the data subject's consent) with an apostrophe inside the term.",
+      "expect": { "minArticles": 34, "minRecitals": 72, "minDefinitions": 8, "minCrossRefKeys": 15, "minOjRefs": 5, "minTreatyRefs": 1 }
     },
     {
       "file": "html-txtte-annex-1968-31968R0459.html.gz",
