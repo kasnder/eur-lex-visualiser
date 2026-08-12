@@ -60,14 +60,23 @@ ARG DATA_RELEASE_TAG=data-v11
 # citation-graph.json.gz is a *build input* like the others: it is folded into
 # data.sqlite here and never ships in the runtime image (as raw JSON it is ~373 MB
 # and would cost >1 GB resident to load).
+# `--retry 3 --retry-delay 2` gave up after ~7 seconds, which is shorter than a
+# routine GitHub release-CDN wobble: four 503s inside 7s failed a build whose
+# assets were downloadable a minute later. Dropping --retry-delay restores
+# curl's exponential backoff (1s, 2s, 4s …), so 6 attempts now span ~60s, and
+# --retry-all-errors covers the resets and partial transfers curl otherwise
+# treats as permanent on a ~50 MB download. Note it also retries a 404, so a
+# DATA_RELEASE_TAG pointing at a release that is missing an asset now takes the
+# full backoff to fail rather than erroring immediately -- still a hard failure,
+# just a slower one, with every 404 visible in the build log.
 RUN mkdir -p search/data \
     && for asset in search-cache.json.gz case-law-cache.json.gz citation-graph.json.gz; do \
          echo "Fetching data asset: $asset ($DATA_RELEASE_TAG)" \
-         && curl -fSL --retry 3 --retry-delay 2 \
+         && curl -fSL --retry 6 --retry-all-errors --retry-max-time 300 \
               -o "search/data/$asset" \
               "https://github.com/${DATA_RELEASE_REPO}/releases/download/${DATA_RELEASE_TAG}/$asset"; \
        done \
-    && (curl -fSL --retry 3 --retry-delay 2 \
+    && (curl -fSL --retry 6 --retry-all-errors --retry-max-time 300 \
           -o /tmp/definitions.json.gz \
           "https://github.com/${DATA_RELEASE_REPO}/releases/download/${DATA_RELEASE_TAG}/definitions.json.gz" \
         && mv /tmp/definitions.json.gz search/data/definitions.json.gz \
