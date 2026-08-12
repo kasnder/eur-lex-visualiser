@@ -12,7 +12,22 @@ FROM runtime AS dependencies
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+# better-sqlite3 installs by downloading a prebuilt binary and, when that
+# download fails, falling back to `node-gyp rebuild` — which can never succeed
+# here, because the Playwright base image ships no compiler toolchain, so the
+# fallback dies on "not found: make". That turns a momentary blip
+# ("prebuild-install warn install socket hang up") into a failed build of an
+# otherwise unchanged image. Retry instead, the way the data-asset fetch below
+# already does with `curl --retry`.
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+      if npm ci --omit=dev; then exit 0; fi; \
+      echo "npm ci failed (attempt ${attempt} of 3); retrying" >&2; \
+      rm -rf node_modules; \
+      sleep 5; \
+    done; \
+    echo "npm ci failed after 3 attempts" >&2; \
+    exit 1
 
 # Verify the native SQLite binding, FTS5, and the exact Playwright browser
 # revision before either the data build or final image proceeds.
