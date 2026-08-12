@@ -1763,31 +1763,24 @@ export function parseFmxToCombined(xmlText) {
           ],
         });
 
-        if (lang.definitionFormat === "verb_first") {
-          // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition
-          const termMatch = text.match(meansRegex);
-          if (termMatch) {
-            const term = termMatch[1].trim();
-            const definition = text.slice(termMatch[0].length).trim();
-            definitions.push(makeDefinition(term, definition));
-          }
+        // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition.
+        // Term-first languages: 'term' meansVerb definition.
+        // Either way, try the configured meansVerb first, then fall back to the
+        // quoted-term pattern for languages where the verb appears only in the
+        // article intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
+        // The verb-first languages need that fallback too: FR/IT/ES/PT state
+        // the verb once ("on entend par:") and then list «terme», définition.
+        const termMatch = text.match(meansRegex);
+        if (termMatch?.[1]) {
+          const term = termMatch[1].trim();
+          const definition = text.slice(termMatch[0].length).trim();
+          definitions.push(makeDefinition(term, definition));
         } else {
-          // Term-first languages: 'term' meansVerb definition
-          // Try the configured meansVerb first; fall back to the quoted-term
-          // pattern for languages where the verb only appears in the article
-          // intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
-          let termMatch = text.match(meansRegex);
-          if (termMatch) {
-            const term = termMatch[1].trim();
-            const definition = text.replace(termMatch[0], "").trim();
-            definitions.push(makeDefinition(term, definition));
-          } else {
-            const fbMatch = text.match(fallbackDefRegex);
-            if (fbMatch) {
-              const term = fbMatch[1].trim();
-              const definition = text.slice(fbMatch[0].length).trim();
-              if (term && definition) definitions.push(makeDefinition(term, definition));
-            }
+          const fbMatch = text.match(fallbackDefRegex);
+          if (fbMatch?.[1]) {
+            const term = fbMatch[1].trim();
+            const definition = text.slice(fbMatch[0].length).trim();
+            if (term && definition) definitions.push(makeDefinition(term, definition));
           }
         }
       }

@@ -800,3 +800,160 @@ test("getSharedPlaywrightPage reuses the same page for the same shared browser",
     await closeSharedPlaywrightBrowser();
   }
 });
+
+// --- Definitions in older acts ---------------------------------------------
+//
+// Every shape below is taken from a real pre-2005 directive. They used to
+// yield nothing (no "means" verb, no article title, no point markers) or, worse,
+// a sentence fragment as the term — the definition regex split on the first
+// "means" in the text, wherever it fell.
+
+const legacyAct = (body) => `<!DOCTYPE html><html lang="EN"><head>
+  <meta name="DC.description" content="Council Directive">
+</head><body><div id="TexteOnly"><TXT_TE>${body}</TXT_TE></div></body></html>`;
+
+test("definitions use 'shall mean', the pre-2000 spelling of 'means'", async () => {
+  // Directive 95/46/EC, Article 2. The old parser matched the "means" in
+  // "the purposes and means of the processing" and made a fragment the term.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>For the purposes of this Directive:</p>
+    <p>(a) 'personal data' shall mean any information relating to an identified natural person;</p>
+    <p>(d) 'controller' shall mean the body which alone or jointly with others determines the purposes and means of the processing of personal data;</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term), ["personal data", "controller"]);
+  assert.match(parsed.definitions[1].definition, /^the body which alone/);
+});
+
+test("a definition term may contain the apostrophe that also closes a term", async () => {
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>(g) 'recipient' shall mean a body to whom data are disclosed;</p>
+    <p>(h) 'the data subject's consent' shall mean any freely given indication of his wishes.</p>
+  `), "ENG");
+
+  assert.equal(parsed.definitions[1].term, "the data subject's consent");
+  assert.match(parsed.definitions[1].definition, /^any freely given/);
+});
+
+test("a parenthesised alias between term and verb belongs to neither", async () => {
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>(b) 'processing of personal data' ('processing') shall mean any operation performed upon personal data;</p>
+    <p>(c) 'personal data filing system' ('filing system') shall mean any structured set of personal data;</p>
+  `), "ENG");
+
+  assert.equal(parsed.definitions[0].term, "processing of personal data");
+  assert.match(parsed.definitions[0].definition, /^any operation performed/);
+});
+
+test("definitions parse from a colon with no verb at all", async () => {
+  // Directive 2000/31/EC, Article 2.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>For the purpose of this Directive, the following terms shall bear the following meanings:</p>
+    <p>(c) "established service provider": a service provider who effectively pursues an economic activity;</p>
+    <p>(e) "consumer": any natural person who is acting for purposes outside his trade;</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term),
+    ["established service provider", "consumer"]);
+  assert.match(parsed.definitions[0].definition, /^a service provider who/);
+});
+
+test("definitions parse from an article with no title at all", async () => {
+  // Directive 89/552/EEC, Article 1 — pre-1990 acts carry no <sti-art> title,
+  // so a lookup for the article titled "Definitions" found nothing.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 1</p>
+    <p>For the purpose of this Directive:</p>
+    <p>(a) 'television broadcasting' means the initial transmission by wire or over the air of television programmes;</p>
+    <p>(b) 'television advertising' means any form of announcement broadcast in return for payment;</p>
+  `), "ENG");
+
+  assert.equal(parsed.articles[0].article_title, "");
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term),
+    ["television broadcasting", "television advertising"]);
+  assert.equal(parsed.definitions[0].sourceArticle, "1");
+});
+
+test("an untitled article needs more than one definition to be believed", async () => {
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 5</p>
+    <p>(a) the term 'establishment' means the same as in Article 2 for the purposes of this Article;</p>
+    <p>(b) Member States shall notify the Commission of the measures they adopt.</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions, []);
+});
+
+test("definitions parse from prose that runs several into one paragraph", async () => {
+  // Directive 85/374/EEC, Article 2 — no points, no title, two definitions in
+  // a single sentence run.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p>
+    <p>For the purpose of this Directive 'product' means all movables, with the exception of primary agricultural products. 'Primary agricultural products' means the products of the soil, of stock-farming and of fisheries.</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term),
+    ["product", "Primary agricultural products"]);
+  assert.match(parsed.definitions[0].definition, /^all movables/);
+  assert.doesNotMatch(parsed.definitions[0].definition, /Primary agricultural products/);
+});
+
+test("a definition opened with 'means:' takes its body from the paragraphs below", async () => {
+  // Directive 2003/88/EC, Article 2(4).
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>3. 'night time' means any period of not less than seven hours;</p>
+    <p>4. 'night worker' means:</p>
+    <p>(a) on the one hand, any worker who during night time works at least three hours;</p>
+    <p>(b) on the other hand, any worker who is likely to work a certain proportion of annual working time at night;</p>
+    <p>5. 'shift work' means any method of organising work in shifts;</p>
+  `), "ENG");
+
+  const nightWorker = parsed.definitions.find((entry) => entry.term === "night worker");
+  assert.match(nightWorker.definition, /^\(a\) on the one hand/);
+  assert.match(nightWorker.definition, /\(b\) on the other hand/);
+  assert.equal(parsed.definitions.at(-1).term, "shift work");
+});
+
+test("the pre-1999 OJ backtick opening quote delimits a term", async () => {
+  // Directive 97/7/EC, Article 2 — `distance contract' in the OJ rendering.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 2</p><p>Definitions</p>
+    <p>For the purposes of this Directive:</p>
+    <p>1. \`distance contract' means any contract concerning goods concluded between a supplier and a consumer;</p>
+    <p>2. \`consumer' means any natural person who is acting outside his trade;</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term), ["distance contract", "consumer"]);
+});
+
+test("unquoted 'term: definition' points parse when the article corroborates them", async () => {
+  // Directive 2001/83/EC, Article 1 — no quotation marks and no article title.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 1</p>
+    <p>For the purposes of this Directive, the following terms shall bear the following meanings:</p>
+    <p>1. Proprietary medicinal product: Any ready-prepared medicinal product placed on the market under a special name.</p>
+    <p>2. Medicinal product: Any substance presented for treating or preventing disease in human beings.</p>
+    <p>3. Substance: Any matter irrespective of origin which may be human, animal or vegetable.</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions.map((entry) => entry.term),
+    ["Proprietary medicinal product", "Medicinal product", "Substance"]);
+});
+
+test("unquoted points are not believed on the strength of a colon alone", async () => {
+  // The same shape as above, but ordinary operative prose: without the
+  // corroboration bar every one of these becomes a bogus definition.
+  const parsed = await parseEurlexHtmlToCombined(legacyAct(`
+    <p>Article 7</p>
+    <p>Member States shall ensure that the following conditions are met:</p>
+    <p>(a) the operator holds a licence: the licence shall be issued by the competent authority;</p>
+    <p>(b) the equipment is inspected: inspections shall take place at least once a year;</p>
+  `), "ENG");
+
+  assert.deepEqual(parsed.definitions, []);
+});
