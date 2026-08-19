@@ -30,6 +30,9 @@ const configurations = [
   { name: "eurovoc-1.4", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.4, excerpt: 0.5 } },
   { name: "excerpt-0.3", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.2, excerpt: 0.3 } },
   { name: "excerpt-0.7", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.2, excerpt: 0.7 } },
+  { name: "fulltext-0.3", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.3 } },
+  { name: "fulltext-0.5", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.5 } },
+  { name: "fulltext-0.7", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.7 } },
   { name: "title-heavy", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.3, eurovoc: 1, excerpt: 0.4 } },
   { name: "topic-heavy", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.4, excerpt: 0.4 } },
   { name: "body-heavy", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1, excerpt: 0.7 } },
@@ -48,6 +51,7 @@ const configurations = [
   { name: "no-eurovoc-source", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 0, excerpt: 0.5 } },
   { name: "no-excerpt-source", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0 } },
   { name: "no-topic-or-excerpt", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 0, excerpt: 0 } },
+  { name: "no-fulltext-source", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0 } },
 ];
 
 function objective(metrics) {

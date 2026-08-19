@@ -35,6 +35,10 @@ backend/search/data/case-law-cache.json
 backend/search/data/case-law-cache.json.gz
 backend/search/data/data.sqlite
 backend/search/data/data.sqlite.manifest.json
+backend/search/data/fulltext.sqlite
+backend/search/data/fulltext.sqlite-wal
+backend/search/data/fulltext.sqlite-shm
+backend/search/data/fulltext.sqlite.manifest.json
 backend/search/data/laws/
 backend/search/data/laws-html/
 backend/search/data/case-law/

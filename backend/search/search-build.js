@@ -1182,5 +1182,6 @@ module.exports = {
   reEnrichCurrentCache,
   requestWithRetry,
   runSparql,
+  stripXmlTags,
   wrapForParsing
 };

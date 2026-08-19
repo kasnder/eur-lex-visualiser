@@ -332,6 +332,12 @@ const server = app.listen(PORT, () => {
   console.log(`Rate limit: ${RATE_LIMIT_MAX} req/15min per IP`);
   console.log(`Search cache: ${legalCacheStore.getStatus().ready ? 'loaded' : 'not loaded'} (${legalCacheStore.activePath})`);
   console.log(`Citation graph: ${citationGraphStore.getStatus().ready ? 'loaded' : 'not loaded'} (${citationGraphStore.graphPath})`);
+  {
+    const fulltextStatus = legalCacheStore.getStatus().fulltext;
+    console.log(fulltextStatus.available
+      ? `Full-text index: loaded (v${fulltextStatus.version}, ${fulltextStatus.unitCount} units, ${fulltextStatus.actCount} acts)`
+      : `Full-text index: not loaded (${fulltextStatus.reason})`);
+  }
 });
 
 let shuttingDown = false;

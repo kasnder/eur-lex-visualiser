@@ -14,7 +14,12 @@ const BUILTIN_SEARCH_CACHE_PATH = path.join(__dirname, "data", "search-cache.jso
 const DEFAULT_SEARCH_CACHE_PATH = process.env.SEARCH_CACHE_PATH || BUILTIN_SEARCH_CACHE_PATH;
 const DEFAULT_SQLITE_DATA_PATH = path.join(__dirname, "data", "data.sqlite");
 const DEFAULT_DEFINITIONS_PATH = path.join(__dirname, "data", "definitions.json");
+const DEFAULT_FULLTEXT_SQLITE_PATH = path.join(__dirname, "data", "fulltext.sqlite");
 const SQLITE_SCHEMA_VERSION = 4;
+// Own copy of the version stamped by fulltext-index-build.js (FULLTEXT_SCHEMA_VERSION
+// there) — citation-graph-store.js style: a separate optional artifact keeps its own
+// lock-step constant rather than importing across files. Bump both together.
+const FULLTEXT_SCHEMA_VERSION = 1;
 
 const SUPPLEMENTAL_RECORDS = [
   {
@@ -157,7 +162,7 @@ const CANDIDATE_LIMIT = 200;
 // Title and controlled-vocabulary evidence are co-equal. Body-text matches are
 // useful for recall but deliberately weaker because recitals contain many
 // incidental concepts. Selected on the development split; see eval/README.md.
-const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5 };
+const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.5 }; // fulltext: tuned via eval/tune-ranking.js
 const COVERAGE_EXPONENT = 2;
 
 function citationBoost(count, {
@@ -380,6 +385,11 @@ class JsonLegalCacheStore {
       || (cachePath === BUILTIN_SEARCH_CACHE_PATH
         ? DEFAULT_DEFINITIONS_PATH
         : path.join(path.dirname(cachePath), "definitions.json"));
+    // fulltext.sqlite is a separate, independently optional artifact (not part of
+    // the sqlitePath/JSON fallback chain above) — resolved the same way (explicit
+    // option, then env, then default), but its absence never affects the rest of
+    // load().
+    this.fulltextPath = options.fulltextPath || process.env.FULLTEXT_SQLITE_PATH || DEFAULT_FULLTEXT_SQLITE_PATH;
     this.rankingProfile = options.rankingProfile === "baseline" ? "baseline" : "revised";
     this.rankingConfig = {
       rrfK: options.rankingConfig?.rrfK ?? RRF_K,
@@ -416,10 +426,16 @@ class JsonLegalCacheStore {
     this.definitionsAvailable = false;
     this.citationCounts = new Map(options.citationCounts || []);
     this.source = null;
+    this.fulltextDatabase = null;
+    this.fulltextSearchStatement = null;
+    this.fulltextAvailable = false;
+    this.fulltextReason = null;
+    this.fulltextStats = { unitCount: 0, actCount: 0, version: null };
   }
 
   load() {
     this.close();
+    this.loadFulltext();
     if (this.sqlitePath && fs.existsSync(this.sqlitePath)) {
       return this.loadFromSqlite();
     }
@@ -427,6 +443,91 @@ class JsonLegalCacheStore {
       return this.failLoad(`SQLite data store not found at ${this.sqlitePath}`);
     }
     return this.loadFromJson();
+  }
+
+  // Optional artifact, independent of the sqlitePath/JSON chain above. Any
+  // failure — missing file, wrong PRAGMA user_version, missing/mismatched
+  // fulltext_metadata row, or a thrown error from a corrupt file — leaves
+  // fulltextAvailable false with a reason and never propagates (citation-graph
+  // precedent: an optional artifact can never take down boot).
+  loadFulltext() {
+    this.fulltextDatabase = null;
+    this.fulltextSearchStatement = null;
+    this.fulltextAvailable = false;
+    this.fulltextReason = null;
+    this.fulltextStats = { unitCount: 0, actCount: 0, version: null };
+    if (!this.fulltextPath || !fs.existsSync(this.fulltextPath)) {
+      this.fulltextReason = `Full-text index not found at ${this.fulltextPath}`;
+      return;
+    }
+    let database = null;
+    try {
+      database = new Database(this.fulltextPath, { readonly: true, fileMustExist: true });
+      const schemaVersion = database.prepare("PRAGMA user_version").get().user_version;
+      if (schemaVersion !== FULLTEXT_SCHEMA_VERSION) {
+        this.fulltextReason = `Unsupported full-text index schema ${schemaVersion}; expected ${FULLTEXT_SCHEMA_VERSION}`;
+        database.close();
+        return;
+      }
+      const hasMetadataTable = database.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fulltext_metadata'"
+      ).get();
+      if (!hasMetadataTable) {
+        this.fulltextReason = "Full-text index has no fulltext_metadata table";
+        database.close();
+        return;
+      }
+      const metadata = new Map(
+        database.prepare("SELECT key, value FROM fulltext_metadata").all().map((row) => [row.key, row.value])
+      );
+      const fulltextVersion = metadata.get("fulltext_version");
+      if (!metadata.has("fulltext_version") || String(fulltextVersion) !== String(FULLTEXT_SCHEMA_VERSION)) {
+        this.fulltextReason = `Unsupported fulltext_version ${fulltextVersion}; expected ${FULLTEXT_SCHEMA_VERSION}`;
+        database.close();
+        return;
+      }
+      this.fulltextSearchStatement = database.prepare(`
+        SELECT u.celex AS celex
+        FROM units_fts
+        JOIN units u ON u.id = units_fts.rowid
+        WHERE units_fts MATCH ?
+        ORDER BY bm25(units_fts)
+        LIMIT 500
+      `);
+      this.fulltextStats = {
+        unitCount: Number.parseInt(metadata.get("unit_count"), 10) || 0,
+        actCount: Number.parseInt(metadata.get("act_count"), 10) || 0,
+        version: fulltextVersion,
+      };
+      this.fulltextDatabase = database;
+      this.fulltextAvailable = true;
+    } catch (error) {
+      if (database) {
+        try { database.close(); } catch { /* already closed or failed */ }
+      }
+      this.fulltextDatabase = null;
+      this.fulltextSearchStatement = null;
+      this.fulltextAvailable = false;
+      this.fulltextReason = error.message;
+    }
+  }
+
+  // Dedupe to best-rank-per-celex in JS (bm25 can't be deduped in SQL without
+  // losing rank order), capped at CANDIDATE_LIMIT for parity with the excerpt
+  // source. Returns [] whenever the index isn't loaded — there is deliberately
+  // no JSON/MiniSearch fallback for fulltext.
+  searchFulltext(expression) {
+    if (!this.fulltextAvailable || !this.fulltextSearchStatement || !expression) return [];
+    const seen = new Set();
+    const hits = [];
+    for (const row of this.fulltextSearchStatement.all(expression)) {
+      const celex = row.celex;
+      if (!celex || seen.has(celex)) continue;
+      seen.add(celex);
+      hits.push({ celex });
+      if (hits.length >= CANDIDATE_LIMIT) break;
+    }
+    return hits;
   }
 
   resetIndexes() {
@@ -663,6 +764,13 @@ class JsonLegalCacheStore {
       loadedAt: this.loadedAt,
       count: this.records.length,
       error: this.loadError,
+      fulltext: {
+        available: this.fulltextAvailable,
+        version: this.fulltextStats.version,
+        unitCount: this.fulltextStats.unitCount,
+        actCount: this.fulltextStats.actCount,
+        reason: this.fulltextAvailable ? null : this.fulltextReason,
+      },
     };
   }
 
@@ -919,6 +1027,7 @@ class JsonLegalCacheStore {
       noLongerInForceRecords: countMatching((record) => record.inForce === false),
       excerptRecords,
       citedRecords: [...celexes].filter((celex) => citedCelexes.has(celex)).length,
+      fulltextRecords: this.fulltextAvailable ? this.fulltextStats.actCount : 0,
     };
   }
 
@@ -1009,7 +1118,7 @@ class JsonLegalCacheStore {
       const retrievalQuery = parsed.terms.join(" ") || parsed.rewrittenQuery;
       const { candidateLimit, coverageExponent, rrfK, sourceWeights } = this.rankingConfig;
       const candidates = new Map();
-      const sourceIds = { title: [], eurovoc: [], excerpt: [] };
+      const sourceIds = { title: [], eurovoc: [], excerpt: [], fulltext: [] };
       let candidateOrdinal = 0;
       const expandWithOr = (index, hits) => {
         if (parsed.terms.length < 2 || hits.length >= candidateLimit) return hits;
@@ -1025,6 +1134,13 @@ class JsonLegalCacheStore {
         return expanded;
       };
       const addCandidates = (source, hits, idForHit, coverageForHit = () => 1) => {
+        // A source disabled via a zero (or absent) weight must contribute no
+        // candidates at all — not merely a zero fusion-score term. Otherwise a
+        // candidate matched ONLY by a weight-0 source still occupies a result slot
+        // on sparse-result queries, breaking the eval ablation contract (a
+        // `no-<source>-source` / `--fulltext-weight 0` run must equal that source
+        // fully disabled).
+        if (!(sourceWeights[source] > 0)) return;
         const limited = hits.slice(0, candidateLimit);
         let effectiveRank = 0;
         let previousScore = null;
@@ -1082,6 +1198,15 @@ class JsonLegalCacheStore {
           hits = this.excerptMiniSearch.search(retrievalQuery, { combineWith: "OR" });
         }
         addCandidates("excerpt", hits, (hit) => hit.id);
+      }
+
+      // No JSON/MiniSearch fallback here, unlike excerpt: fulltext is
+      // SQLite-only, and simply skipped when the artifact isn't loaded.
+      if (this.fulltextAvailable) {
+        const terms = parsed.terms || [];
+        let hits = this.searchFulltext(buildFtsExpression(terms, "AND"));
+        if (hits.length === 0) hits = this.searchFulltext(buildFtsExpression(terms, "OR"));
+        addCandidates("fulltext", hits, (hit) => hit.celex);
       }
 
       const ranked = [...candidates.values()]
@@ -1191,18 +1316,28 @@ class JsonLegalCacheStore {
   }
 
   close() {
-    if (!this.database) return;
-    try {
-      this.database.close();
-    } catch {
-      // Already closed or failed during initialization.
+    if (this.database) {
+      try {
+        this.database.close();
+      } catch {
+        // Already closed or failed during initialization.
+      }
+      this.database = null;
+      this.excerptSearchStatement = null;
+      this.definitionSearchStatement = null;
+      this.definitionOccurrenceStatement = null;
+      this.definitionRepresentativeStatement = null;
+      this.definitionUsageStatement = null;
     }
-    this.database = null;
-    this.excerptSearchStatement = null;
-    this.definitionSearchStatement = null;
-    this.definitionOccurrenceStatement = null;
-    this.definitionRepresentativeStatement = null;
-    this.definitionUsageStatement = null;
+    if (this.fulltextDatabase) {
+      try {
+        this.fulltextDatabase.close();
+      } catch {
+        // Already closed or failed during initialization.
+      }
+      this.fulltextDatabase = null;
+      this.fulltextSearchStatement = null;
+    }
   }
 }
 
@@ -1211,6 +1346,8 @@ module.exports = {
   DEFAULT_SEARCH_CACHE_PATH,
   DEFAULT_SQLITE_DATA_PATH,
   DEFAULT_DEFINITIONS_PATH,
+  DEFAULT_FULLTEXT_SQLITE_PATH,
+  FULLTEXT_SCHEMA_VERSION,
   JsonLegalCacheStore,
   SQLITE_SCHEMA_VERSION,
   containedAliasKeys,
