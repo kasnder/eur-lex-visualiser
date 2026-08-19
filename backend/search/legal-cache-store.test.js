@@ -889,23 +889,30 @@ test("fulltext source: an absent artifact is a true no-op (identical results, no
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-absent-"));
   const missingPath = path.join(tempDir, "does-not-exist.sqlite");
 
+  // Both control stores point at distinct nonexistent paths so fulltext is
+  // unavailable for both regardless of what sits at the default path. (An
+  // unset fulltextPath resolves through `|| DEFAULT_FULLTEXT_SQLITE_PATH`, so a
+  // real fulltext.sqlite present on a dev machine — e.g. after a local build —
+  // would otherwise make "unset" diverge from "absent".)
+  const otherMissingPath = path.join(tempDir, "also-does-not-exist.sqlite");
   const withMissingPath = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: missingPath });
-  const withNoPathAtAll = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: null });
+  const withOtherMissingPath = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: otherMissingPath });
   assert.equal(withMissingPath.load(), true);
-  assert.equal(withNoPathAtAll.load(), true);
+  assert.equal(withOtherMissingPath.load(), true);
 
   assert.equal(withMissingPath.getStatus().fulltext.available, false);
   assert.match(withMissingPath.getStatus().fulltext.reason, /not found/i);
+  assert.equal(withOtherMissingPath.getStatus().fulltext.available, false);
 
   const queries = ["digital services act obligations", "personal data protection", FULLTEXT_PROBE_TERM, "regulation"];
   for (const query of queries) {
     const a = withMissingPath.searchLaws(query, { limit: 10 }).map((r) => r.celex);
-    const b = withNoPathAtAll.searchLaws(query, { limit: 10 }).map((r) => r.celex);
-    assert.deepEqual(a, b, `results for "${query}" must be identical whether fulltextPath points nowhere or is unset`);
+    const b = withOtherMissingPath.searchLaws(query, { limit: 10 }).map((r) => r.celex);
+    assert.deepEqual(a, b, `results for "${query}" must be identical for two stores that both have fulltext unavailable`);
   }
 
   withMissingPath.close();
-  withNoPathAtAll.close();
+  withOtherMissingPath.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

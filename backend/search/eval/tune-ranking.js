@@ -31,6 +31,7 @@ const configurations = [
   { name: "excerpt-0.3", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.2, excerpt: 0.3 } },
   { name: "excerpt-0.7", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1, eurovoc: 1.2, excerpt: 0.7 } },
   { name: "fulltext-0.3", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.3 } },
+  { name: "fulltext-0.4", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.4 } }, // current store default
   { name: "fulltext-0.5", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.5 } },
   { name: "fulltext-0.7", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.7 } },
   { name: "title-heavy", rrfK: 20, coverageExponent: 2, sourceWeights: { title: 1.3, eurovoc: 1, excerpt: 0.4 } },

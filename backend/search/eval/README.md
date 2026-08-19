@@ -46,7 +46,7 @@ node search/eval/tune-ranking.js --sqlite search/data/data.sqlite
 Add `--ablations-only` to run only the selected configuration and the
 single-signal removal checks.
 
-The grid includes `fulltext-0.3`, `fulltext-0.5`, and `fulltext-0.7` rows that
+The grid includes `fulltext-0.3`, `fulltext-0.4`, `fulltext-0.5`, and `fulltext-0.7` rows that
 vary the fulltext source weight against the other defaults, plus a
 `no-fulltext-source` ablation (`fulltext: 0`) picked up by `--ablations-only`
 alongside the other `no-*` rows. Like every other row here, it is
@@ -105,7 +105,7 @@ node search/eval/compare-ranking.js \
 Add `--fulltext-weight <n>` to override the fulltext source weight for this
 comparison (both the baseline and revised profile constructions, though only
 the revised profile's RRF fusion reads it). Omit it to use the store's
-built-in weight (0.5); pass `0` to run the fulltext-ablation control. This
+built-in weight (0.4); pass `0` to run the fulltext-ablation control. This
 reuses the store's existing construction-time `rankingConfig.sourceWeights`
 override (the same mechanism `tune-ranking.js` uses for its grid) rather than
 mutating the module-level `SOURCE_WEIGHTS` constant.

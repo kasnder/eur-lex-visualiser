@@ -162,7 +162,10 @@ const CANDIDATE_LIMIT = 200;
 // Title and controlled-vocabulary evidence are co-equal. Body-text matches are
 // useful for recall but deliberately weaker because recitals contain many
 // incidental concepts. Selected on the development split; see eval/README.md.
-const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.5 }; // fulltext: tuned via eval/tune-ranking.js
+// fulltext 0.4: dev-split argmax over a flat 0.3-0.6 plateau (eval/run.js weight
+// sweep). Set just below excerpt (0.5) — the curated excerpt is higher-precision
+// than raw recital body text, so full-text is the weaker-per-hit recall source.
+const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0.4 };
 const COVERAGE_EXPONENT = 2;
 
 function citationBoost(count, {
