@@ -212,6 +212,44 @@ jobs:
           echo "baseline_act_count=$baseline_act_count" >> "$GITHUB_OUTPUT"
           echo "Resuming from $baseline_act_count indexed acts." >> "$GITHUB_STEP_SUMMARY"
 
+      # The corpus backlog can outlast a single job. An interrupted run uploads
+      # its partial index below; picking the newest one up here makes successive
+      # runs converge instead of each restarting from the published release.
+      - name: Resume from an interrupted run's checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=fulltext-checkpoint" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+          if [ -z "$artifact" ]; then
+            echo "No checkpoint from a previous run; starting from the published index." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          artifact_id=$(jq -er '.id' <<< "$artifact")
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip
+          rm -rf checkpoint && mkdir checkpoint
+          unzip -q checkpoint.zip -d checkpoint
+          test -s checkpoint/fulltext.sqlite || { echo "Checkpoint artifact has no fulltext.sqlite; ignoring it."; exit 0; }
+          baseline_act_count=$(jq -er '.baselineActCount | numbers' refresh-output/fulltext-baseline.json)
+          # Only adopt a checkpoint that is readable and at least as complete as
+          # the published index; anything else is discarded rather than trusted.
+          checkpoint_act_count=$(node -e '
+            const Database = require("better-sqlite3");
+            const db = new Database("checkpoint/fulltext.sqlite", { readonly: true });
+            process.stdout.write(String(db.prepare("SELECT COUNT(DISTINCT celex) n FROM units").get().n));
+            db.close();
+          ') || { echo "Checkpoint is unreadable; starting from the published index."; exit 0; }
+          if [ "$checkpoint_act_count" -le "$baseline_act_count" ]; then
+            echo "Checkpoint ($checkpoint_act_count acts) adds nothing over the published index ($baseline_act_count); ignoring it." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          mv checkpoint/fulltext.sqlite refresh-output/fulltext.sqlite
+          rm -f refresh-output/fulltext.sqlite-wal refresh-output/fulltext.sqlite-shm
+          echo "Resumed from checkpoint: $checkpoint_act_count acts already indexed (published index has $baseline_act_count)." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Incrementally build fulltext index
         working-directory: backend
         shell: bash
@@ -220,6 +258,7 @@ jobs:
           SEARCH_CACHE_PATH="$PWD/search/data/search-cache.json.gz" \
             node --max-old-space-size=8192 search/fulltext-index-build.js \
               --corpusDir search/data/fulltext-corpus \
+              --pool 3 \
               --out ../refresh-output/fulltext.sqlite \
             | tee ../refresh-output/fulltext-build.log
           test -s ../refresh-output/fulltext.sqlite
@@ -299,9 +338,33 @@ jobs:
             gzip --best --stdout refresh-output/fulltext.sqlite > refresh-output/fulltext.sqlite.gz
             gzip --test refresh-output/fulltext.sqlite.gz
             test -s refresh-output/fulltext.sqlite.gz
+            # The index grows with corpus coverage, and GitHub rejects release
+            # assets over 2 GiB. Fail here with the measured size rather than
+            # part-way through an upload, and report the growth either way.
+            raw_bytes=$(stat -c %s refresh-output/fulltext.sqlite)
+            gz_bytes=$(stat -c %s refresh-output/fulltext.sqlite.gz)
+            echo "Fulltext asset: $((raw_bytes / 1048576)) MiB raw, $((gz_bytes / 1048576)) MiB gz." \
+              >> "$GITHUB_STEP_SUMMARY"
+            test "$gz_bytes" -le "$((1536 * 1048576))" || {
+              echo "fulltext.sqlite.gz is $((gz_bytes / 1048576)) MiB, over the 1536 MiB release-asset guard" >&2
+              exit 1
+            }
           fi
           rm refresh-output/fulltext.sqlite
           test -s refresh-output/fulltext.sqlite.manifest.json
+
+      # Runs on timeout/cancellation too, so the acts indexed so far survive to
+      # seed the next run. Overwrites the previous checkpoint: only the most
+      # complete one is worth keeping.
+      - name: Upload interrupted fulltext checkpoint
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fulltext-checkpoint
+          path: refresh-output/fulltext.sqlite
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
 
       - name: Upload fulltext candidate
         uses: actions/upload-artifact@v4
