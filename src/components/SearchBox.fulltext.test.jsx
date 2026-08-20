@@ -73,7 +73,7 @@ function openFulltextMode() {
   const heroInput = container.querySelector("input");
   typeInto(heroInput, "zz");
   const tab = Array.from(document.body.querySelectorAll('[role="tab"]'))
-    .find((element) => element.textContent === "Law texts");
+    .find((element) => element.textContent === "Full-text search");
   act(() => tab.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   return document.body.querySelector('[role="dialog"] input');
 }
