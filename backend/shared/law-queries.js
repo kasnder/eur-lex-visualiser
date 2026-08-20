@@ -55,6 +55,13 @@ LIMIT 10`;
   };
 }
 
+// Some acts (e.g. heavily-amended directives/regulations) have far more than a
+// handful of amendments — 233 is the highest observed count in production.
+// The cap must stay comfortably above that, and rows must survive ordered by
+// newest first, or a truncated result silently drops the most recent
+// amendments instead of the oldest ones (see `truncated` below).
+const AMENDMENTS_LIMIT = 300;
+
 async function fetchAmendments(celex, runSparqlQuery) {
   const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
   const query = `
@@ -71,11 +78,12 @@ SELECT DISTINCT ?type ?sourceCelex ?date WHERE {
   FILTER(STRSTARTS(STR(?sourceCelex), "http://publications.europa.eu/resource/celex/"))
   OPTIONAL { ?sourceWork cdm:work_date_document ?date }
 }
-ORDER BY ?date
-LIMIT 50`;
+ORDER BY DESC(?date)
+LIMIT ${AMENDMENTS_LIMIT}`;
 
   const data = await runSparqlQuery(query);
-  const amendments = (data.results?.bindings || []).map((b) => {
+  const bindings = data.results?.bindings || [];
+  const amendments = bindings.map((b) => {
     const raw = b.sourceCelex?.value?.split('/').pop() || null;
     return {
       celex: raw ? decodeURIComponent(raw) : null,
@@ -84,7 +92,68 @@ LIMIT 50`;
     };
   }).filter((a) => a.celex);
 
-  return { celex, amendments };
+  // Hitting the cap means older rows were left out (newest survive, per the
+  // DESC order above), so the count callers derive from `amendments` is only
+  // a lower bound — they must say "at least N", never a precise number.
+  return { celex, amendments, truncated: bindings.length >= AMENDMENTS_LIMIT };
+}
+
+// Consolidated ("as amended") versions live in CELEX sector 0 under a
+// point-in-time id: 32013R0575 -> 02013R0575-20260626. A suffixed original
+// keeps its suffix: 31999F0130(06) -> 01999F0130(06)-20021220. Acts from any
+// sector can have one — sector-2 international agreements (e.g. the EEA
+// Agreement, 21994A0103(01) -> 01994A0103(01)-20160519) do too, not just
+// sector-3 legislation — so this only rejects CELEX ids that aren't shaped
+// like an original act to begin with (already a point-in-time id, malformed,
+// etc.), short-circuiting those without a SPARQL round trip. The pattern
+// mirrors validateCelex's domain (reference-utils.js) so nothing admitted by
+// the route falls through here unchecked.
+const ORIGINAL_ACT_CELEX = /^\d{5}[A-Z]{1,2}\d{4}(\(\d+\))?$/;
+const CONSOLIDATED_CELEX = /^(0\d{4}[A-Z]{1,2}\d{4}(?:\(\d+\))?)-(\d{4})(\d{2})(\d{2})$/;
+
+function consolidatedBaseCelex(celex) {
+  const normalized = String(celex || '').toUpperCase();
+  // `normalized` only reaches the interpolated SPARQL FILTER in
+  // fetchConsolidatedVersions once it has passed this strict regex, whose
+  // character class is limited to digits, A-Z, and literal parentheses — so
+  // no quote, backslash, or brace can ever be smuggled into the query string.
+  return ORIGINAL_ACT_CELEX.test(normalized) ? `0${normalized.slice(1)}` : null;
+}
+
+/**
+ * List the consolidated versions EUR-Lex publishes for an act, oldest first.
+ *
+ * Cellar has no "consolidated version of" predicate that resolves from the base
+ * act, so this matches on the point-in-time CELEX id instead. Consolidations can
+ * be dated in the future (a version prepared for an amendment that has not yet
+ * applied); the whole list is returned unfiltered and callers decide which one
+ * is current, so the payload stays cacheable without a "today" baked into it.
+ */
+async function fetchConsolidatedVersions(celex, runSparqlQuery) {
+  const base = consolidatedBaseCelex(celex);
+  if (!base) return { celex, base: null, versions: [] };
+
+  const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+SELECT DISTINCT ?id WHERE {
+  ?work cdm:resource_legal_id_celex ?id .
+  FILTER(STRSTARTS(STR(?id), "${base}-"))
+}
+ORDER BY ?id
+LIMIT 200`;
+
+  const data = await runSparqlQuery(query);
+  const versions = (data.results?.bindings || [])
+    .map((binding) => {
+      const id = String(binding.id?.value || '').toUpperCase();
+      const match = CONSOLIDATED_CELEX.exec(id);
+      if (!match || match[1] !== base) return null;
+      return { celex: id, date: `${match[2]}-${match[3]}-${match[4]}` };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return { celex, base, versions };
 }
 
 async function fetchImplementing(celex, runSparqlQuery) {
@@ -627,6 +696,7 @@ module.exports = {
   ACT_CELEX_MAP,
   fetchMetadata,
   fetchAmendments,
+  fetchConsolidatedVersions,
   fetchImplementing,
   fetchCaseLaw,
   parseCitationsToRefs,

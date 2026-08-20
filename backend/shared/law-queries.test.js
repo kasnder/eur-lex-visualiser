@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { fetchCaseLaw, parseCitationsToRefs } = require("./law-queries");
+const { fetchCaseLaw, fetchConsolidatedVersions, parseCitationsToRefs } = require("./law-queries");
 
 test("fetchCaseLaw reads precomputed details from the data store and never writes", async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "case-law-cache-"));
@@ -173,4 +173,79 @@ test('fetchCaseLaw includes and formats General Court judgments', async () => {
 
   assert.match(query, /\(CJ\|TJ\)/);
   assert.equal(payload.cases[0].caseNumber, 'T-123/25');
+});
+
+test('fetchConsolidatedVersions maps point-in-time CELEX ids to dated versions', async () => {
+  let query = '';
+  const payload = await fetchConsolidatedVersions('32013R0575', async (value) => {
+    query = value;
+    return {
+      results: {
+        bindings: [
+          { id: { value: '02013R0575-20260626' } },
+          { id: { value: '02013R0575-20130628' } },
+          // Neighbouring acts share the id prefix up to the separator; the
+          // base must match exactly or 32013R0575 would absorb 32013R05750.
+          { id: { value: '02013R05750-20200101' } },
+          { id: { value: 'not-a-celex' } },
+        ],
+      },
+    };
+  });
+
+  assert.match(query, /STRSTARTS\(STR\(\?id\), "02013R0575-"\)/);
+  assert.equal(payload.base, '02013R0575');
+  assert.deepEqual(payload.versions, [
+    { celex: '02013R0575-20130628', date: '2013-06-28' },
+    { celex: '02013R0575-20260626', date: '2026-06-26' },
+  ]);
+});
+
+test('fetchConsolidatedVersions skips SPARQL for CELEX ids that cannot be consolidated', async () => {
+  let called = false;
+  // Already a point-in-time consolidated id itself (sector 0 + trailing
+  // date) — not shaped like an original act, so it must not be re-consolidated.
+  const payload = await fetchConsolidatedVersions('02013R0575-20260626', async () => {
+    called = true;
+    return { results: { bindings: [] } };
+  });
+
+  assert.equal(called, false);
+  assert.equal(payload.base, null);
+  assert.deepEqual(payload.versions, []);
+});
+
+test('fetchConsolidatedVersions matches a suffixed original act, not just sector 3', async () => {
+  let query = '';
+  const payload = await fetchConsolidatedVersions('31999F0130(06)', async (value) => {
+    query = value;
+    return {
+      results: {
+        bindings: [
+          { id: { value: '01999F0130(06)-20021220' } },
+        ],
+      },
+    };
+  });
+
+  assert.match(query, /STRSTARTS\(STR\(\?id\), "01999F0130\(06\)-"\)/);
+  assert.equal(payload.base, '01999F0130(06)');
+  assert.deepEqual(payload.versions, [
+    { celex: '01999F0130(06)-20021220', date: '2002-12-20' },
+  ]);
+});
+
+test('fetchConsolidatedVersions matches a sector-2 international agreement', async () => {
+  const payload = await fetchConsolidatedVersions('21994A0103(01)', async () => ({
+    results: {
+      bindings: [
+        { id: { value: '01994A0103(01)-20160519' } },
+      ],
+    },
+  }));
+
+  assert.equal(payload.base, '01994A0103(01)');
+  assert.deepEqual(payload.versions, [
+    { celex: '01994A0103(01)-20160519', date: '2016-05-19' },
+  ]);
 });
