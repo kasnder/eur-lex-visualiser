@@ -60,7 +60,7 @@
     "searchingMatches": "Searching {count} last opened {lawWord} in {language}. Open a law in this language to make it searchable.",
     "searchingDefinitions": "Searching definitions extracted from English EU law.",
     "searchingFulltext": "Searching English body text across EU acts.",
-    "scopeFulltext": "Articles and recitals in the English full-text corpus.",
+    "scopeFulltext": "English articles & recitals",
     "fulltextEnglishOnly": "English law text only",
     "clear": "Clear search",
     "submitLawSearch": "Search laws",
