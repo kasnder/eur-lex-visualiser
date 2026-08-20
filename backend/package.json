@@ -45,5 +45,10 @@
   },
   "engines": {
     "node": ">=22.12"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

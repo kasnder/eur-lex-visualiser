@@ -37,7 +37,17 @@ jobs:
           node-version: "24"
       # The repository currently has no pnpm lockfile; allow pnpm to resolve the
       # existing package.json dependencies without creating a committed change.
-      - run: pnpm install --dir backend --no-frozen-lockfile
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          # pnpm 10 blocks dependency build scripts unless allowlisted in
+          # package.json, which leaves better-sqlite3 without its native
+          # binding. Rebuild defensively and fail here rather than deep inside
+          # a builder step.
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
 
       - name: Resolve current and next corpus release
         id: resolve-corpus
