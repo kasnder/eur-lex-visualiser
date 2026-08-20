@@ -97,26 +97,46 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p refresh-inputs refresh-output backend/search/data
-          gh release download "${{ steps.resolve-corpus.outputs.current_tag }}" \
+          current_corpus_tag="${{ steps.resolve-corpus.outputs.current_tag }}"
+          current_data_tag="${{ steps.current-data.outputs.tag }}"
+          corpus_assets=$(gh release view "$current_corpus_tag" \
+            --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
+          gh release download "$current_corpus_tag" \
             --repo "${{ github.repository }}" \
             --pattern laws.tar \
             --pattern laws-html.tar \
             --pattern case-law.tar \
             --pattern case-law-harvest-state.json \
-            --pattern case-law-misses.json \
             --pattern case-law-targets.txt \
             --dir refresh-inputs
-          corpus_assets=$(gh release view "${{ steps.resolve-corpus.outputs.current_tag }}" \
-            --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
+          if grep -Fxq "case-law-misses.json" <<< "$corpus_assets"; then
+            gh release download "$current_corpus_tag" \
+              --repo "${{ github.repository }}" \
+              --pattern case-law-misses.json \
+              --dir refresh-inputs
+          elif grep -Fxq "case-law-harvest-state.json.misses.txt" <<< "$corpus_assets"; then
+            # corpus-v1 predates the JSON diagnostics asset; retain its
+            # permanent-miss list in the current input format.
+            gh release download "$current_corpus_tag" \
+              --repo "${{ github.repository }}" \
+              --pattern case-law-harvest-state.json.misses.txt \
+              --dir refresh-inputs
+            jq -Rn '{generatedAt:null,missing:[inputs],failed:[]}' \
+              refresh-inputs/case-law-harvest-state.json.misses.txt \
+              > refresh-inputs/case-law-misses.json
+          else
+            echo "Current corpus release has neither case-law-misses.json nor case-law-harvest-state.json.misses.txt" >&2
+            exit 1
+          fi
           for journal in law-dates.json eurovoc.json in-force.json; do
             if grep -Fxq "$journal" <<< "$corpus_assets"; then
-              gh release download "${{ steps.resolve-corpus.outputs.current_tag }}" \
+              gh release download "$current_corpus_tag" \
                 --repo "${{ github.repository }}" \
                 --pattern "$journal" \
                 --dir refresh-inputs
             fi
           done
-          gh release download "${{ steps.current-data.outputs.tag }}" \
+          gh release download "$current_data_tag" \
             --repo "${{ github.repository }}" \
             --pattern search-cache.json.gz \
             --dir refresh-inputs
