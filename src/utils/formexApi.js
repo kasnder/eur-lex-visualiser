@@ -228,12 +228,19 @@ function hasKnownMissingFmx(celex, lang = "EN") {
   return KNOWN_MISSING_FMX.has(makeCacheKey(celex, lang));
 }
 
+function payloadHasContent(payload) {
+  return Boolean(payload && (
+    payload.articles?.length || payload.recitals?.length || payload.annexes?.length
+  ));
+}
+
 function isCombinedLawEnvelope(value) {
   return !!value
     && typeof value === "object"
     && value.format === "combined-v1"
     && typeof value.payload === "object"
-    && value.payload != null;
+    && value.payload != null
+    && payloadHasContent(value.payload);
 }
 
 function createCombinedLawEnvelope(payload, rawXml = null) {
@@ -769,14 +776,33 @@ export async function fetchFormex(celex, lang = "EN") {
       );
     }
 
-    // 4. Cache it
-    await cacheSet(cacheKey, xmlText);
-    await upsertLawMeta(celex, { cachedAt: Date.now() });
-    await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("legalviz-formex-cache-updated", {
-        detail: { celex, lang: lang.toUpperCase() },
-      }));
+    // 4. Cache it — but only when it actually parses to a law with content.
+    // A response can be a well-formed Formex document with zero articles/
+    // recitals/annexes (see #148/#153: REACH has no as-adopted manifestation
+    // at all). Caching that raw XML would let it be served forever as a
+    // "cache hit" — this function's own cache-read check above only
+    // validates isFmxDocument, not content — and would add the law to the
+    // library via upsertLawMeta even though it can never be read. Skip
+    // persistence in that case; still return the XML so the caller renders
+    // the empty-content notice instead of a load error. On an unexpected
+    // parse failure here, cache as before rather than block on a check this
+    // function doesn't otherwise need to make.
+    let hasContent = true;
+    try {
+      hasContent = payloadHasContent(parseFmxToCombined(xmlText));
+    } catch {
+      // ignore — isFmxDocument already validated the shape above
+    }
+
+    if (hasContent) {
+      await cacheSet(cacheKey, xmlText);
+      await upsertLawMeta(celex, { cachedAt: Date.now() });
+      await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("legalviz-formex-cache-updated", {
+          detail: { celex, lang: lang.toUpperCase() },
+        }));
+      }
     }
 
     return xmlText;
@@ -807,6 +833,7 @@ export async function getCachedLawPayload(celex, lang = "EN") {
     console.log(`[FormexAPI] Upgrading raw XML cache to envelope: ${cacheKey}`);
     try {
       const payload = parseFmxToCombined(cached);
+      if (!payloadHasContent(payload)) return null;
       await cacheSet(cacheKey, createCombinedLawEnvelope(payload, cached));
       return createCombinedLawEnvelope(payload);
     } catch {
@@ -828,6 +855,7 @@ export async function getCachedLawPayload(celex, lang = "EN") {
       console.log(`[FormexAPI] Re-parsing stale cache (parser v${cached.parserVersion ?? "pre-versioning"} → v${PARSER_VERSION}): ${cacheKey}`);
       try {
         const payload = parseFmxToCombined(cached.rawXml);
+        if (!payloadHasContent(payload)) return null;
         const envelope = createCombinedLawEnvelope(payload, cached.rawXml);
         await cacheSet(cacheKey, envelope);
         return envelope;
@@ -849,6 +877,7 @@ export async function getCachedLawPayload(celex, lang = "EN") {
  * loads skip parsing and parser upgrades can re-parse from the stored XML.
  */
 export function cacheParsedLaw(celex, lang, payload, rawXml) {
+  if (!payloadHasContent(payload)) return;
   const cacheKey = makeCacheKey(celex, lang);
   // Fire-and-forget: callers don't await this, so failures must not become
   // unhandled promise rejections. Matches cacheSet's own silent-ignore policy.
@@ -1153,13 +1182,15 @@ export async function fetchParsedLaw(celex, lang = "EN") {
     }
 
     const payload = await res.json();
-    await cacheSet(cacheKey, createCombinedLawEnvelope(payload));
-    await upsertLawMeta(celex, { cachedAt: Date.now() });
-    await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("legalviz-formex-cache-updated", {
-        detail: { celex, lang: lang.toUpperCase() },
-      }));
+    if (payloadHasContent(payload)) {
+      await cacheSet(cacheKey, createCombinedLawEnvelope(payload));
+      await upsertLawMeta(celex, { cachedAt: Date.now() });
+      await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("legalviz-formex-cache-updated", {
+          detail: { celex, lang: lang.toUpperCase() },
+        }));
+      }
     }
 
     return payload;
