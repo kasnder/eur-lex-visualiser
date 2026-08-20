@@ -173,7 +173,22 @@ jobs:
 
           const manifest = JSON.parse(fs.readFileSync("refresh-inputs/fulltext.sqlite.manifest.json", "utf8"));
           const stat = fs.statSync("refresh-output/fulltext.sqlite");
-          const sha256 = crypto.createHash("sha256").update(fs.readFileSync("refresh-output/fulltext.sqlite")).digest("hex");
+          // Hash in 1 MiB chunks: the index is already ~450 MB and grows with
+          // every refresh, so buffering the whole file would add a matching
+          // RSS spike (and eventually hit Node's Buffer ceiling).
+          const hashFile = (file) => {
+            const hash = crypto.createHash("sha256");
+            const fd = fs.openSync(file, "r");
+            try {
+              const buf = Buffer.allocUnsafe(1024 * 1024);
+              let read = 0;
+              while ((read = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, read));
+            } finally {
+              fs.closeSync(fd);
+            }
+            return hash.digest("hex");
+          };
+          const sha256 = hashFile("refresh-output/fulltext.sqlite");
           if (manifest.bytes !== stat.size || manifest.sha256 !== sha256) {
             throw new Error("current fulltext manifest does not match the SQLite asset");
           }
@@ -248,7 +263,22 @@ jobs:
           const manifestPath = "refresh-output/fulltext.sqlite.manifest.json";
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
           const stat = fs.statSync("refresh-output/fulltext.sqlite");
-          const sha256 = crypto.createHash("sha256").update(fs.readFileSync("refresh-output/fulltext.sqlite")).digest("hex");
+          // Hash in 1 MiB chunks: the index is already ~450 MB and grows with
+          // every refresh, so buffering the whole file would add a matching
+          // RSS spike (and eventually hit Node's Buffer ceiling).
+          const hashFile = (file) => {
+            const hash = crypto.createHash("sha256");
+            const fd = fs.openSync(file, "r");
+            try {
+              const buf = Buffer.allocUnsafe(1024 * 1024);
+              let read = 0;
+              while ((read = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, read));
+            } finally {
+              fs.closeSync(fd);
+            }
+            return hash.digest("hex");
+          };
+          const sha256 = hashFile("refresh-output/fulltext.sqlite");
           Object.assign(manifest, counts, { bytes: stat.size, sha256 });
           for (const key of ["unitCount", "articleCount", "recitalCount", "actCount"]) {
             if (manifest[key] !== counts[key]) throw new Error(`fulltext manifest ${key} does not match database`);
