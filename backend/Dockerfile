@@ -55,6 +55,9 @@ COPY search/build-sqlite-data.js search/search-ranking.js ./search/
 # changes and only re-runs when DATA_RELEASE_TAG is bumped for a new data build.
 ARG DATA_RELEASE_REPO=maastrichtlawtech/legalviz.eu
 ARG DATA_RELEASE_TAG=data-v11
+# The full-text index ships on its own release tag, decoupled from data-vN —
+# see FULLTEXT_RELEASE_TAG in the root CLAUDE.md cache-invalidation table.
+ARG FULLTEXT_RELEASE_TAG=fulltext-v2
 # Every asset comes from this one tag, so a new release must carry the full set —
 # re-upload the unchanged ones alongside the changed one or this fetch 404s.
 # citation-graph.json.gz is a *build input* like the others: it is folded into
@@ -81,6 +84,13 @@ RUN mkdir -p search/data \
           "https://github.com/${DATA_RELEASE_REPO}/releases/download/${DATA_RELEASE_TAG}/definitions.json.gz" \
         && mv /tmp/definitions.json.gz search/data/definitions.json.gz \
         || echo "Optional definitions asset is not present in $DATA_RELEASE_TAG") \
+    && (curl -fSL --retry 6 --retry-all-errors --retry-max-time 300 \
+          -o /tmp/fulltext.sqlite.gz \
+          "https://github.com/${DATA_RELEASE_REPO}/releases/download/${FULLTEXT_RELEASE_TAG}/fulltext.sqlite.gz" \
+        && gunzip -c /tmp/fulltext.sqlite.gz > search/data/fulltext.sqlite \
+        && rm -f /tmp/fulltext.sqlite.gz \
+        || { echo "Optional fulltext asset is not present in $FULLTEXT_RELEASE_TAG"; \
+             touch search/data/fulltext.sqlite; }) \
     && node search/build-sqlite-data.js \
     && ls -lh search/data/data.sqlite search/data/data.sqlite.manifest.json
 
@@ -89,6 +99,13 @@ FROM dependencies AS final
 COPY . .
 COPY --from=data-builder /app/search/data/data.sqlite ./search/data/data.sqlite
 COPY --from=data-builder /app/search/data/data.sqlite.manifest.json ./search/data/data.sqlite.manifest.json
+# fulltext.sqlite is optional (own fulltext-vN release train, see FULLTEXT_RELEASE_TAG
+# above): the data-builder stage always leaves a file at this path — the real gunzip'd
+# asset, or an empty placeholder `touch`ed when the release asset was absent — so this
+# COPY never fails the build. legal-cache-store.js treats a missing/invalid/empty
+# database as fulltextAvailable=false at boot, the same non-fatal pattern used for
+# definitionsAvailable and the citation graph.
+COPY --from=data-builder /app/search/data/fulltext.sqlite ./search/data/fulltext.sqlite
 
 RUN mkdir -p law-cache
 

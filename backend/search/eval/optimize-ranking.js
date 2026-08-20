@@ -15,13 +15,16 @@ const {
 } = require("./run");
 
 const CASES_PATH = path.join(__dirname, "ranking-queries.json");
-const SOURCE_NAMES = ["title", "eurovoc", "excerpt"];
+const SOURCE_NAMES = ["title", "eurovoc", "excerpt", "fulltext"];
 const HALTON_BASES = [2, 3, 5, 7, 11, 13, 17];
 const DEFAULT_CONFIG = {
   name: "current",
   rrfK: 20,
   coverageExponent: 2,
-  sourceWeights: { title: 1, eurovoc: 1, excerpt: 0.5 / 1.1 },
+  // Full-text fusion is disabled by the store default after the real-data
+  // evaluation found no measurable ranking benefit. Keep the dimension in the
+  // cached graph so explicit-weight re-evaluations remain possible.
+  sourceWeights: { title: 1, eurovoc: 1, excerpt: 0.5 / 1.1, fulltext: 0 },
   inForceBoost: 1.08,
   noLongerInForceBoost: 0.9,
   citationLogScale: 0.025,
@@ -65,6 +68,10 @@ function generateConfigurations(samples) {
         title: 1,
         eurovoc: interpolate(0.55, 1.65, eurovoc),
         excerpt: interpolate(0.2, 0.9, excerpt),
+        // Not part of the Halton search (no spare dimension below); fixed at
+        // the DEFAULT_CONFIG ratio so rerankCached's fusion loop over
+        // SOURCE_NAMES never sees an undefined weight for this source.
+        fulltext: DEFAULT_CONFIG.sourceWeights.fulltext,
       },
       inForceBoost: interpolate(1, 1.15, current),
       noLongerInForceBoost: interpolate(0.75, 1, historical),

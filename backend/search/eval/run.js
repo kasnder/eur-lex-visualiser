@@ -106,6 +106,7 @@ function summarizeOutcomes(outcomes) {
       title: candidateRecall("title"),
       eurovoc: candidateRecall("eurovoc"),
       excerpt: candidateRecall("excerpt"),
+      fulltext: candidateRecall("fulltext"),
       union: candidateRecall("union"),
     },
   };
@@ -146,6 +147,7 @@ function evaluateSearch(searcher, cases, { limit = 5, disableRewrites = true } =
         title: hasExpected(diagnostics.sources.title),
         eurovoc: hasExpected(diagnostics.sources.eurovoc),
         excerpt: hasExpected(diagnostics.sources.excerpt),
+        fulltext: hasExpected(diagnostics.sources.fulltext),
         union: hasExpected(diagnostics.union),
       } : null,
     };
@@ -215,6 +217,7 @@ function parseArgs(argv) {
     cachePath: DEFAULT_CACHE_PATH,
     casesPath: DEFAULT_CASES_PATH,
     sqlitePath: null,
+    fulltextPath: null,
     split: "all",
     iterations: 5,
     limit: 5,
@@ -227,13 +230,14 @@ function parseArgs(argv) {
     if (token === "--json") options.json = true;
     else if (token === "--enable-rewrites") options.disableRewrites = false;
     else if (token === "--baseline-ranking") options.rankingProfile = "baseline";
-    else if (["--label", "--cache", "--cases", "--sqlite", "--split", "--iterations", "--limit"].includes(token)) {
+    else if (["--label", "--cache", "--cases", "--sqlite", "--fulltext", "--split", "--iterations", "--limit"].includes(token)) {
       const value = argv[index + 1];
       if (!value) throw new Error(`Missing value for ${token}`);
       if (token === "--label") options.label = value;
       else if (token === "--cache") options.cachePath = path.resolve(value);
       else if (token === "--cases") options.casesPath = path.resolve(value);
       else if (token === "--sqlite") options.sqlitePath = path.resolve(value);
+      else if (token === "--fulltext") options.fulltextPath = path.resolve(value);
       else if (token === "--split") options.split = value;
       else if (token === "--iterations") options.iterations = Number.parseInt(value, 10);
       else options.limit = Number.parseInt(value, 10);
@@ -265,10 +269,10 @@ function formatHuman(report) {
   const lines = [
     `Search evaluation (${report.label}): ${report.cases} cases against ${report.cachePath}`,
     `Quality: recall@1 ${percent(report.quality.recallAt1)}, recall@5 ${percent(report.quality.recallAt5)}, MRR ${report.quality.mrr.toFixed(3)}, nDCG@5 ${report.quality.ndcgAt5.toFixed(3)}, nDCG@10 ${report.quality.ndcgAt10.toFixed(3)}`,
-    `Candidate recall: union ${optionalPercent(report.quality.candidateRecall.union)}, title ${optionalPercent(report.quality.candidateRecall.title)}, EuroVoc ${optionalPercent(report.quality.candidateRecall.eurovoc)}, excerpt ${optionalPercent(report.quality.candidateRecall.excerpt)}`,
+    `Candidate recall: union ${optionalPercent(report.quality.candidateRecall.union)}, title ${optionalPercent(report.quality.candidateRecall.title)}, EuroVoc ${optionalPercent(report.quality.candidateRecall.eurovoc)}, excerpt ${optionalPercent(report.quality.candidateRecall.excerpt)}, fulltext ${optionalPercent(report.quality.candidateRecall.fulltext)}`,
     `Latency: p50 ${report.latency.p50Ms.toFixed(2)} ms, p95 ${report.latency.p95Ms.toFixed(2)} ms, max ${report.latency.maxMs.toFixed(2)} ms (${report.latency.samples} samples)`,
     `Load: ${report.loadMs.toFixed(2)} ms; memory after load: ${report.memory.rssMb.toFixed(1)} MB RSS, ${report.memory.heapUsedMb.toFixed(1)} MB heap`,
-    `Signals: EuroVoc ${signalPercent(report.signals.eurovocRecords)}, status ${signalPercent(report.signals.knownStatusRecords)}, excerpts ${signalPercent(report.signals.excerptRecords)}, cited ${signalPercent(report.signals.citedRecords)}`,
+    `Signals: EuroVoc ${signalPercent(report.signals.eurovocRecords)}, status ${signalPercent(report.signals.knownStatusRecords)}, excerpts ${signalPercent(report.signals.excerptRecords)}, cited ${signalPercent(report.signals.citedRecords)}, fulltext acts ${signalPercent(report.signals.fulltextRecords)}`,
     "Categories:",
   ];
   for (const [category, metrics] of Object.entries(report.quality.byCategory)) {
@@ -290,9 +294,13 @@ function run(options) {
   const cases = options.split === "all" ? loadedCases : loadedCases.filter((entry) => entry.split === options.split);
   if (cases.length === 0) throw new Error(`No ${options.split} cases in ${options.casesPath}`);
   const beforeMemory = memorySnapshot();
-  const searcher = new SearchIndex(options.cachePath, options.sqlitePath
-    ? { sqlitePath: options.sqlitePath, requireSqlite: true, rankingProfile: options.rankingProfile }
-    : { rankingProfile: options.rankingProfile });
+  const searcher = new SearchIndex(options.cachePath, {
+    rankingProfile: options.rankingProfile,
+    ...(options.sqlitePath ? { sqlitePath: options.sqlitePath, requireSqlite: true } : {}),
+    // Omitted entirely when not passed: the store falls back to its own
+    // default fulltext.sqlite path/env resolution, same as sqlitePath above.
+    ...(options.fulltextPath ? { fulltextPath: options.fulltextPath } : {}),
+  });
   const loadStarted = performance.now();
   if (!searcher.loadFromDisk()) throw new Error(searcher.loadError || "Search cache failed to load");
   const loadMs = performance.now() - loadStarted;

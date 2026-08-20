@@ -58,11 +58,16 @@ function compareOutcomes(baseline, revised, options = {}) {
   }));
 }
 
-function evaluateProfile(sqlitePath, cases, rankingProfile, { disableRewrites = true } = {}) {
+function evaluateProfile(sqlitePath, cases, rankingProfile, { disableRewrites = true, rankingConfig } = {}) {
   const searcher = new SearchIndex(undefined, {
     sqlitePath,
     requireSqlite: true,
     rankingProfile,
+    // Same construction-time override the store already exposes for its own
+    // SOURCE_WEIGHTS default (JsonLegalCacheStore ctor merges
+    // options.rankingConfig.sourceWeights onto SOURCE_WEIGHTS) — reused here
+    // rather than mutating the module constant.
+    ...(rankingConfig ? { rankingConfig } : {}),
   });
   if (!searcher.loadFromDisk()) throw new Error(searcher.loadError || "Search cache failed to load");
   const report = evaluateSearch(searcher, cases, { limit: 10, disableRewrites });
@@ -77,6 +82,9 @@ function parseArgs(argv) {
     split: "holdout",
     samples: 10_000,
     disableRewrites: true,
+    // null = leave the store's built-in fulltext weight (0, disabled) untouched;
+    // 0 = control/ablation, disabling the fulltext source entirely.
+    fulltextWeight: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -85,18 +93,22 @@ function parseArgs(argv) {
       continue;
     }
     const value = argv[index + 1];
-    if (!["--sqlite", "--cases", "--split", "--samples"].includes(token) || !value) {
+    if (!["--sqlite", "--cases", "--split", "--samples", "--fulltext-weight"].includes(token) || !value) {
       throw new Error(`Unknown or incomplete argument: ${token}`);
     }
     if (token === "--sqlite") options.sqlitePath = path.resolve(value);
     else if (token === "--cases") options.casesPath = path.resolve(value);
     else if (token === "--split") options.split = value;
+    else if (token === "--fulltext-weight") options.fulltextWeight = Number.parseFloat(value);
     else options.samples = Number.parseInt(value, 10);
     index += 1;
   }
   if (!options.sqlitePath) throw new Error("--sqlite is required");
   if (!["development", "holdout"].includes(options.split)) throw new Error("--split must be development or holdout");
   if (!Number.isInteger(options.samples) || options.samples < 100) throw new Error("--samples must be at least 100");
+  if (options.fulltextWeight != null && !Number.isFinite(options.fulltextWeight)) {
+    throw new Error("--fulltext-weight must be a number");
+  }
   return options;
 }
 
@@ -108,10 +120,14 @@ if (require.main === module) {
   try {
     const options = parseArgs(process.argv.slice(2));
     const cases = loadEvaluationCases(options.casesPath).filter((entry) => entry.split === options.split);
-    const baseline = evaluateProfile(options.sqlitePath, cases, "baseline", options);
-    const revised = evaluateProfile(options.sqlitePath, cases, "revised", options);
+    const rankingConfig = options.fulltextWeight == null
+      ? undefined
+      : { sourceWeights: { fulltext: options.fulltextWeight } };
+    const baseline = evaluateProfile(options.sqlitePath, cases, "baseline", { ...options, rankingConfig });
+    const revised = evaluateProfile(options.sqlitePath, cases, "revised", { ...options, rankingConfig });
     const comparison = compareOutcomes(baseline.outcomes, revised.outcomes, { samples: options.samples });
-    console.log(`Paired ranking comparison: ${cases.length} ${options.split} cases, ${options.samples} bootstrap samples, rewrites ${options.disableRewrites ? "off" : "on"}`);
+    const fulltextLabel = options.fulltextWeight == null ? "default" : options.fulltextWeight;
+    console.log(`Paired ranking comparison: ${cases.length} ${options.split} cases, ${options.samples} bootstrap samples, rewrites ${options.disableRewrites ? "off" : "on"}, fulltext weight ${fulltextLabel}`);
     console.table(Object.entries(comparison).map(([metric, result]) => ({
       metric,
       delta: Number(result.mean.toFixed(4)),

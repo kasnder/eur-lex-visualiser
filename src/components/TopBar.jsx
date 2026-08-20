@@ -7,11 +7,16 @@ import { ThemeToggle } from "./ThemeToggle.jsx";
 import { LanguageSelector } from "./LanguageSelector.jsx";
 import { searchContent, searchIndex as searchWithIndex, buildSearchIndex } from "../utils/nlp.js";
 import { useI18n } from "../i18n/useI18n.js";
-import { searchDefinitions as searchDefinitionsApi, searchLaws as searchLawsApi } from "../utils/formexApi.js";
+import {
+  searchDefinitions as searchDefinitionsApi,
+  searchFulltext as searchFulltextApi,
+  searchLaws as searchLawsApi,
+} from "../utils/formexApi.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute, parseCelexQuery } from "../utils/lawRouting.js";
 import { inferOfficialReferenceFromCelex, saveLawMeta } from "../utils/library.js";
 import { cleanLawTitle, extractShortLawTitle, formatOfficialReference } from "../utils/lawDisplay.js";
 import { DefinitionSearchResult } from "./search/DefinitionSearchResult.jsx";
+import { FulltextSearchResult } from "./search/FulltextSearchResult.jsx";
 import { McpTopBarButton } from "./McpPromo.jsx";
 
 // Law search hits the network per query, so wait for a typing pause before
@@ -98,6 +103,9 @@ export function SearchBox({
   const [isDefinitionSearchLoading, setIsDefinitionSearchLoading] = useState(false);
   const [lastDefinitionSearchQuery, setLastDefinitionSearchQuery] = useState("");
   const [definitionDiscoveryFilter, setDefinitionDiscoveryFilter] = useState("");
+  const [isFulltextSearchLoading, setIsFulltextSearchLoading] = useState(false);
+  const [fulltextSearchError, setFulltextSearchError] = useState(null);
+  const [lastFulltextSearchQuery, setLastFulltextSearchQuery] = useState("");
   const [isSmallViewport, setIsSmallViewport] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
     return window.matchMedia("(max-width: 639px)").matches;
@@ -112,8 +120,13 @@ export function SearchBox({
   const lawSearchDebounceRef = useRef(null);
   const definitionSearchAbortRef = useRef(null);
   const definitionSearchDebounceRef = useRef(null);
+  const fulltextSearchAbortRef = useRef(null);
+  const fulltextSearchDebounceRef = useRef(null);
   const pendingSearchRef = useRef(null);
-  const hasGlobalSearch = availableModes.includes("laws") || availableModes.includes("matches") || availableModes.includes("definitions");
+  const hasGlobalSearch = availableModes.includes("laws")
+    || availableModes.includes("matches")
+    || availableModes.includes("definitions")
+    || availableModes.includes("fulltext");
   const globalEntryCount = (effectiveGlobalLists?.articles?.length || 0)
     + (effectiveGlobalLists?.recitals?.length || 0)
     + (effectiveGlobalLists?.annexes?.length || 0);
@@ -121,9 +134,16 @@ export function SearchBox({
   const isLawMode = searchMode === "laws";
   const isMatchesMode = searchMode === "matches";
   const isDefinitionsMode = searchMode === "definitions";
+  const isFulltextMode = searchMode === "fulltext";
   const isCurrentBusy = isCurrentMode && isBuildingCurrent;
   const isMatchesBusy = isMatchesMode && (isBuildingGlobal || isSearchLoading);
-  const isBusy = isLawMode ? isLawSearchLoading : isDefinitionsMode ? isDefinitionSearchLoading : isCurrentBusy || isMatchesBusy;
+  const isBusy = isLawMode
+    ? isLawSearchLoading
+    : isDefinitionsMode
+      ? isDefinitionSearchLoading
+      : isFulltextMode
+        ? isFulltextSearchLoading
+        : isCurrentBusy || isMatchesBusy;
 
   useEffect(() => {
     if (!availableModes.includes(searchMode)) {
@@ -351,6 +371,79 @@ export function SearchBox({
     }, LAW_SEARCH_DEBOUNCE_MS);
   }, [runDefinitionSearch]);
 
+  const runFulltextSearch = useCallback((nextQuery) => {
+    const trimmedQuery = String(nextQuery || "").trim();
+    fulltextSearchAbortRef.current?.abort();
+    setFulltextSearchError(null);
+
+    if (trimmedQuery.length < 2) {
+      setResults([]);
+      setLastFulltextSearchQuery("");
+      setIsFulltextSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    fulltextSearchAbortRef.current = controller;
+    setIsFulltextSearchLoading(true);
+    setLastFulltextSearchQuery(trimmedQuery);
+
+    searchFulltextApi(trimmedQuery, { limit: 12, signal: controller.signal })
+      .then((payload) => {
+        if (fulltextSearchAbortRef.current !== controller) return;
+        const sourceResults = Array.isArray(payload) ? payload : payload?.results;
+        const nextResults = Array.isArray(sourceResults)
+          ? sourceResults.map((item, index) => {
+            // A stable key must not contain an accidental `undefined`: the
+            // backend contract normally supplies all three parts, but keeping
+            // a deterministic fallback avoids React key collisions on a bad row.
+            const celex = String(item?.celex || "unknown-celex").toUpperCase();
+            const unitType = String(item?.unitType || "unit").toLowerCase();
+            const number = item?.number == null || item.number === ""
+              ? "unnumbered"
+              : String(item.number);
+            return {
+              ...item,
+              search_kind: "fulltext",
+              id: `${celex}:${unitType}:${number}:${index}`,
+            };
+          })
+          : [];
+        setResults(nextResults);
+        setSelectedIndex(-1);
+      })
+      .catch((error) => {
+        if (error?.name === "AbortError" || fulltextSearchAbortRef.current !== controller) return;
+        console.error("Failed to search full text", error);
+        setResults([]);
+        setFulltextSearchError(error);
+      })
+      .finally(() => {
+        if (fulltextSearchAbortRef.current === controller) {
+          fulltextSearchAbortRef.current = null;
+          setIsFulltextSearchLoading(false);
+        }
+      });
+  }, []);
+
+  const scheduleFulltextSearch = useCallback((nextQuery) => {
+    fulltextSearchAbortRef.current?.abort();
+    fulltextSearchAbortRef.current = null;
+    if (fulltextSearchDebounceRef.current) {
+      clearTimeout(fulltextSearchDebounceRef.current);
+      fulltextSearchDebounceRef.current = null;
+    }
+    if (String(nextQuery || "").trim().length < 2) {
+      runFulltextSearch(nextQuery);
+      return;
+    }
+    setIsFulltextSearchLoading(true);
+    fulltextSearchDebounceRef.current = setTimeout(() => {
+      fulltextSearchDebounceRef.current = null;
+      runFulltextSearch(nextQuery);
+    }, LAW_SEARCH_DEBOUNCE_MS);
+  }, [runFulltextSearch]);
+
   const executeSearch = useCallback((mode, nextQuery) => {
     if (mode === "laws") {
       pendingSearchRef.current = null;
@@ -371,6 +464,12 @@ export function SearchBox({
     if (mode === "definitions") {
       pendingSearchRef.current = null;
       scheduleDefinitionSearch(nextQuery);
+      return;
+    }
+
+    if (mode === "fulltext") {
+      pendingSearchRef.current = null;
+      scheduleFulltextSearch(nextQuery);
       return;
     }
 
@@ -414,6 +513,7 @@ export function SearchBox({
     runCurrentSearch,
     runGlobalMatchSearch,
     scheduleDefinitionSearch,
+    scheduleFulltextSearch,
     scheduleLawSearch,
     searchableLawCount,
   ]);
@@ -430,12 +530,14 @@ export function SearchBox({
     setCurrentSearchIndex(null);
     setResults([]);
     setLawSearchError("");
+    setFulltextSearchError(null);
   }, [lists]);
 
   useEffect(() => {
     setGlobalSearchIndex(null);
     setResults([]);
     setLawSearchError("");
+    setFulltextSearchError(null);
   }, [effectiveGlobalLists]);
 
   // Build current-law index on open if needed
@@ -475,11 +577,15 @@ export function SearchBox({
   useEffect(() => () => {
     lawSearchAbortRef.current?.abort();
     definitionSearchAbortRef.current?.abort();
+    fulltextSearchAbortRef.current?.abort();
     if (lawSearchDebounceRef.current) {
       clearTimeout(lawSearchDebounceRef.current);
     }
     if (definitionSearchDebounceRef.current) {
       clearTimeout(definitionSearchDebounceRef.current);
+    }
+    if (fulltextSearchDebounceRef.current) {
+      clearTimeout(fulltextSearchDebounceRef.current);
     }
   }, []);
 
@@ -505,7 +611,29 @@ export function SearchBox({
       }
       setIsDefinitionSearchLoading(false);
     }
-  }, [isDefinitionsMode, isLawMode]);
+    if (!isFulltextMode) {
+      fulltextSearchAbortRef.current?.abort();
+      fulltextSearchAbortRef.current = null;
+      if (fulltextSearchDebounceRef.current) {
+        clearTimeout(fulltextSearchDebounceRef.current);
+        fulltextSearchDebounceRef.current = null;
+      }
+      setIsFulltextSearchLoading(false);
+    }
+  }, [isDefinitionsMode, isFulltextMode, isLawMode]);
+
+  // Closing the spotlight is also a full-text search boundary: there is no
+  // visible consumer left for a pending response, so cancel it immediately.
+  useEffect(() => {
+    if (isOpen || !isFulltextMode) return;
+    fulltextSearchAbortRef.current?.abort();
+    fulltextSearchAbortRef.current = null;
+    if (fulltextSearchDebounceRef.current) {
+      clearTimeout(fulltextSearchDebounceRef.current);
+      fulltextSearchDebounceRef.current = null;
+    }
+    setIsFulltextSearchLoading(false);
+  }, [isFulltextMode, isOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
@@ -617,6 +745,7 @@ export function SearchBox({
     setQuery(q);
     setSelectedIndex(-1);
     setLawSearchError("");
+    setFulltextSearchError(null);
 
     if (!isOpen && triggerVariant === "hero") {
       if (q.trim().length === 0) {
@@ -627,7 +756,8 @@ export function SearchBox({
     }
 
     if ((isLawMode && q.trim() !== lastLawSearchQuery)
-      || (isDefinitionsMode && q.trim() !== lastDefinitionSearchQuery)) {
+      || (isDefinitionsMode && q.trim() !== lastDefinitionSearchQuery)
+      || (isFulltextMode && q.trim() !== lastFulltextSearchQuery)) {
       setResults([]);
       return;
     }
@@ -653,6 +783,7 @@ export function SearchBox({
     setSelectedIndex(-1);
     setResults([]);
     setLawSearchError("");
+    setFulltextSearchError(null);
     if (isLawMode) {
       scheduleLawSearch(query);
       return;
@@ -699,6 +830,8 @@ export function SearchBox({
       ? t("search.searchingLaws")
       : isDefinitionsMode
         ? t("search.searchingDefinitions")
+        : isFulltextMode
+          ? t("search.searchingFulltext")
       : t("search.searchingMatches", {
         count: searchableLawCount,
         lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
@@ -714,6 +847,8 @@ export function SearchBox({
       ? t("search.scopeLaws")
       : isDefinitionsMode
         ? t("search.searchingDefinitions")
+        : isFulltextMode
+          ? t("search.scopeFulltext")
       : t("search.searchingMatches", {
         count: searchableLawCount,
         lawWord: searchableLawCount === 1 ? t("search.law") : t("search.laws"),
@@ -727,6 +862,8 @@ export function SearchBox({
         ? t("search.segLaws")
         : mode === "definitions"
           ? t("search.segDefinitions")
+          : mode === "fulltext"
+            ? t("search.segFulltext")
         : t("search.segMatches")
   );
 
@@ -738,6 +875,7 @@ export function SearchBox({
     setSearchMode(availableModes[nextIdx]);
     setSelectedIndex(-1);
     setLawSearchError("");
+    setFulltextSearchError(null);
     focusModalInput();
   }, [availableModes, focusModalInput, searchMode]);
 
@@ -768,6 +906,8 @@ export function SearchBox({
         ? t("search.placeholderLaws")
         : isDefinitionsMode
           ? t("search.placeholderDefinitions")
+          : isFulltextMode
+            ? t("search.placeholderFulltext")
         : t("search.placeholderMatches");
   const heroSearchPlaceholder = isSmallViewport
     ? t("landing.searchPlaceholderMobile")
@@ -777,6 +917,11 @@ export function SearchBox({
     : isMatchesMode
       ? (isBuildingGlobal || isSearchLoading)
       : false;
+  const searchErrorMessage = isFulltextMode && fulltextSearchError
+    ? (fulltextSearchError.status === 503 || fulltextSearchError.code === "fulltext_index_unavailable"
+      ? t("search.fulltextApiUnavailable")
+      : fulltextSearchError.message || t("search.fulltextApiUnavailable"))
+    : lawSearchError;
 
   return (
     <>
@@ -889,7 +1034,14 @@ export function SearchBox({
                       </div>
                     ) : query && (
                       <button
-                        onClick={() => { setQuery(""); setResults([]); setDefinitionDiscoveryFilter(""); focusModalInput(); }}
+                        onClick={() => {
+                          setQuery("");
+                          setResults([]);
+                          setDefinitionDiscoveryFilter("");
+                          setLastFulltextSearchQuery("");
+                          setFulltextSearchError(null);
+                          focusModalInput();
+                        }}
                         className="absolute right-0 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600"
                         title={t("search.clear")}
                       >
@@ -930,6 +1082,7 @@ export function SearchBox({
                             setSearchMode(mode);
                             setSelectedIndex(-1);
                             setLawSearchError("");
+                            setFulltextSearchError(null);
                             focusModalInput();
                           }}
                           className={`rounded-md px-3 py-1 text-xs font-medium transition ${
@@ -985,10 +1138,10 @@ export function SearchBox({
                   ))}
                 </div>
               ) : null}
-              {lawSearchError ? (
+              {searchErrorMessage ? (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                   <Search size={48} className="opacity-10 mb-4" />
-                  <p className="max-w-sm text-center text-sm">{lawSearchError}</p>
+                  <p className="max-w-sm text-center text-sm">{searchErrorMessage}</p>
                 </div>
               ) : isBusy ? (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -1027,6 +1180,8 @@ export function SearchBox({
                               >
                                 {item.search_kind === "definition" ? (
                                   <DefinitionSearchResult item={item} query={query} t={t} />
+                                ) : item.search_kind === "fulltext" ? (
+                                  <FulltextSearchResult item={item} t={t} />
                                 ) : item.search_kind === "law" ? (
                                   <>
                                     <div className="flex w-full min-w-0 items-baseline gap-2">
@@ -1134,7 +1289,19 @@ export function SearchBox({
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                  {isDefinitionsMode && lastDefinitionSearchQuery.length < 2 ? (
+                  {isFulltextMode && lastFulltextSearchQuery.length < 2 ? (
+                    <>
+                      <Search size={48} className="opacity-10 mb-4" />
+                      <p className="text-sm text-center max-w-sm">{t("search.typeFulltext")}</p>
+                    </>
+                  ) : isFulltextMode ? (
+                    <>
+                      <Search size={48} className="opacity-20 mb-4" />
+                      <p className="text-sm text-center max-w-sm">
+                        {t("search.noResultsFulltext", { query: lastFulltextSearchQuery })}
+                      </p>
+                    </>
+                  ) : isDefinitionsMode && lastDefinitionSearchQuery.length < 2 ? (
                     <>
                       <Search size={48} className="opacity-10 mb-4" />
                       <p className="text-sm text-center max-w-sm">{t("search.typeDefinitions")}</p>
@@ -1238,9 +1405,11 @@ export function SearchBox({
                 <kbd className="rounded border border-gray-200 bg-white px-1 font-mono dark:border-gray-700 dark:bg-gray-800">esc</kbd>
                 {t("search.footClose")}
               </span>
-              {isLawMode && (
+              {isFulltextMode ? (
+                <span className="ml-auto text-gray-400 dark:text-gray-500">{t("search.fulltextEnglishOnly")}</span>
+              ) : isLawMode ? (
                 <span className="ml-auto text-gray-400 dark:text-gray-500">{t("search.secondaryNotIndexed")}</span>
-              )}
+              ) : null}
             </div>
           </div>
         </div>,
@@ -1305,6 +1474,29 @@ export function TopBar({
       const params = new URLSearchParams({ definition: term });
       params.set("definitionSource", `${String(source.celex).toUpperCase()}:${String(sourceArticle ?? "")}${source.sourcePoint ? `:${String(source.sourcePoint)}` : ""}`);
       navigate(`${route}${separator}${params.toString()}`);
+      return;
+    }
+
+    if (item.search_kind === "fulltext") {
+      const celex = String(item.celex || "").trim();
+      const unitType = String(item.unitType || "").trim().toLowerCase();
+      const number = item.number == null ? "" : String(item.number).trim();
+      if (!celex || !number || (unitType !== "article" && unitType !== "recital")) return;
+
+      const officialReference = inferOfficialReferenceFromCelex(celex);
+      const targetLaw = buildImportedLawCandidate({
+        celex,
+        title: item.title,
+        officialReference,
+      });
+      if (officialReference) {
+        saveLawMeta({
+          celex,
+          label: item.title,
+          officialReference,
+        }).catch(() => {});
+      }
+      navigate(getCanonicalLawRoute(targetLaw, unitType, number, locale));
       return;
     }
 

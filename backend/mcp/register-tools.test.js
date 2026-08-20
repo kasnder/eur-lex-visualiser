@@ -48,6 +48,7 @@ function makeDeps(overrides = {}) {
   return {
     legalCacheStore: {
       searchLaws: () => [{ celex: '32016R0679', title: 'GDPR', type: 'regulation', matchReason: 'title_exact' }],
+      searchFulltextUnits: () => [],
       getByCelex: (celex) => (celex === '32016R0679' ? { celex, title: 'GDPR', eli: 'http://data.europa.eu/eli/reg/2016/679/oj' } : null),
     },
     resolveReference: async (parsed) => ({ resolved: { celex: '32018L1972', eli: null, source: 'search-cache' }, parsed, tried: [], fallback: null }),
@@ -88,7 +89,7 @@ test('lists the expected tools', async () => {
     const { tools } = await client.listTools();
     assert.deepEqual(
       tools.map((t) => t.name).sort(),
-      ['get_case_law', 'get_citing_provisions', 'get_law_part', 'get_law_relations', 'resolve', 'search_eu_law']
+      ['get_case_law', 'get_citing_provisions', 'get_law_part', 'get_law_relations', 'resolve', 'search_eu_law', 'search_law_text']
     );
   });
 });
@@ -164,6 +165,130 @@ test('search_eu_law maps an unavailable cache to a friendly error', async () => 
     const res = await client.callTool({ name: 'search_eu_law', arguments: { query: 'gdpr' } });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /search index is not loaded/i);
+  });
+});
+
+test('search_law_text returns matching units and records the attempted query', async () => {
+  const calls = [];
+  const analyticsCalls = [];
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: (query, options) => {
+        calls.push({ query, options });
+        return [{ celex: '32016R0679', unitType: 'article', number: '17', snippet: 'right to obtain erasure' }];
+      },
+    },
+    analytics: { recordMcpTool: (tool, meta) => analyticsCalls.push({ tool, meta }) },
+  });
+  await withClient(deps, async (client) => {
+    const res = await client.callTool({ name: 'search_law_text', arguments: { query: '  erasure  ', limit: 1 } });
+    const body = parseResult(res);
+    assert.equal(body.query, 'erasure');
+    assert.equal(body.celex, null);
+    assert.equal(body.count, 1);
+    assert.equal(body.results[0].number, '17');
+  });
+  assert.deepEqual(calls, [{ query: 'erasure', options: { celex: undefined, limit: 1 } }]);
+  assert.deepEqual(analyticsCalls, [{ tool: 'search_law_text', meta: { query: 'erasure' } }]);
+});
+
+test('search_law_text normalizes and scopes by CELEX', async () => {
+  let call;
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: (query, options) => {
+        call = { query, options };
+        return [{ celex: '32016R0679', unitType: 'article', number: '17', snippet: 'erasure' }];
+      },
+    },
+  });
+  await withClient(deps, async (client) => {
+    const body = parseResult(await client.callTool({
+      name: 'search_law_text',
+      arguments: { query: 'erasure', celex: ' 32016r0679 ', limit: 5 },
+    }));
+    assert.equal(body.celex, '32016R0679');
+    assert.equal(body.count, 1);
+  });
+  assert.deepEqual(call, {
+    query: 'erasure',
+    options: { celex: '32016R0679', limit: 5 },
+  });
+});
+
+test('search_law_text treats blank CELEX as omitted', async () => {
+  let options;
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: (_query, nextOptions) => {
+        options = nextOptions;
+        return [];
+      },
+    },
+  });
+  await withClient(deps, async (client) => {
+    const body = parseResult(await client.callTool({
+      name: 'search_law_text',
+      arguments: { query: 'erasure', celex: '   ' },
+    }));
+    assert.equal(body.celex, null);
+  });
+  assert.deepEqual(options, { celex: undefined, limit: undefined });
+});
+
+test('search_law_text validates searchable terms before retrieval', async () => {
+  let retrieved = false;
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: () => {
+        retrieved = true;
+        const error = new Error('missing fulltext index');
+        error.code = 'fulltext_index_unavailable';
+        throw error;
+      },
+    },
+  });
+  await withClient(deps, async (client) => {
+    const res = await client.callTool({ name: 'search_law_text', arguments: { query: '***' } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /searchable term/i);
+  });
+  assert.equal(retrieved, false);
+});
+
+test('search_law_text rejects an invalid CELEX before retrieval', async () => {
+  let retrieved = false;
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: () => {
+        retrieved = true;
+        return [];
+      },
+    },
+  });
+  await withClient(deps, async (client) => {
+    const res = await client.callTool({ name: 'search_law_text', arguments: { query: 'erasure', celex: 'not-a-celex' } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Invalid CELEX/i);
+  });
+  assert.equal(retrieved, false);
+});
+
+test('search_law_text reports an unavailable body-text index without an equivalent fallback', async () => {
+  const deps = makeDeps({
+    legalCacheStore: {
+      searchFulltextUnits: () => {
+        const error = new Error('missing fulltext index');
+        error.code = 'fulltext_index_unavailable';
+        throw error;
+      },
+    },
+  });
+  await withClient(deps, async (client) => {
+    const res = await client.callTool({ name: 'search_law_text', arguments: { query: 'erasure' } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /body-text index unavailable/i);
+    assert.match(res.content[0].text, /not an equivalent fallback/i);
   });
 });
 

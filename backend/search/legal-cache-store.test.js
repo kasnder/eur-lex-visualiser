@@ -9,8 +9,46 @@ const {
   containedAliasKeys,
 } = require("./legal-cache-store");
 const { buildSqliteData } = require("./build-sqlite-data");
+const { openFulltextDatabase, FULLTEXT_SCHEMA_VERSION } = require("./fulltext-index-build");
 
 const fixturePath = path.join(__dirname, "__fixtures__", "search-fixture.json");
+
+// Builds a tiny fulltext.sqlite with the exact schema/metadata contract
+// legal-cache-store.js's loadFulltext() checks (units/units_fts via
+// openFulltextDatabase from the real builder module, fulltext_metadata rows,
+// PRAGMA user_version). unitsByCelex maps celex -> [{unit_type, number,
+// heading, text}]. Pass `version` to simulate a stale/mismatched artifact.
+function buildTestFulltextDb(outputPath, unitsByCelex, { version = FULLTEXT_SCHEMA_VERSION, skipMetadata = false } = {}) {
+  const db = openFulltextDatabase(outputPath);
+  const insertUnit = db.prepare("INSERT INTO units (celex, unit_type, number, heading, char_count, text) VALUES (?,?,?,?,?,?)");
+  const insertFts = db.prepare("INSERT INTO units_fts (rowid, heading, text) VALUES (?,?,?)");
+  let unitCount = 0;
+  let articleCount = 0;
+  let recitalCount = 0;
+  for (const [celex, units] of Object.entries(unitsByCelex)) {
+    for (const unit of units) {
+      const heading = unit.heading || "";
+      const text = unit.text || "";
+      const info = insertUnit.run(celex, unit.unit_type, unit.number || "", heading, text.length, text);
+      insertFts.run(info.lastInsertRowid, heading, text);
+      unitCount += 1;
+      if (unit.unit_type === "article") articleCount += 1;
+      if (unit.unit_type === "recital") recitalCount += 1;
+    }
+  }
+  if (!skipMetadata) {
+    const upsert = db.prepare("INSERT INTO fulltext_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    upsert.run("fulltext_version", String(version));
+    upsert.run("parser_version", "1");
+    upsert.run("generated_at", new Date("2026-01-01T00:00:00.000Z").toISOString());
+    upsert.run("unit_count", String(unitCount));
+    upsert.run("article_count", String(articleCount));
+    upsert.run("recital_count", String(recitalCount));
+    upsert.run("act_count", String(Object.keys(unitsByCelex).length));
+    db.pragma(`user_version = ${version}`);
+  }
+  db.close();
+}
 
 function publicRecord(record) {
   return {
@@ -810,4 +848,331 @@ test("searchLaws recovers a known alias embedded in a modifier-heavy query", () 
     assert.equal(results[0], expectedCelex, `${query} should surface ${expectedCelex} first`);
   }
   store.close();
+});
+
+// The fixture's JSON records carry no `excerpt` field (see publicRecord /
+// search-fixture.json), so a preferJson store here has no SQLite excerpt
+// source at all — the fulltext.sqlite artifact is the only place the chosen
+// nonsense term can live, isolating what the fulltext RRF source
+// contributes.
+const FULLTEXT_PROBE_TERM = "zorblatt phosphorescent widget calibration";
+const FULLTEXT_PROBE_CELEX = "32022R0868"; // Data Governance Act — absent from that term in title/eurovoc/excerpt.
+
+test("searchFulltextUnits searches body text only, joins titles, and returns marker ranges", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-units-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "Heading-only marker", text: "The data governance authority shall act." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  const results = store.searchFulltextUnits("data govern", { limit: 50 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].celex, FULLTEXT_PROBE_CELEX);
+  assert.match(results[0].title, /Data Governance Act/);
+  assert.equal(results[0].unitType, "article");
+  assert.equal(results[0].number, "5");
+  assert.equal(results[0].snippet.includes("\u0002"), false);
+  assert.equal(results[0].snippet.includes("\u0003"), false);
+  const highlighted = results[0].highlightRanges.map(({ start, end }) => results[0].snippet.slice(start, end));
+  assert.equal(highlighted.length > 0, true);
+  assert.match(highlighted.join(" "), /data.*governance/);
+  assert.equal(store.searchFulltextUnits("data authority").length, 1, "unquoted terms use independent strict-AND prefixes");
+  assert.deepEqual(store.searchFulltextUnits("marker"), [], "heading terms must not match body-text search");
+
+  assert.deepEqual(store.searchFulltextUnits("OR"), [], "quoted FTS operator words are searched literally");
+  assert.throws(() => store.searchFulltextUnits("***"), (error) => error.code === "fulltext_query_empty");
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("searchFulltextUnits preserves phrases, prefixes, strict AND, and global act diversification", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-diversify-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "1", text: "data altruism organisation applies." },
+      { unit_type: "article", number: "2", text: "data altruism organisation continues." },
+    ],
+    "32024R1689": [
+      { unit_type: "recital", number: "14", text: "data altruism organisation and governance." },
+    ],
+    "32016R0679": [
+      { unit_type: "article", number: "1", text: "data protection authority." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  const phrase = store.searchFulltextUnits('"data altruism" organisation', { limit: 50 });
+  assert.deepEqual(phrase.map((result) => result.celex), [FULLTEXT_PROBE_CELEX, "32024R1689"]);
+  assert.equal(store.searchFulltextUnits("data altruism absent", { limit: 50 }).length, 0, "public fulltext search is strict AND");
+  assert.equal(store.searchFulltextUnits("data", { celex: FULLTEXT_PROBE_CELEX, limit: 50 }).length, 2, "scoped search returns multiple units from the act");
+  assert.equal(new Set(store.searchFulltextUnits("data", { limit: 50 }).map((result) => result.celex)).size, store.searchFulltextUnits("data", { limit: 50 }).length, "global search returns one best unit per act");
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("global fulltext diversification happens before the bounded result window", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-window-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: Array.from({ length: 500 }, (_, index) => ({
+      unit_type: "article",
+      number: String(index + 1),
+      text: "windowprobe common wording.",
+    })),
+    "32024R1689": [
+      { unit_type: "article", number: "1", text: "windowprobe common wording." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  assert.deepEqual(
+    new Set(store.searchFulltextUnits("windowprobe", { limit: 50 }).map((result) => result.celex)),
+    new Set([FULLTEXT_PROBE_CELEX, "32024R1689"])
+  );
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("searchFulltextUnits reports an unavailable artifact with a stable code", () => {
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: path.join(os.tmpdir(), `missing-fulltext-${Date.now()}.sqlite`) });
+  assert.equal(store.load(), true);
+  assert.deepEqual(store.getFulltextStatus(), store.getStatus().fulltext);
+  assert.throws(() => store.requireFulltext(), (error) => error.code === "fulltext_index_unavailable");
+  assert.throws(() => store.searchFulltextUnits("data"), (error) => error.code === "fulltext_index_unavailable");
+  store.close();
+});
+
+test("fulltext source: a term present only in indexed body text surfaces its act via RRF fusion", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "headingonlyquasar", text: `The competent authority shall assess ${FULLTEXT_PROBE_TERM} before granting access.` },
+    ],
+  });
+
+  const baseline = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: path.join(tempDir, "missing.sqlite") });
+  assert.equal(baseline.load(), true);
+  const baselineResults = baseline.searchLaws(FULLTEXT_PROBE_TERM, { limit: 5 }).map((r) => r.celex);
+  assert.equal(baselineResults.includes(FULLTEXT_PROBE_CELEX), false, "the probe term must not already surface the target act without fulltext");
+
+  const store = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    fulltextPath,
+    // Keep this test as an explicit wiring check now that production fusion
+    // defaults to zero pending a better real-data instrument.
+    rankingConfig: { sourceWeights: { fulltext: 0.4 } },
+  });
+  assert.equal(store.load(), true);
+  assert.equal(store.getStatus().fulltext.available, true);
+  assert.equal(store.getStatus().fulltext.unitCount, 1);
+  assert.equal(store.getStatus().fulltext.actCount, 1);
+
+  const results = store.searchLaws(FULLTEXT_PROBE_TERM, { limit: 5 }).map((r) => r.celex);
+  assert.equal(results[0], FULLTEXT_PROBE_CELEX);
+  assert.equal(
+    store.searchLaws("headingonlyquasar", { limit: 5 }).some((result) => result.celex === FULLTEXT_PROBE_CELEX),
+    false,
+    "positive-weight fusion must search body text, not headings"
+  );
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext fusion is disabled by default while explicit positive weights remain usable", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-default-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", text: `Provisions on ${FULLTEXT_PROBE_TERM}.` },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+  store.searchFulltext = () => {
+    throw new Error("weight-zero fulltext source must not be queried");
+  };
+  let diagnostics = null;
+  const results = store.searchLaws(FULLTEXT_PROBE_TERM, { limit: 10, onDiagnostics: (value) => { diagnostics = value; } });
+  assert.equal(store.rankingConfig.sourceWeights.fulltext, 0);
+  assert.equal(results.some((result) => result.celex === FULLTEXT_PROBE_CELEX), false);
+  assert.deepEqual(diagnostics.sources.fulltext, []);
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext source: an absent artifact is a true no-op (identical results, no throw)", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-absent-"));
+  const missingPath = path.join(tempDir, "does-not-exist.sqlite");
+
+  // Both control stores point at distinct nonexistent paths so fulltext is
+  // unavailable for both regardless of what sits at the default path. (An
+  // unset fulltextPath resolves through `|| DEFAULT_FULLTEXT_SQLITE_PATH`, so a
+  // real fulltext.sqlite present on a dev machine — e.g. after a local build —
+  // would otherwise make "unset" diverge from "absent".)
+  const otherMissingPath = path.join(tempDir, "also-does-not-exist.sqlite");
+  const withMissingPath = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: missingPath });
+  const withOtherMissingPath = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: otherMissingPath });
+  assert.equal(withMissingPath.load(), true);
+  assert.equal(withOtherMissingPath.load(), true);
+
+  assert.equal(withMissingPath.getStatus().fulltext.available, false);
+  assert.match(withMissingPath.getStatus().fulltext.reason, /not found/i);
+  assert.equal(withOtherMissingPath.getStatus().fulltext.available, false);
+
+  const queries = ["digital services act obligations", "personal data protection", FULLTEXT_PROBE_TERM, "regulation"];
+  for (const query of queries) {
+    const a = withMissingPath.searchLaws(query, { limit: 10 }).map((r) => r.celex);
+    const b = withOtherMissingPath.searchLaws(query, { limit: 10 }).map((r) => r.celex);
+    assert.deepEqual(a, b, `results for "${query}" must be identical for two stores that both have fulltext unavailable`);
+  }
+
+  withMissingPath.close();
+  withOtherMissingPath.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext source: a PRAGMA user_version mismatch is non-fatal and leaves results unchanged", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-stale-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "", text: `Provisions on ${FULLTEXT_PROBE_TERM}.` },
+    ],
+  }, { version: FULLTEXT_SCHEMA_VERSION + 1 });
+
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+  assert.equal(store.getStatus().fulltext.available, false);
+  assert.match(store.getStatus().fulltext.reason, /schema/i);
+
+  const withNoArtifact = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: path.join(tempDir, "missing.sqlite") });
+  withNoArtifact.load();
+
+  const queries = [FULLTEXT_PROBE_TERM, "digital markets act rules", "regulation"];
+  for (const query of queries) {
+    assert.deepEqual(
+      store.searchLaws(query, { limit: 10 }).map((r) => r.celex),
+      withNoArtifact.searchLaws(query, { limit: 10 }).map((r) => r.celex),
+      `results for "${query}" must be unaffected by a schema-mismatched fulltext artifact`
+    );
+  }
+
+  store.close();
+  withNoArtifact.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext source: sourceWeights.fulltext = 0 excludes a fulltext-only candidate entirely (no zero-score padding)", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-weight0-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "", text: `Provisions on ${FULLTEXT_PROBE_TERM}.` },
+    ],
+  });
+
+  const store = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    fulltextPath,
+    rankingConfig: { sourceWeights: { fulltext: 0 } },
+  });
+  assert.equal(store.load(), true);
+  assert.equal(store.getStatus().fulltext.available, true, "the artifact is loaded — only its RRF weight is zeroed");
+
+  let diagnostics = null;
+  store.searchLaws(FULLTEXT_PROBE_TERM, { limit: 10, onDiagnostics: (d) => { diagnostics = d; } });
+  const fulltextOnly = diagnostics.ranked.find((candidate) => candidate.celex === FULLTEXT_PROBE_CELEX);
+  assert.equal(fulltextOnly, undefined, "a weight-0 source must contribute no candidates at all, not even a zero-scored one");
+  assert.deepEqual(diagnostics.sources.fulltext, [], "a weight-0 source must not even be queried into sourceIds");
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+// ABLATION CONTRACT: addCandidates() guards on sourceWeights[source] > 0
+// before adding any candidates, so a weight-0 source contributes nothing —
+// not even a zero-scored, source-padding candidate. That means weight 0 on a
+// source is byte-identical to that source's artifact being entirely absent:
+//   - the plan's ablation contract ("final ranked results are byte-identical
+//     to the fulltext-absent baseline")
+//   - eval/compare-ranking.js's own comment on --fulltext-weight 0
+//     ("control/ablation, disabling the fulltext source entirely")
+// Repro: build a fulltext.sqlite with one unit for CELEX 32022R0868 whose
+// text contains a term absent from every other source. With
+// rankingConfig.sourceWeights.fulltext = 0 and limit 10, a query for that
+// term must NOT return 32022R0868 at all — a store with no fulltextPath at
+// all for the same query returns only the 2 non-fulltext matches, and so
+// must the weight-0 store. This matters most for sparse-result queries
+// (fewer natural matches than `limit`); dense queries were never at risk
+// because zero-score candidates sort last and get truncated away regardless.
+test("weight 0 fully excludes fulltext-only candidates from sparse-result sets", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-weight0-bug-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "", text: `Provisions on ${FULLTEXT_PROBE_TERM}.` },
+    ],
+  });
+
+  const withFulltextZeroWeight = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    fulltextPath,
+    rankingConfig: { sourceWeights: { fulltext: 0 } },
+  });
+  const withoutFulltextArtifact = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    fulltextPath: path.join(tempDir, "missing.sqlite"),
+  });
+  withFulltextZeroWeight.load();
+  withoutFulltextArtifact.load();
+
+  const zeroResults = withFulltextZeroWeight.searchLaws(FULLTEXT_PROBE_TERM, { limit: 10 }).map((r) => r.celex);
+  const absentResults = withoutFulltextArtifact.searchLaws(FULLTEXT_PROBE_TERM, { limit: 10 }).map((r) => r.celex);
+  assert.deepEqual(zeroResults, absentResults, "weight-0 fulltext should be byte-identical to no fulltext artifact at all");
+
+  withFulltextZeroWeight.close();
+  withoutFulltextArtifact.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext source: FTS metacharacters in the query never throw or break the statement", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-fts-safety-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "1", heading: "", text: "Ordinary operative text about data governance." },
+    ],
+  });
+
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+  assert.equal(store.getStatus().fulltext.available, true);
+
+  // buildFtsExpression already strips anything that isn't ^[a-z0-9]+$ per
+  // term before quoting it into `"term"*`, so none of these should ever
+  // reach SQLite as raw FTS5 syntax; assert the guarantee holds end to end.
+  const adversarialQueries = [
+    'data "governance* OR (widgets NEAR/3 act)',
+    '"; DROP TABLE units; --',
+    "**** OR OR OR",
+    "data) governance (act",
+    'NEAR("data" "governance", 2)',
+  ];
+  for (const query of adversarialQueries) {
+    assert.doesNotThrow(() => store.searchLaws(query, { limit: 5 }), `"${query}" must not throw`);
+  }
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
 });

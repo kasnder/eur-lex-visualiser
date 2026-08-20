@@ -93,6 +93,12 @@ test("search evaluation percentile and CLI validation are deterministic", () => 
   assert.throws(() => parseArgs(["--iterations", "0"]), /positive/);
   assert.throws(() => parseArgs(["--split", "training"]), /--split/);
   assert.throws(() => parseArgs(["--unknown"]), /Unknown argument/);
+
+  // --fulltext threads a resolved sqlite path into fulltextPath (default
+  // null, so run.js's store construction spread only adds the key when set).
+  assert.equal(parseArgs([]).fulltextPath, null);
+  assert.equal(parseArgs(["--fulltext", "search/data/fulltext.sqlite"]).fulltextPath, path.resolve("search/data/fulltext.sqlite"));
+  assert.throws(() => parseArgs(["--fulltext"]), /Missing value/);
 });
 
 test("paired ranking comparison reports deterministic confidence intervals and wins", () => {
@@ -118,6 +124,14 @@ test("paired ranking comparison reports deterministic confidence intervals and w
   assert.equal(parseComparisonArgs(["--sqlite", "data.sqlite"]).split, "holdout");
   assert.equal(parseComparisonArgs(["--sqlite", "data.sqlite", "--enable-rewrites"]).disableRewrites, false);
   assert.throws(() => parseComparisonArgs(["--sqlite", "data.sqlite", "--split", "all"]), /--split/);
+
+  // --fulltext-weight: null by default (leaves the store's built-in weight
+  // untouched), maps to fulltextWeight as a float, and 0 is a valid control
+  // value (ablation) rather than being treated as falsy/missing.
+  assert.equal(parseComparisonArgs(["--sqlite", "data.sqlite"]).fulltextWeight, null);
+  assert.equal(parseComparisonArgs(["--sqlite", "data.sqlite", "--fulltext-weight", "0"]).fulltextWeight, 0);
+  assert.equal(parseComparisonArgs(["--sqlite", "data.sqlite", "--fulltext-weight", "0.7"]).fulltextWeight, 0.7);
+  assert.throws(() => parseComparisonArgs(["--sqlite", "data.sqlite", "--fulltext-weight", "not-a-number"]), /--fulltext-weight must be a number/);
 });
 
 test("ranking optimiser samples deterministically and stratifies every case once", () => {

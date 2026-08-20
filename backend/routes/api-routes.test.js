@@ -832,3 +832,25 @@ test("GET /api/resolve-reference falls back when cache lookup is ambiguous", asy
     global.fetch = originalFetch;
   }
 });
+
+test("GET /api/fulltext-search is registered with rate limiting and delegates body-text search", () => {
+  const calls = [];
+  const { app } = registerTestRoutes({
+    legalCacheStore: {
+      searchFulltextUnits: (query, options) => {
+        calls.push({ query, options });
+        return [{ celex: "32016R0679", title: "GDPR", unitType: "article", number: "5", snippet: "data", highlightRanges: [] }];
+      },
+      getFulltextStatus: () => ({ available: true }),
+    },
+  });
+  const handler = app.routes.get("/api/fulltext-search");
+  const res = createResponseRecorder();
+
+  handler({ query: { q: " data ", celex: "32016r0679", limit: "1" } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.count, 1);
+  assert.equal(res.payload.celex, "32016R0679");
+  assert.deepEqual(calls, [{ query: "data", options: { limit: "1", celex: "32016R0679" } }]);
+});

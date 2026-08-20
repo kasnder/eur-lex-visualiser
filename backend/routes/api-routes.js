@@ -5,6 +5,7 @@ const path = require("path");
 const { ClientError, requireCitationGraph } = require("../shared/api-utils");
 const { parseFmxXml } = require("../shared/fmx-parser-node");
 const { createSearchHandler } = require("../search/search-route");
+const { createFulltextSearchHandler } = require("../search/fulltext-route");
 const { createTopicsHandler } = require("../search/topics-route");
 const { createDefinitionCompareHandler, createDefinitionSearchHandler } = require("../search/definitions-route");
 const { fetchMetadata, fetchAmendments, fetchImplementing, fetchCaseLaw } = require("../shared/law-queries");
@@ -654,6 +655,8 @@ function registerApiRoutes(app, deps) {
 
   app.get('/api/search', rateLimitMiddleware, createSearchHandler(legalCacheStore));
 
+  app.get('/api/fulltext-search', rateLimitMiddleware, createFulltextSearchHandler(legalCacheStore, { validateCelex }));
+
   app.get('/api/definitions/search', rateLimitMiddleware, createDefinitionSearchHandler(legalCacheStore));
 
   app.get('/api/definitions/compare', rateLimitMiddleware, createDefinitionCompareHandler(legalCacheStore));
@@ -741,11 +744,12 @@ function registerApiRoutes(app, deps) {
         'GET /api/laws/:celex/case-law-digest?lang=ENG': 'Get cached static digest of CJEU case law interpreting this law as a whole',
         'GET /api/laws/:celex/articles/:n/case-law-digest?lang=ENG': 'Get cached static digest of CJEU case law interpreting one article',
         'GET /api/search?q=keyword&limit=10': 'Search cached primary-law metadata',
+        'GET /api/fulltext-search?q=keyword&celex=32016R0679&limit=10': 'Search body text of cached law units (articles and recitals)',
         'GET /api/definitions/search?q=term&limit=10': 'Search definitions extracted from EU laws',
         'GET /api/definitions/compare?term=energy%20poverty': 'Compare how EU laws define a term',
         'GET /api/resolve-reference?actType=directive&year=2018&number=1972&lang=ENG': 'Resolve an FMX-derived legal reference to CELEX via cache-first lookup with Cellar fallback',
         'GET /api/resolve-url?url=https://eur-lex.europa.eu/...&lang=ENG': 'Resolve a full EUR-Lex URL to a canonical CELEX',
-        'POST /mcp': 'Model Context Protocol endpoint (stateless Streamable HTTP). Tools include search_eu_law, resolve, get_law_part, get_citing_provisions, get_case_law, and get_law_relations. Add to an AI client, e.g. `claude mcp add --transport http eurlex <base-url>/mcp`'
+        'POST /mcp': 'Model Context Protocol endpoint (stateless Streamable HTTP). Tools include search_eu_law, search_law_text, resolve, get_law_part, get_citing_provisions, get_case_law, and get_law_relations. Use search_law_text for words found inside law provisions. Add to an AI client, e.g. `claude mcp add --transport http eurlex <base-url>/mcp`'
       },
       celexExamples: {
         '32016R0679': 'GDPR',

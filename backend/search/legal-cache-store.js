@@ -14,7 +14,12 @@ const BUILTIN_SEARCH_CACHE_PATH = path.join(__dirname, "data", "search-cache.jso
 const DEFAULT_SEARCH_CACHE_PATH = process.env.SEARCH_CACHE_PATH || BUILTIN_SEARCH_CACHE_PATH;
 const DEFAULT_SQLITE_DATA_PATH = path.join(__dirname, "data", "data.sqlite");
 const DEFAULT_DEFINITIONS_PATH = path.join(__dirname, "data", "definitions.json");
+const DEFAULT_FULLTEXT_SQLITE_PATH = path.join(__dirname, "data", "fulltext.sqlite");
 const SQLITE_SCHEMA_VERSION = 4;
+// Own copy of the version stamped by fulltext-index-build.js (FULLTEXT_SCHEMA_VERSION
+// there) — citation-graph-store.js style: a separate optional artifact keeps its own
+// lock-step constant rather than importing across files. Bump both together.
+const FULLTEXT_SCHEMA_VERSION = 1;
 
 const SUPPLEMENTAL_RECORDS = [
   {
@@ -154,10 +159,24 @@ const MAX_GLOBAL_PRIOR = 1.25;
 const CITATION_LOG_SCALE = 0.025;
 const RRF_K = 20;
 const CANDIDATE_LIMIT = 200;
+const FULLTEXT_QUERY_MAX_CHARS = 200;
+const FULLTEXT_MAX_TERMS = 12;
+const FULLTEXT_MIN_STANDALONE_TERM_CHARS = 2;
+const FULLTEXT_RESULT_LIMIT = 50;
+// Public full-text search deliberately scans a bounded, bm25-ordered window.
+// 500 units is large enough to diversify common terms across acts while
+// keeping short-prefix queries from walking the entire 382k-unit index.
+const FULLTEXT_UNIT_CANDIDATE_CAP = 500;
+const FULLTEXT_SNIPPET_START = "\u0002";
+const FULLTEXT_SNIPPET_END = "\u0003";
 // Title and controlled-vocabulary evidence are co-equal. Body-text matches are
 // useful for recall but deliberately weaker because recitals contain many
 // incidental concepts. Selected on the development split; see eval/README.md.
-const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5 };
+// Full-text fusion is disabled by default: the real-data evaluation found no
+// measurable ranking benefit. The explicit source wiring remains available for
+// controlled re-evaluation; the public body-text search uses the same index
+// independently of this ranking weight.
+const SOURCE_WEIGHTS = { title: 1.1, eurovoc: 1.1, excerpt: 0.5, fulltext: 0 };
 const COVERAGE_EXPONENT = 2;
 
 function citationBoost(count, {
@@ -295,6 +314,113 @@ function buildFtsExpression(terms, operator) {
     .join(` ${operator} `);
 }
 
+function fulltextSearchParts(query) {
+  const value = String(query ?? "").normalize("NFKC").trim();
+  const parts = [];
+  const searchableTerms = [];
+  const addWords = (text, { phrase = false } = {}) => {
+    const words = String(text || "").match(/[\p{L}\p{M}\p{N}]+/gu) || [];
+    // FTS operators are harmless here because every token is quoted below;
+    // keep words such as "or" and "not" searchable as ordinary body text.
+    const searchableWords = words;
+    if (searchableWords.length === 0) return;
+    searchableTerms.push(...searchableWords);
+    if (phrase) {
+      parts.push({ phrase: true, value: searchableWords.join(" ") });
+    } else {
+      for (const word of searchableWords) parts.push({ phrase: false, value: word });
+    }
+  };
+
+  // Quoted segments are retained as one FTS phrase. Text outside quotes is
+  // tokenised into independent prefix terms. Unmatched quotes are harmless:
+  // the remaining text is still searched as ordinary terms.
+  const quoted = /"([^"]*)"/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = quoted.exec(value))) {
+    addWords(value.slice(lastIndex, match.index));
+    addWords(match[1], { phrase: true });
+    lastIndex = match.index + match[0].length;
+  }
+  addWords(value.slice(lastIndex));
+  return { value, parts, terms: searchableTerms };
+}
+
+function buildFulltextMatchExpression(query) {
+  const parsed = fulltextSearchParts(query);
+  if (parsed.value.length > FULLTEXT_QUERY_MAX_CHARS) return "";
+  if (parsed.terms.length === 0 || parsed.terms.length > FULLTEXT_MAX_TERMS) return "";
+  return parsed.parts.map((part) => {
+    // Every token is inside an FTS5 quoted string. Doubling a quote is the
+    // FTS5 escape; in practice words are already stripped to tokenizer terms.
+    const escaped = part.value.replace(/"/g, "\"\"");
+    return part.phrase ? `"${escaped}"` : `"${escaped}"*`;
+  }).join(" AND ");
+}
+
+function fulltextQueryError(query) {
+  const parsed = fulltextSearchParts(query);
+  if (!parsed.value) {
+    const error = new Error('Query parameter "q" required');
+    error.code = "fulltext_query_required";
+    return error;
+  }
+  if (parsed.value.length > FULLTEXT_QUERY_MAX_CHARS) {
+    const error = new Error(`Full-text queries are limited to ${FULLTEXT_QUERY_MAX_CHARS} characters`);
+    error.code = "fulltext_query_too_long";
+    return error;
+  }
+  if (parsed.terms.length === 0) {
+    const error = new Error("Full-text query must contain at least one searchable term");
+    error.code = "fulltext_query_empty";
+    return error;
+  }
+  if (parsed.terms.every((term) => Array.from(term).length < FULLTEXT_MIN_STANDALONE_TERM_CHARS)) {
+    const error = new Error(`Full-text query must contain a term of at least ${FULLTEXT_MIN_STANDALONE_TERM_CHARS} characters`);
+    error.code = "fulltext_query_too_short";
+    return error;
+  }
+  if (parsed.terms.length > FULLTEXT_MAX_TERMS) {
+    const error = new Error(`Full-text queries are limited to ${FULLTEXT_MAX_TERMS} searchable terms`);
+    error.code = "fulltext_query_too_many_terms";
+    return error;
+  }
+  return null;
+}
+
+function validateFulltextQuery(query) {
+  return fulltextQueryError(query);
+}
+
+function cleanFulltextSnippet(rawSnippet) {
+  const ranges = [];
+  let text = "";
+  let rangeStart = null;
+  const raw = String(rawSnippet || "");
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (character === FULLTEXT_SNIPPET_START) {
+      rangeStart = text.length;
+      continue;
+    }
+    if (character === FULLTEXT_SNIPPET_END) {
+      if (rangeStart != null && text.length > rangeStart) {
+        ranges.push({ start: rangeStart, end: text.length });
+      }
+      rangeStart = null;
+      continue;
+    }
+    // The indexed source is already plain text. Preserve literal angle
+    // brackets and only remove FTS markers or source control bytes.
+    const characterCode = character.charCodeAt(0);
+    if (characterCode <= 0x1f || (characterCode >= 0x7f && characterCode <= 0x9f)) continue;
+    text += character;
+  }
+  if (rangeStart != null && text.length > rangeStart) ranges.push({ start: rangeStart, end: text.length });
+  return { snippet: text, highlightRanges: ranges };
+}
+
 function containedAliasKeys(normalizedQuery) {
   const words = String(normalizedQuery || "").split(" ").filter(Boolean);
   const keys = [];
@@ -380,6 +506,11 @@ class JsonLegalCacheStore {
       || (cachePath === BUILTIN_SEARCH_CACHE_PATH
         ? DEFAULT_DEFINITIONS_PATH
         : path.join(path.dirname(cachePath), "definitions.json"));
+    // fulltext.sqlite is a separate, independently optional artifact (not part of
+    // the sqlitePath/JSON fallback chain above) — resolved the same way (explicit
+    // option, then env, then default), but its absence never affects the rest of
+    // load().
+    this.fulltextPath = options.fulltextPath || process.env.FULLTEXT_SQLITE_PATH || DEFAULT_FULLTEXT_SQLITE_PATH;
     this.rankingProfile = options.rankingProfile === "baseline" ? "baseline" : "revised";
     this.rankingConfig = {
       rrfK: options.rankingConfig?.rrfK ?? RRF_K,
@@ -416,10 +547,19 @@ class JsonLegalCacheStore {
     this.definitionsAvailable = false;
     this.citationCounts = new Map(options.citationCounts || []);
     this.source = null;
+    this.fulltextDatabase = null;
+    this.fulltextSearchStatement = null;
+    this.fulltextUnitSearchStatement = null;
+    this.fulltextUnitScopedSearchStatement = null;
+    this.fulltextUnitSnippetStatement = null;
+    this.fulltextAvailable = false;
+    this.fulltextReason = null;
+    this.fulltextStats = { unitCount: 0, actCount: 0, version: null };
   }
 
   load() {
     this.close();
+    this.loadFulltext();
     if (this.sqlitePath && fs.existsSync(this.sqlitePath)) {
       return this.loadFromSqlite();
     }
@@ -427,6 +567,195 @@ class JsonLegalCacheStore {
       return this.failLoad(`SQLite data store not found at ${this.sqlitePath}`);
     }
     return this.loadFromJson();
+  }
+
+  // Optional artifact, independent of the sqlitePath/JSON chain above. Any
+  // failure — missing file, wrong PRAGMA user_version, missing/mismatched
+  // fulltext_metadata row, or a thrown error from a corrupt file — leaves
+  // fulltextAvailable false with a reason and never propagates (citation-graph
+  // precedent: an optional artifact can never take down boot).
+  loadFulltext() {
+    this.fulltextDatabase = null;
+    this.fulltextSearchStatement = null;
+    this.fulltextUnitSearchStatement = null;
+    this.fulltextUnitScopedSearchStatement = null;
+    this.fulltextUnitSnippetStatement = null;
+    this.fulltextAvailable = false;
+    this.fulltextReason = null;
+    this.fulltextStats = { unitCount: 0, actCount: 0, version: null };
+    if (!this.fulltextPath || !fs.existsSync(this.fulltextPath)) {
+      this.fulltextReason = `Full-text index not found at ${this.fulltextPath}`;
+      return;
+    }
+    let database = null;
+    try {
+      database = new Database(this.fulltextPath, { readonly: true, fileMustExist: true });
+      const schemaVersion = database.prepare("PRAGMA user_version").get().user_version;
+      if (schemaVersion !== FULLTEXT_SCHEMA_VERSION) {
+        this.fulltextReason = `Unsupported full-text index schema ${schemaVersion}; expected ${FULLTEXT_SCHEMA_VERSION}`;
+        database.close();
+        return;
+      }
+      const hasMetadataTable = database.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fulltext_metadata'"
+      ).get();
+      if (!hasMetadataTable) {
+        this.fulltextReason = "Full-text index has no fulltext_metadata table";
+        database.close();
+        return;
+      }
+      const metadata = new Map(
+        database.prepare("SELECT key, value FROM fulltext_metadata").all().map((row) => [row.key, row.value])
+      );
+      const fulltextVersion = metadata.get("fulltext_version");
+      if (!metadata.has("fulltext_version") || String(fulltextVersion) !== String(FULLTEXT_SCHEMA_VERSION)) {
+        this.fulltextReason = `Unsupported fulltext_version ${fulltextVersion}; expected ${FULLTEXT_SCHEMA_VERSION}`;
+        database.close();
+        return;
+      }
+      this.fulltextSearchStatement = database.prepare(`
+        SELECT u.celex AS celex
+        FROM units_fts
+        JOIN units u ON u.id = units_fts.rowid
+        WHERE units_fts.text MATCH ?
+        ORDER BY rank
+        LIMIT 500
+      `);
+      const snippetStart = FULLTEXT_SNIPPET_START.replace(/'/g, "''");
+      const snippetEnd = FULLTEXT_SNIPPET_END.replace(/'/g, "''");
+      const snippet = `snippet(units_fts, 1, '${snippetStart}', '${snippetEnd}', ' … ', 40)`;
+      this.fulltextUnitSearchStatement = database.prepare(`
+        SELECT u.id AS id, u.celex AS celex, u.unit_type AS unitType,
+               u.number AS number, u.heading AS heading,
+               MIN(units_fts.rank) AS bestRank
+        FROM units_fts
+        JOIN units u ON u.id = units_fts.rowid
+        WHERE units_fts.text MATCH ?
+        GROUP BY u.celex
+        ORDER BY bestRank, u.id
+        LIMIT ${FULLTEXT_UNIT_CANDIDATE_CAP}
+      `);
+      this.fulltextUnitScopedSearchStatement = database.prepare(`
+        SELECT u.id AS id, u.celex AS celex, u.unit_type AS unitType,
+               u.number AS number, u.heading AS heading
+        FROM units_fts
+        JOIN units u ON u.id = units_fts.rowid
+        WHERE units_fts.text MATCH ? AND u.celex = ?
+        ORDER BY rank, u.id
+        LIMIT ${FULLTEXT_UNIT_CANDIDATE_CAP}
+      `);
+      // Computing snippet() for the whole candidate window makes common-prefix
+      // queries needlessly expensive. Rank/diversify first, then render only
+      // the handful of units that cross the API boundary.
+      const resultSlots = Array(FULLTEXT_RESULT_LIMIT).fill("?").join(", ");
+      this.fulltextUnitSnippetStatement = database.prepare(`
+        SELECT units_fts.rowid AS id, ${snippet} AS snippet
+        FROM units_fts
+        WHERE units_fts.rowid IN (${resultSlots}) AND units_fts.text MATCH ?
+      `);
+      this.fulltextStats = {
+        unitCount: Number.parseInt(metadata.get("unit_count"), 10) || 0,
+        actCount: Number.parseInt(metadata.get("act_count"), 10) || 0,
+        version: fulltextVersion,
+      };
+      this.fulltextDatabase = database;
+      this.fulltextAvailable = true;
+    } catch (error) {
+      if (database) {
+        try { database.close(); } catch { /* already closed or failed */ }
+      }
+      this.fulltextDatabase = null;
+      this.fulltextSearchStatement = null;
+      this.fulltextUnitSearchStatement = null;
+      this.fulltextUnitScopedSearchStatement = null;
+      this.fulltextUnitSnippetStatement = null;
+      this.fulltextAvailable = false;
+      this.fulltextReason = error.message;
+    }
+  }
+
+  // Dedupe to best-rank-per-celex in JS (bm25 can't be deduped in SQL without
+  // losing rank order), capped at CANDIDATE_LIMIT for parity with the excerpt
+  // source. Returns [] whenever the index isn't loaded — there is deliberately
+  // no JSON/MiniSearch fallback for fulltext.
+  searchFulltext(expression) {
+    if (!this.fulltextAvailable || !this.fulltextSearchStatement || !expression) return [];
+    const seen = new Set();
+    const hits = [];
+    for (const row of this.fulltextSearchStatement.all(expression)) {
+      const celex = row.celex;
+      if (!celex || seen.has(celex)) continue;
+      seen.add(celex);
+      hits.push({ celex });
+      if (hits.length >= CANDIDATE_LIMIT) break;
+    }
+    return hits;
+  }
+
+  getFulltextStatus() {
+    return {
+      available: this.fulltextAvailable,
+      version: this.fulltextStats.version,
+      unitCount: this.fulltextStats.unitCount,
+      actCount: this.fulltextStats.actCount,
+      reason: this.fulltextAvailable ? null : this.fulltextReason,
+    };
+  }
+
+  requireFulltext() {
+    if (this.fulltextAvailable) return;
+    const error = new Error("Full-text index is not loaded");
+    error.code = "fulltext_index_unavailable";
+    error.details = this.getFulltextStatus();
+    throw error;
+  }
+
+  searchFulltextUnits(query, options = {}) {
+    this.requireFulltext();
+    const queryError = fulltextQueryError(query);
+    if (queryError) throw queryError;
+    const expression = buildFulltextMatchExpression(query);
+    if (!expression) return [];
+
+    const rawLimit = Number.parseInt(options.limit, 10);
+    const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 10, FULLTEXT_RESULT_LIMIT));
+    const celex = options.celex ? normalizeCelexLookupKey(options.celex) : null;
+    const rows = celex
+      ? this.fulltextUnitScopedSearchStatement.all(expression, celex)
+      : this.fulltextUnitSearchStatement.all(expression);
+    const seen = new Set();
+    const selected = [];
+    for (const row of rows) {
+      // Global discovery returns at most one best unit per act. A scoped query
+      // intentionally keeps multiple provisions from the requested act.
+      if (!celex && seen.has(row.celex)) continue;
+      seen.add(row.celex);
+      selected.push(row);
+      if (selected.length >= limit) break;
+    }
+    if (selected.length === 0) return [];
+    const snippetArgs = selected.map((row) => row.id);
+    while (snippetArgs.length < FULLTEXT_RESULT_LIMIT) snippetArgs.push(-1);
+    const snippets = new Map(
+      this.fulltextUnitSnippetStatement.all(...snippetArgs, expression)
+        .map((row) => [Number(row.id), row.snippet])
+    );
+    const results = [];
+    for (const row of selected) {
+      const rawSnippet = snippets.get(Number(row.id)) || "";
+      const cleaned = cleanFulltextSnippet(rawSnippet);
+      const record = this.getByCelex(row.celex);
+      results.push({
+        celex: normalizeCelexLookupKey(row.celex),
+        title: record?.title || null,
+        unitType: row.unitType || null,
+        number: row.number || null,
+        heading: row.heading || null,
+        snippet: cleaned.snippet,
+        highlightRanges: cleaned.highlightRanges,
+      });
+    }
+    return results;
   }
 
   resetIndexes() {
@@ -663,6 +992,7 @@ class JsonLegalCacheStore {
       loadedAt: this.loadedAt,
       count: this.records.length,
       error: this.loadError,
+      fulltext: this.getFulltextStatus(),
     };
   }
 
@@ -919,6 +1249,7 @@ class JsonLegalCacheStore {
       noLongerInForceRecords: countMatching((record) => record.inForce === false),
       excerptRecords,
       citedRecords: [...celexes].filter((celex) => citedCelexes.has(celex)).length,
+      fulltextRecords: this.fulltextAvailable ? this.fulltextStats.actCount : 0,
     };
   }
 
@@ -1009,7 +1340,7 @@ class JsonLegalCacheStore {
       const retrievalQuery = parsed.terms.join(" ") || parsed.rewrittenQuery;
       const { candidateLimit, coverageExponent, rrfK, sourceWeights } = this.rankingConfig;
       const candidates = new Map();
-      const sourceIds = { title: [], eurovoc: [], excerpt: [] };
+      const sourceIds = { title: [], eurovoc: [], excerpt: [], fulltext: [] };
       let candidateOrdinal = 0;
       const expandWithOr = (index, hits) => {
         if (parsed.terms.length < 2 || hits.length >= candidateLimit) return hits;
@@ -1025,6 +1356,13 @@ class JsonLegalCacheStore {
         return expanded;
       };
       const addCandidates = (source, hits, idForHit, coverageForHit = () => 1) => {
+        // A source disabled via a zero (or absent) weight must contribute no
+        // candidates at all — not merely a zero fusion-score term. Otherwise a
+        // candidate matched ONLY by a weight-0 source still occupies a result slot
+        // on sparse-result queries, breaking the eval ablation contract (a
+        // `no-<source>-source` / `--fulltext-weight 0` run must equal that source
+        // fully disabled).
+        if (!(sourceWeights[source] > 0)) return;
         const limited = hits.slice(0, candidateLimit);
         let effectiveRank = 0;
         let previousScore = null;
@@ -1082,6 +1420,15 @@ class JsonLegalCacheStore {
           hits = this.excerptMiniSearch.search(retrievalQuery, { combineWith: "OR" });
         }
         addCandidates("excerpt", hits, (hit) => hit.id);
+      }
+
+      // No JSON/MiniSearch fallback here, unlike excerpt: fulltext is
+      // SQLite-only, and simply skipped when the artifact isn't loaded.
+      if (this.fulltextAvailable && sourceWeights.fulltext > 0) {
+        const terms = parsed.terms || [];
+        let hits = this.searchFulltext(buildFtsExpression(terms, "AND"));
+        if (hits.length === 0) hits = this.searchFulltext(buildFtsExpression(terms, "OR"));
+        addCandidates("fulltext", hits, (hit) => hit.celex);
       }
 
       const ranked = [...candidates.values()]
@@ -1191,18 +1538,33 @@ class JsonLegalCacheStore {
   }
 
   close() {
-    if (!this.database) return;
-    try {
-      this.database.close();
-    } catch {
-      // Already closed or failed during initialization.
+    if (this.database) {
+      try {
+        this.database.close();
+      } catch {
+        // Already closed or failed during initialization.
+      }
+      this.database = null;
+      this.excerptSearchStatement = null;
+      this.definitionSearchStatement = null;
+      this.definitionOccurrenceStatement = null;
+      this.definitionRepresentativeStatement = null;
+      this.definitionUsageStatement = null;
     }
-    this.database = null;
-    this.excerptSearchStatement = null;
-    this.definitionSearchStatement = null;
-    this.definitionOccurrenceStatement = null;
-    this.definitionRepresentativeStatement = null;
-    this.definitionUsageStatement = null;
+    if (this.fulltextDatabase) {
+      try {
+        this.fulltextDatabase.close();
+      } catch {
+        // Already closed or failed during initialization.
+      }
+      this.fulltextDatabase = null;
+      this.fulltextSearchStatement = null;
+      this.fulltextUnitSearchStatement = null;
+      this.fulltextUnitScopedSearchStatement = null;
+      this.fulltextUnitSnippetStatement = null;
+      this.fulltextAvailable = false;
+      this.fulltextReason = "Full-text index is closed";
+    }
   }
 }
 
@@ -1211,6 +1573,9 @@ module.exports = {
   DEFAULT_SEARCH_CACHE_PATH,
   DEFAULT_SQLITE_DATA_PATH,
   DEFAULT_DEFINITIONS_PATH,
+  DEFAULT_FULLTEXT_SQLITE_PATH,
+  FULLTEXT_SCHEMA_VERSION,
+  buildFulltextMatchExpression,
   JsonLegalCacheStore,
   SQLITE_SCHEMA_VERSION,
   containedAliasKeys,
@@ -1219,4 +1584,5 @@ module.exports = {
   normalizeDefinitionTerm,
   normalizeEliLookupKey,
   normalizeOfficialReferenceLookupKey,
+  validateFulltextQuery,
 };

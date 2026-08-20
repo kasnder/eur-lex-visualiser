@@ -1061,6 +1061,27 @@ export async function searchDefinitions(query, { limit = 10, filter = "", signal
   return res.json();
 }
 
+/**
+ * Search the English body text of all indexed EU law units.
+ *
+ * The response is intentionally not cached: this endpoint is a live,
+ * rate-limited query surface and callers pass an AbortSignal while typing.
+ */
+export async function searchFulltext(query, { limit = 10, signal } = {}) {
+  const params = new URLSearchParams({
+    q: String(query || "").trim(),
+    limit: String(limit),
+  });
+  const url = `${API_BASE}/api/fulltext-search?${params.toString()}`;
+  const res = await apiFetch(url, { signal });
+
+  if (!res.ok) {
+    await readApiError(res, `Full-text search failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function fetchDefinitionComparison(term, { signal } = {}) {
   const params = new URLSearchParams({ term: String(term || "").trim() });
   const url = `${API_BASE}/api/definitions/compare?${params.toString()}`;
