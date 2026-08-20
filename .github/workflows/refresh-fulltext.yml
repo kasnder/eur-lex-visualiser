@@ -254,18 +254,38 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # Memory budget on a 16 GB runner: 3 GB parent heap + 2 x 512 MB
+          # workers. A larger parent cap does not make the build faster, it
+          # only lets V8 defer collection until the kernel OOM-kills the whole
+          # runner — which takes the post-job checkpoint upload down with it.
+          # The build is also given less wall clock than the job, so an
+          # unfinished backlog ends this step cleanly and still leaves time to
+          # upload the partial index for the next run to resume from.
+          set +e
           SEARCH_CACHE_PATH="$PWD/search/data/search-cache.json.gz" \
-            node --max-old-space-size=8192 search/fulltext-index-build.js \
+            timeout --signal=INT 250m \
+            node --max-old-space-size=3072 search/fulltext-index-build.js \
               --corpusDir search/data/fulltext-corpus \
-              --pool 3 \
+              --pool 2 \
+              --workerHeapMb 512 \
               --out ../refresh-output/fulltext.sqlite \
             | tee ../refresh-output/fulltext-build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          # The builder runs in WAL mode. Checkpoint the main file — whether the
+          # build finished or was cut short — so the artifact that leaves this
+          # step is self-contained, then make sure sidecars cannot leak into the
+          # release or the checkpoint.
+          if [ -s ../refresh-output/fulltext.sqlite ]; then
+            node -e 'const Database=require("better-sqlite3"); const db=new Database("../refresh-output/fulltext.sqlite"); db.pragma("wal_checkpoint(TRUNCATE)"); db.close();'
+            rm -f ../refresh-output/fulltext.sqlite-wal ../refresh-output/fulltext.sqlite-shm
+          fi
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error::fulltext build exited with status $build_status; the partial index is uploaded as a checkpoint for the next run to resume from"
+            exit "$build_status"
+          fi
           test -s ../refresh-output/fulltext.sqlite
-          # The builder runs in WAL mode. Checkpoint the main file before it is
-          # compressed, then make sure sidecars cannot leak into the release.
-          node -e 'const Database=require("better-sqlite3"); const db=new Database("../refresh-output/fulltext.sqlite"); db.pragma("wal_checkpoint(TRUNCATE)"); db.close();'
-          rm -f ../refresh-output/fulltext.sqlite-wal ../refresh-output/fulltext.sqlite-shm
           test ! -e ../refresh-output/fulltext.sqlite-wal
           test ! -e ../refresh-output/fulltext.sqlite-shm
 
