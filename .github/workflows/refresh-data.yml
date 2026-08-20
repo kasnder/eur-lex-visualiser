@@ -186,11 +186,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          search_before=$(gzip -cd refresh-inputs/search-cache.json.gz \
-            | jq -er 'if (.records|type) == "array" then (.records|length) else error("search cache has no records array") end')
-          search_after=$(jq -er 'if (.records|type) == "array" then (.records|length) else error("search cache has no records array") end' backend/search/data/search-cache.json)
-          case_law_before=$(gzip -cd refresh-inputs/case-law-cache.json.gz | jq -er 'length')
-          case_law_after=$(jq -er 'length' backend/law-cache/case-law-cache-v5.json)
+          # One streaming pass per cache yields both the record count and the
+          # digest used for change detection. jq would have materialised each
+          # document (search-cache.json alone is several hundred MB) eight
+          # times over this step and the delta check below.
+          stats() {
+            node backend/search/json-stream-stats.js "$1" --mode "$2"
+          }
+          search_before_stats=$(stats refresh-inputs/search-cache.json.gz records)
+          search_after_stats=$(stats backend/search/data/search-cache.json records)
+          case_law_before_stats=$(stats refresh-inputs/case-law-cache.json.gz topLevel)
+          case_law_after_stats=$(stats backend/law-cache/case-law-cache-v5.json topLevel)
+          search_before=$(jq -er '.count | numbers' <<< "$search_before_stats")
+          search_after=$(jq -er '.count | numbers' <<< "$search_after_stats")
+          case_law_before=$(jq -er '.count | numbers' <<< "$case_law_before_stats")
+          case_law_after=$(jq -er '.count | numbers' <<< "$case_law_after_stats")
+          test "$search_before" -gt 0 || { echo "Baseline search cache has no records array" >&2; exit 1; }
+          test "$search_after" -gt 0 || { echo "Candidate search cache has no records array" >&2; exit 1; }
           [[ "$search_before" =~ ^[0-9]+$ && "$search_after" =~ ^[0-9]+$ ]]
           [[ "$case_law_before" =~ ^[0-9]+$ && "$case_law_after" =~ ^[0-9]+$ ]]
           test "$search_after" -ge "$search_before" || { echo "Search cache regressed ($search_before → $search_after)" >&2; exit 1; }
@@ -206,10 +218,14 @@ jobs:
             echo "Search cache delta $search_delta does not match backfill reported added=$backfill_added" >&2
             exit 1
           }
-          search_before_hash=$(gzip -cd refresh-inputs/search-cache.json.gz | jq -S -c . | sha256sum | cut -d ' ' -f 1)
-          search_after_hash=$(jq -S -c . backend/search/data/search-cache.json | sha256sum | cut -d ' ' -f 1)
-          case_law_before_hash=$(gzip -cd refresh-inputs/case-law-cache.json.gz | jq -S -c . | sha256sum | cut -d ' ' -f 1)
-          case_law_after_hash=$(jq -S -c . backend/law-cache/case-law-cache-v5.json | sha256sum | cut -d ' ' -f 1)
+          # Digests over the decompressed bytes, computed in the same streaming
+          # pass as the counts above. Byte-identical still means unchanged; a
+          # formatting-only rewrite would publish one extra release rather than
+          # cost gigabytes of RAM canonicalising with `jq -S`.
+          search_before_hash=$(jq -er '.sha256 | strings' <<< "$search_before_stats")
+          search_after_hash=$(jq -er '.sha256 | strings' <<< "$search_after_stats")
+          case_law_before_hash=$(jq -er '.sha256 | strings' <<< "$case_law_before_stats")
+          case_law_after_hash=$(jq -er '.sha256 | strings' <<< "$case_law_after_stats")
           changed=false
           if [ "$search_before_hash" != "$search_after_hash" ] || [ "$case_law_before_hash" != "$case_law_after_hash" ]; then
             changed=true
