@@ -72,6 +72,10 @@ jobs:
       failures: ${{ steps.validate.outputs.failures }}
     env:
       GH_TOKEN: ${{ github.token }}
+      # Backend dependencies are installed under backend/, but several steps run
+      # inline node scripts from the repository root; NODE_PATH lets those
+      # resolve better-sqlite3 without duplicating the install.
+      NODE_PATH: ${{ github.workspace }}/backend/node_modules
     steps:
       - uses: actions/checkout@v5
         with:
