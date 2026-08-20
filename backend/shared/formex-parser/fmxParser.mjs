@@ -1640,7 +1640,14 @@ export function parseFmxToCombined(xmlText) {
       if (child.tagName === "ARTICLE") {
         const idAttr = child.getAttribute("IDENTIFIER") || "";
         const tiArt = child.querySelector("TI\\.ART");
-        const stiArt = child.querySelector("STI\\.ART");
+        // An amending article that quotes another act's article verbatim can
+        // carry that quoted article's own STI.ART deeper in its subtree.
+        // querySelector() is unscoped, so without this check an amending
+        // article quoting an act's "Definitions" article would inherit that
+        // subtitle, wrongly declare itself a definitions article, and accept
+        // a single lone quoted-term match.
+        const stiArtCandidate = child.querySelector("STI\\.ART");
+        const stiArt = stiArtCandidate && !stiArtCandidate.closest("QUOT\\.S") ? stiArtCandidate : null;
 
         const artLabel = tiArt ? allText(tiArt) : "";
         const m = artLabel.match(lang.article);
@@ -1765,62 +1772,217 @@ export function parseFmxToCombined(xmlText) {
 
   // --- Definitions ---
   const definitions = [];
-  // Find the definitions article by matching its title against the language-specific pattern
-  const defArticle = articles.find(a => a.article_title && lang.definition.test(a.article_title));
-  if (defArticle) {
-    // Try multiple IDENTIFIER formats (3-digit padding is standard, but try others too)
-    const artNum = defArticle.article_number;
-    const candidates = [
-      artNum.padStart(3, "0"),
-      artNum.padStart(4, "0"),
-      artNum,
-    ];
-    let artEl = null;
-    for (const id of candidates) {
-      artEl = root.querySelector(`ARTICLE[IDENTIFIER="${id}"]`);
-      if (artEl) break;
+
+  // Resolve every article's element once. Looking each one up with a
+  // `[IDENTIFIER=…]` query instead would be quadratic on acts like the CRR
+  // (521 articles), and identifiers are zero-padded to a width that varies by
+  // act, so compare them stripped. Elements inside a quotation define terms in
+  // the act being *amended*, not this one, and must not be indexed. Elements
+  // inside an ANNEX are excluded too: an annex routinely restarts its own
+  // "Article 1", and first-wins-on-identifier would otherwise let an enacting
+  // article with no IDENTIFIER of its own resolve to an annex article of the
+  // same number, mis-attributing the annex's definitions to the act body.
+  const articleElementsByNumber = new Map();
+  for (const element of root.querySelectorAll("ARTICLE")) {
+    if (element.closest("QUOT\\.S") || element.closest("ANNEX")) continue;
+    const id = (element.getAttribute("IDENTIFIER") || "").replace(/^0+/, "").toUpperCase();
+    if (id && !articleElementsByNumber.has(id)) articleElementsByNumber.set(id, element);
+  }
+
+  // One definition per list point, and per numbered paragraph in the acts that
+  // use paragraphs instead — the VAT Directive states "'Telecommunications
+  // services' shall mean …" as Article 24(2), with no list in sight. A PARAG
+  // that contains points is skipped: its ITEMs already stand for its content,
+  // and taking both would define every term twice.
+  function definitionEntries(artEl) {
+    const entries = [];
+
+    // A prose definition block states one definition per <P> — VAT Article 48
+    // runs "'Intra-Community transport of goods' shall mean …", "'Place of
+    // departure' shall mean …", "'Place of arrival' shall mean …" as three
+    // sibling paragraphs. Reading the block as one entry would match only the
+    // first term and swallow the other two into its definition text. `group`
+    // ties the split paragraphs back to their shared body element so that a
+    // <P> which continues a definition (rather than starting a new one) can be
+    // reattached to it in definitionsInArticle() instead of being dropped.
+    const pushBody = (bodyEl, pointEl) => {
+      if (!bodyEl) return;
+      const paragraphs = Array.from(bodyEl.children).filter((child) => child.tagName === "P");
+      if (paragraphs.length > 1) {
+        for (const paragraph of paragraphs) entries.push({ textEl: paragraph, pointEl, group: bodyEl });
+      } else {
+        entries.push({ textEl: bodyEl, pointEl, group: null });
+      }
+    };
+
+    for (const item of artEl.querySelectorAll("ITEM")) {
+      // Points quoted from another act are that act's definitions.
+      if (item.closest("QUOT\\.S")) continue;
+      // Read only the item's OWN text. A "group heading" item — a <P> lead-in
+      // followed by a nested <LIST> of the real ITEMs, e.g. CRR Article 272 —
+      // has no NP/TXT of its own. An unscoped querySelector() here would reach
+      // past it into the first nested ITEM's TXT instead, both misattributing
+      // that nested item's definition to the heading item and duplicating it,
+      // since the nested ITEM is also walked (and read correctly) on its own.
+      const npEl = item.querySelector(":scope > NP");
+      const txtEl = (npEl && npEl.querySelector(":scope > TXT")) || item.querySelector(":scope > TXT") || npEl;
+      if (txtEl) {
+        const pointRoot = npEl || item;
+        const pointEl = pointRoot.querySelector(":scope > NO\\.P") || pointRoot.querySelector(":scope > NO");
+        entries.push({ textEl: txtEl, pointEl, group: null });
+      }
     }
 
-    if (artEl) {
-      for (const item of artEl.querySelectorAll("ITEM")) {
-        // The TXT might be inside NP > TXT or directly under ITEM
-        const txtEl = item.querySelector("TXT") || item.querySelector("NP");
-        if (!txtEl) continue;
-        const text = allText(txtEl);
-        if (!text) continue;
-        const sourcePoint = allText(item.querySelector("NO\\.P") || item.querySelector("NP > NO")) || null;
-        const makeDefinition = (term, definition) => ({
-          term,
-          definition,
-          sourceArticle: artNum,
-          sourcePoint,
-          references: [
-            ...extractCrossRefsFromText(definition, lang),
-            ...extractOjRefsFromElement(txtEl),
-          ],
-        });
+    for (const parag of artEl.querySelectorAll("PARAG")) {
+      if (parag.closest("QUOT\\.S")) continue;
+      if (parag.querySelector("ITEM")) continue;
+      pushBody(parag.querySelector("ALINEA") || parag, parag.querySelector("NO\\.PARAG"));
+    }
 
-        // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition.
-        // Term-first languages: 'term' meansVerb definition.
-        // Either way, try the configured meansVerb first, then fall back to the
-        // quoted-term pattern for languages where the verb appears only in the
-        // article intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
-        // The verb-first languages need that fallback too: FR/IT/ES/PT state
-        // the verb once ("on entend par:") and then list «terme», définition.
-        const termMatch = text.match(meansRegex);
-        if (termMatch?.[1]) {
-          const term = termMatch[1].trim();
-          const definition = text.slice(termMatch[0].length).trim();
-          definitions.push(makeDefinition(term, definition));
-        } else {
-          const fbMatch = text.match(fallbackDefRegex);
-          if (fbMatch?.[1]) {
-            const term = fbMatch[1].trim();
-            const definition = text.slice(fbMatch[0].length).trim();
-            if (term && definition) definitions.push(makeDefinition(term, definition));
+    // Articles with neither points nor numbered paragraphs hang their text
+    // straight off the ARTICLE (VAT Article 48 again).
+    for (const child of artEl.children) {
+      if (child.tagName !== "ALINEA") continue;
+      if (child.querySelector("ITEM")) continue;
+      pushBody(child, null);
+    }
+
+    return entries;
+  }
+
+  // How many consecutive non-matching <P> siblings an open "'term' means:"
+  // entry may absorb as its continuation before we assume the block moved on
+  // to ordinary prose. Mirrors eurlex-html-parser.js's
+  // MAX_DEFINITION_CONTINUATION_PARAGRAPHS for the same reason: unbounded
+  // absorption would eventually swallow the rest of the article.
+  const MAX_DEFINITION_CONTINUATION_PARAGRAPHS = 8;
+
+  function definitionsInArticle(artEl, artNum) {
+    const found = [];
+    // The most recently matched entry within the current continuation group
+    // (see `group` above) — an unmatched sibling <P> right after it gets
+    // folded into its definition text instead of being dropped.
+    let openContinuation = null;
+
+    for (const { textEl, pointEl, group } of definitionEntries(artEl)) {
+      const text = allText(textEl);
+      if (!text) continue;
+      const txtEl = textEl;
+      const sourcePoint = allText(pointEl) || null;
+      const makeDefinition = (term, definition, quoted) => ({
+        term,
+        definition,
+        sourceArticle: artNum,
+        sourcePoint,
+        quoted,
+        references: [
+          ...extractCrossRefsFromText(definition, lang),
+          ...extractOjRefsFromElement(txtEl),
+        ],
+      });
+
+      // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition.
+      // Term-first languages: 'term' meansVerb definition.
+      // Either way, try the configured meansVerb first, then fall back to the
+      // quoted-term pattern for languages where the verb appears only in the
+      // article intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
+      // The verb-first languages need that fallback too: FR/IT/ES/PT state
+      // the verb once ("on entend par:") and then list «terme», définition.
+      const termMatch = text.match(meansRegex);
+      let matched = null;
+      if (termMatch?.[1]) {
+        const term = termMatch[1].trim();
+        const definition = text.slice(termMatch[0].length).trim();
+        // meansRegex always requires a quote character around the term.
+        matched = makeDefinition(term, definition, true);
+      } else {
+        const fbMatch = text.match(fallbackDefRegex);
+        if (fbMatch?.[1]) {
+          const term = fbMatch[1].trim();
+          const definition = text.slice(fbMatch[0].length).trim();
+          if (term && definition) {
+            // For every language except LT and SV, fallbackDefRegex also
+            // requires quote characters around the term. LT and SV are the
+            // two languages whose Formex text never carries QUOT.START/
+            // QUOT.END around the defined term at all (see
+            // buildFallbackDefRegex), so their fallback matches on a bare
+            // dash/colon — a shape common enough in ordinary operative prose
+            // ("0,09 % – ...", "70 % : ...") that it clears the corroboration
+            // bar below on nearly any article. Flag those matches so an
+            // untitled article can discount them (Finding 1).
+            const quoted = lang.code !== "LT" && lang.code !== "SV";
+            matched = makeDefinition(term, definition, quoted);
           }
         }
       }
+
+      if (matched) {
+        found.push(matched);
+        openContinuation = group ? { group, entry: matched, count: 0 } : null;
+        continue;
+      }
+
+      // No definition pattern matched. If this <P> sits in the same body
+      // element as the entry just matched, treat it as that entry's
+      // continuation rather than silently dropping it — a definition that
+      // runs past its first <P> would otherwise lose its tail.
+      if (
+        group
+        && openContinuation
+        && openContinuation.group === group
+        && openContinuation.count < MAX_DEFINITION_CONTINUATION_PARAGRAPHS
+      ) {
+        openContinuation.entry.definition = `${openContinuation.entry.definition} ${text}`.trim();
+        openContinuation.count += 1;
+      }
+    }
+    return found;
+  }
+
+  // Dedupe on (term, sourceArticle, sourcePoint, definition) as a backstop
+  // against structural quirks (e.g. a group-heading ITEM misreading a nested
+  // ITEM's text — Finding 2) that could otherwise re-emit the same definition
+  // more than once and let it self-corroborate the bar below.
+  function dedupeDefinitionEntries(entries) {
+    const seen = new Set();
+    const deduped = [];
+    for (const entry of entries) {
+      const key = `${entry.term} ${entry.sourceArticle} ${entry.sourcePoint} ${entry.definition}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(entry);
+    }
+    return deduped;
+  }
+
+  // Definitions are not always in an article that says so in its title. Older
+  // acts routinely carry no STI.ART at all — the VAT Directive defines
+  // "Community", "Member State" and "third territories" in an Article 5 whose
+  // only heading is "Article 5" — and several acts spread definitions over more
+  // than one article. So every article is examined, and an article that does
+  // not declare itself has to corroborate itself with two or more entries
+  // before its matches count. That is the same bar `eurlex-html-parser.js`
+  // applies for the same reason; a single quoted phrase followed by "means"
+  // occurs often enough in ordinary operative text to be worth discounting.
+  for (const article of articles) {
+    const artNum = String(article.article_number);
+    const artEl = articleElementsByNumber.get(artNum.toUpperCase());
+    if (!artEl) continue;
+
+    const found = definitionsInArticle(artEl, artNum);
+    if (!found.length) continue;
+
+    const declaresItself = Boolean(article.article_title && lang.definition.test(article.article_title));
+    // Finding 1: an untitled article's matches only count when they came from
+    // a quote-requiring pattern — never LT/SV's quote-less fallback, which
+    // would otherwise clear the corroboration bar on almost any operative
+    // sentence. A titled definitions article keeps the current behaviour,
+    // since the quote-less fallback is how LT/SV acts get their real
+    // definitions today.
+    const eligible = declaresItself ? found : found.filter((entry) => entry.quoted);
+    const deduped = dedupeDefinitionEntries(eligible);
+    if (declaresItself || deduped.length >= 2) {
+      definitions.push(...deduped.map(({ quoted, ...entry }) => entry));
     }
   }
 
