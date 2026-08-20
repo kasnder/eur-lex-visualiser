@@ -347,7 +347,9 @@ export function LawViewer() {
           hasCelex={derived.hasCelex}
           onToggleSecondLanguage={derived.hasCelex && !derived.isLegacyHtmlFallback ? preferences.toggleSecondLanguage : null}
           isSideBySide={derived.isSideBySide}
-          searchModes={["laws", "matches", "definitions", "current"]}
+          searchModes={locale === "en"
+            ? ["laws", "matches", "definitions", "fulltext", "current"]
+            : ["laws", "matches", "definitions", "current"]}
           defaultSearchMode="current"
           persistenceKey="legalviz-law-reader-search"
         />

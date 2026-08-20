@@ -88,6 +88,29 @@ export function Landing({ forcedLocale = null }) {
       return;
     }
 
+    if (item.search_kind === "fulltext") {
+      const celex = String(item.celex || "").trim();
+      const unitType = String(item.unitType || "").trim().toLowerCase();
+      const number = item.number == null ? "" : String(item.number).trim();
+      if (!celex || !number || (unitType !== "article" && unitType !== "recital")) return;
+
+      const officialReference = inferOfficialReferenceFromCelex(celex);
+      const targetLaw = buildImportedLawCandidate({
+        celex,
+        title: item.title,
+        officialReference,
+      });
+      if (officialReference) {
+        saveLawMeta({
+          celex,
+          label: item.title,
+          officialReference,
+        }).catch(() => {});
+      }
+      navigate(getCanonicalLawRoute(targetLaw, unitType, number, locale));
+      return;
+    }
+
     if (item.search_kind === "law") {
       const officialReference = inferOfficialReferenceFromCelex(item.celex);
       const targetLaw = buildImportedLawCandidate({
@@ -166,7 +189,9 @@ export function Landing({ forcedLocale = null }) {
               activeLanguage={formexLang}
               searchableLawCount={searchableLawCount}
               triggerVariant="hero"
-              searchModes={["laws", "matches", "definitions"]}
+              searchModes={locale === "en"
+                ? ["laws", "matches", "definitions", "fulltext"]
+                : ["laws", "matches", "definitions"]}
             />
           </div>
         </Motion.div>

@@ -33,9 +33,11 @@ by `search/fulltext-index-build.js`. It is independently optional, like
 `--sqlite`: omit it and the store falls back to its own default
 `search/data/fulltext.sqlite` / `FULLTEXT_SQLITE_PATH` resolution, and reports
 zero fulltext candidate recall and zero fulltext signal coverage when no
-artifact is present rather than failing the run. `fulltext` is a fourth RRF
-candidate source alongside title/EuroVoc/excerpt: `run.js` reports its
-candidate recall and signal coverage the same way it reports excerpt's.
+artifact is present rather than failing the run. `fulltext` remains a fourth,
+optional RRF candidate source alongside title/EuroVoc/excerpt. Its production
+weight is currently **0** because real-data evaluation found no measurable
+ranking benefit; `run.js` still reports candidate recall and signal coverage
+for a future instrumented re-evaluation.
 
 Run the small, predefined rank-fusion ablation grid against development only:
 
@@ -46,8 +48,9 @@ node search/eval/tune-ranking.js --sqlite search/data/data.sqlite
 Add `--ablations-only` to run only the selected configuration and the
 single-signal removal checks.
 
-The grid includes `fulltext-0.3`, `fulltext-0.4`, `fulltext-0.5`, and `fulltext-0.7` rows that
-vary the fulltext source weight against the other defaults, plus a
+The grid includes explicit `fulltext-0.3`, `fulltext-0.4`, `fulltext-0.5`, and
+`fulltext-0.7` probe rows that vary the fulltext source weight against the
+other defaults, plus a
 `no-fulltext-source` ablation (`fulltext: 0`) picked up by `--ablations-only`
 alongside the other `no-*` rows. Like every other row here, it is
 development-split only.
@@ -105,7 +108,8 @@ node search/eval/compare-ranking.js \
 Add `--fulltext-weight <n>` to override the fulltext source weight for this
 comparison (both the baseline and revised profile constructions, though only
 the revised profile's RRF fusion reads it). Omit it to use the store's
-built-in weight (0.4); pass `0` to run the fulltext-ablation control. This
+built-in weight (0, disabled); pass a positive value to run an explicit
+fulltext-fusion probe or `0` to run the ablation control. This
 reuses the store's existing construction-time `rankingConfig.sourceWeights`
 override (the same mechanism `tune-ranking.js` uses for its grid) rather than
 mutating the module-level `SOURCE_WEIGHTS` constant.

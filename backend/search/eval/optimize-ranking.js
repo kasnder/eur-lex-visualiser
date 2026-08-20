@@ -21,11 +21,10 @@ const DEFAULT_CONFIG = {
   name: "current",
   rrfK: 20,
   coverageExponent: 2,
-  // fulltext held at the store default ratio (0.4 in SOURCE_WEIGHTS, normalized
-  // against title's 1.1), keeping rerankCached's offline fusion in parity with
-  // live searchLaws. Not searched by the Halton dimensions below, same as title
-  // itself — see generateConfigurations.
-  sourceWeights: { title: 1, eurovoc: 1, excerpt: 0.5 / 1.1, fulltext: 0.4 / 1.1 },
+  // Full-text fusion is disabled by the store default after the real-data
+  // evaluation found no measurable ranking benefit. Keep the dimension in the
+  // cached graph so explicit-weight re-evaluations remain possible.
+  sourceWeights: { title: 1, eurovoc: 1, excerpt: 0.5 / 1.1, fulltext: 0 },
   inForceBoost: 1.08,
   noLongerInForceBoost: 0.9,
   citationLogScale: 0.025,

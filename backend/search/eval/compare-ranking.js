@@ -82,7 +82,7 @@ function parseArgs(argv) {
     split: "holdout",
     samples: 10_000,
     disableRewrites: true,
-    // null = leave the store's built-in fulltext weight (0.4) untouched;
+    // null = leave the store's built-in fulltext weight (0, disabled) untouched;
     // 0 = control/ablation, disabling the fulltext source entirely.
     fulltextWeight: null,
   };

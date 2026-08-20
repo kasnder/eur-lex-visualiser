@@ -5,6 +5,7 @@ const { ClientError, requireCitationGraph, validateLang } = require('../shared/a
 const { validateCelex, parseReferenceText } = require('../shared/reference-utils');
 const { fetchCaseLaw, fetchAmendments, fetchImplementing } = require('../shared/law-queries');
 const { ensureRecitalTitles, getCachedRecitalTitles } = require('../shared/recital-title-service');
+const { validateFulltextQuery } = require('../search/legal-cache-store');
 
 const DEFAULT_RECITAL_TITLE_MODEL =
   process.env.RECITAL_TITLE_MODEL
@@ -179,7 +180,7 @@ function registerTools(server, deps) {
     {
       title: 'Search EU law',
       description:
-        'Search cached EU primary legislation by keyword, title, CELEX id, or citation. Use this FIRST to find the CELEX identifier of a law before reading it with get_law_part. Returns a ranked list of matches, each with its CELEX id and title.',
+        'Search cached EU primary legislation by keyword, title, CELEX id, or citation. Use this FIRST to find the CELEX identifier of a law before reading it with get_law_part. Returns a ranked list of matches, each with its CELEX id and title. For provision/body-text searches, use search_law_text instead.',
       inputSchema: {
         query: z.string().min(1).describe('Keywords, a law title, a CELEX id, or a citation'),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum number of results (default 10)'),
@@ -201,6 +202,51 @@ function registerTools(server, deps) {
         throw err;
       }
       return jsonResult({ query, count: results.length, results });
+    })
+  );
+
+  server.registerTool(
+    'search_law_text',
+    {
+      title: 'Search EU law body text',
+      description:
+        'Search the body text of EU legislation (articles and recitals) for a term or phrase. Use this when the user’s words come from a provision rather than a law title, for example to find which laws mention a term. Returns matching units with snippets; follow up with get_law_part to read the full provision. Pass celex to search within a single act.',
+      inputSchema: {
+        query: z.string().trim().min(2).max(200).describe('A term or phrase from the body text of EU legislation'),
+        celex: z.string().optional().describe('Optional CELEX id to restrict the search, e.g. 32016R0679'),
+        limit: z.number().int().min(1).max(50).optional().describe('Maximum number of matching units (default 10)'),
+      },
+    },
+    makeHandler(async ({ query, celex, limit }) => {
+      record('search_law_text', { query });
+
+      const queryError = validateFulltextQuery(query);
+      if (queryError) {
+        throw new ClientError(queryError.message, 400, queryError.code);
+      }
+
+      const normalizedCelex = celex === undefined || !String(celex).trim()
+        ? undefined
+        : String(celex).trim().toUpperCase();
+      if (normalizedCelex !== undefined) requireCelex(normalizedCelex);
+
+      let results;
+      try {
+        results = legalCacheStore.searchFulltextUnits(query, {
+          celex: normalizedCelex,
+          limit,
+        });
+      } catch (err) {
+        if (err?.code === 'fulltext_index_unavailable') {
+          throw new ClientError(
+            'Body-text index unavailable; metadata/title/excerpt search_eu_law remains available but is not an equivalent fallback.',
+            503,
+            'fulltext_index_unavailable'
+          );
+        }
+        throw err;
+      }
+      return jsonResult({ query, celex: normalizedCelex || null, count: results.length, results });
     })
   );
 

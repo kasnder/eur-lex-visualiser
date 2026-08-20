@@ -858,12 +858,105 @@ test("searchLaws recovers a known alias embedded in a modifier-heavy query", () 
 const FULLTEXT_PROBE_TERM = "zorblatt phosphorescent widget calibration";
 const FULLTEXT_PROBE_CELEX = "32022R0868"; // Data Governance Act — absent from that term in title/eurovoc/excerpt.
 
+test("searchFulltextUnits searches body text only, joins titles, and returns marker ranges", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-units-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", heading: "Heading-only marker", text: "The data governance authority shall act." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  const results = store.searchFulltextUnits("data govern", { limit: 50 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].celex, FULLTEXT_PROBE_CELEX);
+  assert.match(results[0].title, /Data Governance Act/);
+  assert.equal(results[0].unitType, "article");
+  assert.equal(results[0].number, "5");
+  assert.equal(results[0].snippet.includes("\u0002"), false);
+  assert.equal(results[0].snippet.includes("\u0003"), false);
+  const highlighted = results[0].highlightRanges.map(({ start, end }) => results[0].snippet.slice(start, end));
+  assert.equal(highlighted.length > 0, true);
+  assert.match(highlighted.join(" "), /data.*governance/);
+  assert.equal(store.searchFulltextUnits("data authority").length, 1, "unquoted terms use independent strict-AND prefixes");
+  assert.deepEqual(store.searchFulltextUnits("marker"), [], "heading terms must not match body-text search");
+
+  assert.deepEqual(store.searchFulltextUnits("OR"), [], "quoted FTS operator words are searched literally");
+  assert.throws(() => store.searchFulltextUnits("***"), (error) => error.code === "fulltext_query_empty");
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("searchFulltextUnits preserves phrases, prefixes, strict AND, and global act diversification", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-diversify-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "1", text: "data altruism organisation applies." },
+      { unit_type: "article", number: "2", text: "data altruism organisation continues." },
+    ],
+    "32024R1689": [
+      { unit_type: "recital", number: "14", text: "data altruism organisation and governance." },
+    ],
+    "32016R0679": [
+      { unit_type: "article", number: "1", text: "data protection authority." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  const phrase = store.searchFulltextUnits('"data altruism" organisation', { limit: 50 });
+  assert.deepEqual(phrase.map((result) => result.celex), [FULLTEXT_PROBE_CELEX, "32024R1689"]);
+  assert.equal(store.searchFulltextUnits("data altruism absent", { limit: 50 }).length, 0, "public fulltext search is strict AND");
+  assert.equal(store.searchFulltextUnits("data", { celex: FULLTEXT_PROBE_CELEX, limit: 50 }).length, 2, "scoped search returns multiple units from the act");
+  assert.equal(new Set(store.searchFulltextUnits("data", { limit: 50 }).map((result) => result.celex)).size, store.searchFulltextUnits("data", { limit: 50 }).length, "global search returns one best unit per act");
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("global fulltext diversification happens before the bounded result window", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-window-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: Array.from({ length: 500 }, (_, index) => ({
+      unit_type: "article",
+      number: String(index + 1),
+      text: "windowprobe common wording.",
+    })),
+    "32024R1689": [
+      { unit_type: "article", number: "1", text: "windowprobe common wording." },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+
+  assert.deepEqual(
+    new Set(store.searchFulltextUnits("windowprobe", { limit: 50 }).map((result) => result.celex)),
+    new Set([FULLTEXT_PROBE_CELEX, "32024R1689"])
+  );
+
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("searchFulltextUnits reports an unavailable artifact with a stable code", () => {
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath: path.join(os.tmpdir(), `missing-fulltext-${Date.now()}.sqlite`) });
+  assert.equal(store.load(), true);
+  assert.deepEqual(store.getFulltextStatus(), store.getStatus().fulltext);
+  assert.throws(() => store.requireFulltext(), (error) => error.code === "fulltext_index_unavailable");
+  assert.throws(() => store.searchFulltextUnits("data"), (error) => error.code === "fulltext_index_unavailable");
+  store.close();
+});
+
 test("fulltext source: a term present only in indexed body text surfaces its act via RRF fusion", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-"));
   const fulltextPath = path.join(tempDir, "fulltext.sqlite");
   buildTestFulltextDb(fulltextPath, {
     [FULLTEXT_PROBE_CELEX]: [
-      { unit_type: "article", number: "5", heading: "Conditions", text: `The competent authority shall assess ${FULLTEXT_PROBE_TERM} before granting access.` },
+      { unit_type: "article", number: "5", heading: "headingonlyquasar", text: `The competent authority shall assess ${FULLTEXT_PROBE_TERM} before granting access.` },
     ],
   });
 
@@ -872,7 +965,13 @@ test("fulltext source: a term present only in indexed body text surfaces its act
   const baselineResults = baseline.searchLaws(FULLTEXT_PROBE_TERM, { limit: 5 }).map((r) => r.celex);
   assert.equal(baselineResults.includes(FULLTEXT_PROBE_CELEX), false, "the probe term must not already surface the target act without fulltext");
 
-  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  const store = new JsonLegalCacheStore(fixturePath, {
+    preferJson: true,
+    fulltextPath,
+    // Keep this test as an explicit wiring check now that production fusion
+    // defaults to zero pending a better real-data instrument.
+    rankingConfig: { sourceWeights: { fulltext: 0.4 } },
+  });
   assert.equal(store.load(), true);
   assert.equal(store.getStatus().fulltext.available, true);
   assert.equal(store.getStatus().fulltext.unitCount, 1);
@@ -880,7 +979,34 @@ test("fulltext source: a term present only in indexed body text surfaces its act
 
   const results = store.searchLaws(FULLTEXT_PROBE_TERM, { limit: 5 }).map((r) => r.celex);
   assert.equal(results[0], FULLTEXT_PROBE_CELEX);
+  assert.equal(
+    store.searchLaws("headingonlyquasar", { limit: 5 }).some((result) => result.celex === FULLTEXT_PROBE_CELEX),
+    false,
+    "positive-weight fusion must search body text, not headings"
+  );
 
+  store.close();
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("fulltext fusion is disabled by default while explicit positive weights remain usable", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-fulltext-default-"));
+  const fulltextPath = path.join(tempDir, "fulltext.sqlite");
+  buildTestFulltextDb(fulltextPath, {
+    [FULLTEXT_PROBE_CELEX]: [
+      { unit_type: "article", number: "5", text: `Provisions on ${FULLTEXT_PROBE_TERM}.` },
+    ],
+  });
+  const store = new JsonLegalCacheStore(fixturePath, { preferJson: true, fulltextPath });
+  assert.equal(store.load(), true);
+  store.searchFulltext = () => {
+    throw new Error("weight-zero fulltext source must not be queried");
+  };
+  let diagnostics = null;
+  const results = store.searchLaws(FULLTEXT_PROBE_TERM, { limit: 10, onDiagnostics: (value) => { diagnostics = value; } });
+  assert.equal(store.rankingConfig.sourceWeights.fulltext, 0);
+  assert.equal(results.some((result) => result.celex === FULLTEXT_PROBE_CELEX), false);
+  assert.deepEqual(diagnostics.sources.fulltext, []);
   store.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
