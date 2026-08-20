@@ -433,6 +433,23 @@ jobs:
             echo "next=$requested"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Render the release and pull-request summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          for mode in release pr; do
+            node .github/scripts/render-refresh-notes.mjs \
+              --kind fulltext \
+              --dir release-assets \
+              --tag "${{ steps.tag.outputs.next }}" \
+              --run-url "$run_url" \
+              --mode "$mode" \
+              > "$mode-notes.md"
+            test -s "$mode-notes.md"
+          done
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create or resume a draft fulltext release
         shell: bash
         run: |
@@ -449,7 +466,9 @@ jobs:
                 --clobber
               release_json=$(gh release view "$tag" --repo "${{ github.repository }}" --json isDraft,isPrerelease,assets)
               jq -e '([.assets[].name] | sort) == ["fulltext.sqlite.gz", "fulltext.sqlite.manifest.json"] and ([.assets[] | select(.size > 0) | .name] | sort) == ["fulltext.sqlite.gz", "fulltext.sqlite.manifest.json"]' <<< "$release_json" >/dev/null
-              gh release edit "$tag" --repo "${{ github.repository }}" --draft=false
+              # Refresh the notes as well: a draft left behind by an interrupted
+              # run carries that run's numbers, not this one's.
+              gh release edit "$tag" --repo "${{ github.repository }}" --notes-file release-notes.md --draft=false
             else
               echo "Release $tag is already published; verifying its exact assets."
               test "$(jq -r '.isPrerelease' <<< "$release_json")" = false || {
@@ -473,7 +492,7 @@ jobs:
               --repo "${{ github.repository }}" \
               --draft \
               --title "$tag" \
-              --notes "Incremental fulltext index produced by workflow run ${{ github.run_id }}."
+              --notes-file release-notes.md
             gh release upload "$tag" \
               release-assets/fulltext.sqlite.gz \
               release-assets/fulltext.sqlite.manifest.json \
@@ -482,7 +501,7 @@ jobs:
             release_json=$(gh release view "$tag" --repo "${{ github.repository }}" --json isDraft,isPrerelease,assets)
             jq -e '([.assets[].name] | sort) == ["fulltext.sqlite.gz", "fulltext.sqlite.manifest.json"] and ([.assets[] | select(.size > 0) | .name] | sort) == ["fulltext.sqlite.gz", "fulltext.sqlite.manifest.json"]' <<< "$release_json" >/dev/null
             # Make the release visible only after both assets are uploaded and verified.
-            gh release edit "$tag" --repo "${{ github.repository }}" --draft=false
+            gh release edit "$tag" --repo "${{ github.repository }}" --notes-file release-notes.md --draft=false
           fi
 
       - name: Open or update the Docker tag-bump pull request
@@ -516,9 +535,8 @@ jobs:
             --json number \
             --jq '.[0].number // empty')
           title="Deploy fulltext release $tag"
-          body="Updates only FULLTEXT_RELEASE_TAG to the validated $tag release from workflow run ${{ github.run_id }}. Merge this PR to deploy the immutable fulltext asset."
           if [ -n "$pr_number" ]; then
-            gh pr edit "$pr_number" --repo "${{ github.repository }}" --title "$title" --body "$body"
+            gh pr edit "$pr_number" --repo "${{ github.repository }}" --title "$title" --body-file pr-notes.md
             echo "Updated PR #$pr_number."
           else
             gh pr create \
@@ -526,7 +544,7 @@ jobs:
               --base main \
               --head "$branch" \
               --title "$title" \
-              --body "$body"
+              --body-file pr-notes.md
           fi
           # GITHUB_TOKEN pushes do not reliably emit pull_request events; run
           # the Docker smoke/evaluation gates explicitly for this exact branch.

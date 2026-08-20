@@ -167,6 +167,9 @@ jobs:
           fs.writeFileSync("corpus-missing.txt", ids.length ? `${ids.join("\n")}\n` : "", "utf8");
           console.log(`[derived-data] corpus contains ${ids.length} CELEX ids absent from the current search cache`);
           NODE
+          # Carried into the artifact so the publish job can name the acts this
+          # release adds, rather than only how many.
+          cp corpus-missing.txt ../refresh-output/corpus-missing.txt
           if [ -s corpus-missing.txt ]; then
             node --max-old-space-size=8192 search/backfill-cache.js \
               --celex @corpus-missing.txt \
@@ -357,6 +360,24 @@ jobs:
           echo "release_state=$release_state" >> "$GITHUB_OUTPUT"
           echo "Next data release: $expected_data" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Render the release and pull-request summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          for mode in release pr; do
+            node .github/scripts/render-refresh-notes.mjs \
+              --kind data \
+              --dir release-assets \
+              --tag "${{ steps.tags.outputs.data_tag }}" \
+              --corpus-tag "${{ needs.build.outputs.corpus_tag }}" \
+              --run-url "$run_url" \
+              --mode "$mode" \
+              > "$mode-notes.md"
+            test -s "$mode-notes.md"
+          done
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify complete candidate asset set
         shell: bash
         run: |
@@ -446,7 +467,7 @@ jobs:
               --repo "${{ github.repository }}" \
               --draft \
               --title "$data_tag" \
-              --notes "Automated derived-data refresh from corpus ${{ needs.build.outputs.corpus_tag }} (workflow run ${{ github.run_id }})."
+              --notes-file release-notes.md
           fi
           gh release upload "$data_tag" "${data_assets[@]}" \
             --repo "${{ github.repository }}" \
@@ -463,7 +484,9 @@ jobs:
           if [ -f release-assets/definitions.json.gz ]; then
             grep -Fxq definitions.json.gz <<< "$release_assets" || { echo "Draft release is missing definitions.json.gz" >&2; exit 1; }
           fi
-          gh release edit "$data_tag" --repo "${{ github.repository }}" --draft=false
+          # Set the notes here too, so a draft left behind by an interrupted run
+          # is published with this run's numbers rather than that run's.
+          gh release edit "$data_tag" --repo "${{ github.repository }}" --notes-file release-notes.md --draft=false
           echo "Published complete immutable data release $data_tag." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open or update Docker data-tag pull request
@@ -525,16 +548,15 @@ jobs:
             --json number \
             --jq '.[0].number // empty')
           title="Deploy $data_tag"
-          body="Updates only backend/Dockerfile DATA_RELEASE_TAG to the validated immutable $data_tag release from workflow run ${{ github.run_id }}. Merge this PR to deploy the release."
           if [ -n "$pr_number" ]; then
-            gh pr edit "$pr_number" --repo "${{ github.repository }}" --title "$title" --body "$body"
+            gh pr edit "$pr_number" --repo "${{ github.repository }}" --title "$title" --body-file pr-notes.md
           else
             gh pr create \
               --repo "${{ github.repository }}" \
               --base "${{ github.event.repository.default_branch }}" \
               --head "$branch" \
               --title "$title" \
-              --body "$body"
+              --body-file pr-notes.md
           fi
 
       - name: Dispatch Docker validation for the tag PR

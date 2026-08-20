@@ -320,8 +320,11 @@ jobs:
             --argjson laws "$law_count" \
             --argjson lawsHtml "$html_count" \
             --argjson caseLaw "$case_count" \
+            --argjson baseLaws "${{ steps.baseline-corpus.outputs.laws }}" \
+            --argjson baseLawsHtml "${{ steps.baseline-corpus.outputs.laws_html }}" \
+            --argjson baseCaseLaw "${{ steps.baseline-corpus.outputs.case_law }}" \
             --argjson legislationMissing "${{ steps.legislation-audit.outputs.missing_count }}" \
-            '{corpusTag:$corpusTag, files:{laws:$laws, lawsHtml:$lawsHtml, caseLaw:$caseLaw}, legislationMissing:$legislationMissing}' \
+            '{corpusTag:$corpusTag, files:{laws:$laws, lawsHtml:$lawsHtml, caseLaw:$caseLaw}, baselineFiles:{laws:$baseLaws, lawsHtml:$baseLawsHtml, caseLaw:$baseCaseLaw}, legislationMissing:$legislationMissing}' \
             > refresh-output/corpus-summary.json
           echo "Corpus candidate validated: laws=$law_count, laws-html=$html_count, case-law=$case_count." >> "$GITHUB_STEP_SUMMARY"
 
@@ -397,6 +400,20 @@ jobs:
               | awk -v root="$root" 'index($0, root) == 1 { found=1 } END { exit found ? 0 : 1 }'
           done
 
+      - name: Render the release summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/render-refresh-notes.mjs \
+            --kind corpus \
+            --dir release-assets \
+            --tag "$CORPUS_TAG" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --mode release \
+            > release-notes.md
+          test -s release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create draft corpus release
         if: ${{ needs.refresh.outputs.resume_draft != 'true' }}
         shell: bash
@@ -406,7 +423,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --draft \
             --title "$CORPUS_TAG" \
-            --notes "Validated raw legislation and case-law corpus from workflow run ${{ github.run_id }}."
+            --notes-file release-notes.md
 
       - name: Upload complete corpus asset set to draft
         shell: bash
@@ -452,8 +469,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Notes are set here as well as at creation, so a draft left behind by
+          # an interrupted run is published with this run's numbers.
           gh release edit "$CORPUS_TAG" \
             --repo "${{ github.repository }}" \
+            --notes-file release-notes.md \
             --draft=false
           published=$(gh release view "$CORPUS_TAG" --repo "${{ github.repository }}" --json isDraft)
           jq -e '.isDraft == false' <<< "$published" >/dev/null
