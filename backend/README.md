@@ -668,6 +668,61 @@ node --max-old-space-size=8192 search/fetch-eurovoc.js
 node --max-old-space-size=8192 search/fetch-in-force.js
 ```
 
+`fetch-in-force.js` only ever fills a gap: it skips any record that already
+carries `inForce` and any celex already answered in `data/in-force.json`, so it
+never re-asks Cellar about a status once known. Because `inForce` is
+time-varying (an act can be repealed after its first harvest), that first-ever
+value would otherwise be carried forward indefinitely.
+`search/in-force-recheck.js` is the periodic counterpart: it clears the field
+and re-queries Cellar (issue #167). It runs automatically as a step of
+`refresh-data.yml`; run it by hand only to patch a published cache out of band:
+
+```bash
+node --max-old-space-size=8192 search/in-force-recheck.js
+```
+
+It re-checks everything **not already known to be out of force**. `inForce:
+false` is effectively terminal — an act that has fallen out of force does not
+come back — and that is 50,393 of the 80,469 acts in `data-v11`, so skipping
+them cuts the sweep to ~30k records (19,588 in force, 10,488 whose status
+Cellar has never answered and may yet). At 100 CELEX ids per SPARQL batch and
+200–400 ms per batch that is ~301 requests, about two minutes: there is
+deliberately no slicing, batch budget or turnover cycle, because at that cost a
+partial re-check would only buy staleness back.
+
+It also runs with `useJournal: false`, so `data/in-force.json` is neither read
+nor written. The run is all-or-nothing — the cache is written once, at the end —
+so there is nothing to resume from, and journalling would only rewrite a
+30k-entry file every few batches. The builders keep the journal; an interrupted
+multi-hour harvest genuinely needs it.
+
+Both this and `fetch-in-force.js` query Cellar **unaggregated**, collapsing
+fan-out client-side in `reduceBindings`. The earlier
+`SELECT ... (SAMPLE(?inForceValue) AS ?inForce) (MIN(?endValue) AS ?endOfValidity)
+... GROUP BY ?celex` mis-assigned values across groups at batch scale: in a real
+100-CELEX batch, 32006R0988 (end-of-validity 2020-12-31) and 32006R1066 (the
+9999-12-31 sentinel) both came back as 2020-12-31, while the same batch
+unaggregated — and 32006R1066 queried alone — returned the sentinel correctly.
+The wrong value is stable for a given batch and moves when the batch composition
+moves, so it cannot be retried away; it silently writes one act's expiry date
+onto another. Do not reintroduce a server-side `GROUP BY` here.
+
+Two properties matter to the pipeline it runs in:
+
+- **It rewrites the cache only if a status actually moved.** Confirming 30k
+  unchanged statuses leaves the file byte-identical, so `refresh-data.yml`'s
+  change digest still reports "unchanged" and no `data-vN` release — and no
+  Docker tag PR — is cut on a quiet month.
+- **It refuses to write a degraded result.** If more than `--max-null-ratio`
+  (default 5%) of the re-checked records lose a previously known status, Cellar
+  is answering but degraded, and publishing would erode the status coverage
+  `backend-docker.yml` asserts (>80%, currently 87%). The run fails instead.
+
+Flags: `--all` re-checks out-of-force acts too, for the rare case (annulment,
+corrigendum) where one is restored; `--limit N` caps the run for a smoke test;
+`--no-gz` skips the `.gz` sidecar when the caller gzips the JSON itself, as the
+workflow does.
+
 If whole acts are missing rather than a field — a transient Cellar failure during
 the sweep, or an act Cellar had not indexed yet when it ran — add them by CELEX
 instead of re-sweeping the year around them:
