@@ -23,6 +23,17 @@
 // --worker), pooled `CONCURRENCY` at a time; each writes a partial JSON that the
 // driver merges. `fetch` is hard-blocked in the worker so a corpus miss fails
 // loudly instead of silently hitting the network.
+//
+// --rederive mode (issue #180): the shipped cache can carry `title`/`excerpt`
+// derived by an older PARSER_VERSION with no version stamp at all. `--rederive`
+// re-parses every existing record that has a corpus file, regardless of year,
+// and lets the freshly derived title/excerpt win — every other field (eurovoc
+// topics, in-force status, date, and the alias/normalized fields
+// `enrichSearchRecord` derives from title) is preserved exactly. An act with no
+// corpus file, or whose parse fails, keeps its existing record untouched, and
+// the output record count can never regress. See `mergeRederivedRecords` /
+// `computeRederiveParserStamp` below, which are the pure, unit-testable core of
+// this mode — the driver just wires them to the worker-batch machinery above.
 
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -35,8 +46,15 @@ const { readCorpusDates, normalizeCelexKey } = require("./law-corpus-dates.js");
 const { listCorpusFiles: listCorpusEntries } = require("./corpus-files.js");
 const { enrichRecordsWithEurovoc } = require("./eurovoc-enrich.js");
 const { enrichRecordsWithInForce } = require("./in-force-enrich.js");
+const { getCurrentParserVersion, mergeParserStamp } = require("./parser-stamp.js");
 
-const CORPUS_DIR = path.join(__dirname, "data");
+// Overridable so tests can point the whole build at a throwaway fixture corpus
+// instead of the real (huge) checked-out corpus under search/data. Everything
+// below (FMX/HTML roots, cache path, backup path) is derived from this, so one
+// env var redirects the entire build.
+const CORPUS_DIR = process.env.CORPUS_BUILD_CORPUS_DIR
+  ? path.resolve(process.env.CORPUS_BUILD_CORPUS_DIR)
+  : path.join(__dirname, "data");
 const FMX_ROOT = path.join(CORPUS_DIR, "laws");
 const HTML_ROOT = path.join(CORPUS_DIR, "laws-html");
 const CACHE_PATH = path.join(CORPUS_DIR, "search-cache.json");
@@ -46,6 +64,13 @@ const BACKUP_PATH = path.join(CORPUS_DIR, "search-cache.json.bak");
 // survive and are reused on the next run. Resume is keyed by CELEX coverage, not
 // batch index, so it stays correct even if batch boundaries shift. Removed only
 // after a fully successful build; override for tests/isolation.
+//
+// --rederive uses a *separate*, parser-version-keyed work dir (see driver()
+// below): a work dir seeded by parser v21 must never be treated as coverage for
+// a v22 rederive run, since its parsed title/excerpt would be stale by
+// definition. Keying by version means an old rederive work dir is simply
+// ignored (and safe to leave on disk, or delete by hand) once the parser moves
+// on; the default (non-rederive) mode is unaffected and keeps this exact path.
 const WORK_DIR = process.env.CORPUS_BUILD_WORKDIR || path.join(os.tmpdir(), "corpus-build-work");
 
 // Everything strictly older than this comes from the corpus; this year and
@@ -181,6 +206,134 @@ function buildPrimaryEli(celex) {
 }
 
 // ---------------------------------------------------------------------------
+// --rederive: pure merge/stamp core (no fs, no workers — easy to unit test).
+// ---------------------------------------------------------------------------
+
+// Folds freshly re-parsed worker output (`rawRecords`, the same shape
+// `runWorker` writes for the normal mode) onto the existing cache. For each raw
+// record whose CELEX is in the existing cache:
+//   - a failed parse (rec.enrichError set) leaves the existing record untouched
+//     and counts as `failed`;
+//   - a successful parse overwrites ONLY `title` (when non-empty — an empty
+//     fresh title is not allowed to erase a good existing one) and `excerpt`
+//     (always, even to "", since a genuinely empty excerpt is itself a fresh
+//     result) on a shallow copy of the existing record, then re-runs
+//     `enrichSearchRecord` so the derived fields (normalizedTitle, aliases,
+//     eliKind, isPrimaryAct, ...) stay consistent with the new title. Every
+//     other field — eurovoc topics, in-force status, date, eli, etc. — comes
+//     through the `{ ...existing }` spread untouched.
+// A raw record whose CELEX isn't in the existing cache is ignored: rederive
+// never adds new acts, only refreshes ones already present.
+//
+// `corpusCoveredKeys` is the set of existing CELEX keys that have *any* corpus
+// file (FMX or HTML) — used only to report how many existing records had no
+// corpus file to rederive from at all (they're preserved untouched too, same
+// as a failed parse, just for a different reason).
+function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys, enrichSearchRecord }) {
+  const existingByCelex = new Map(existingRecords.map((rec) => [normCelex(rec.celex), rec]));
+
+  const rederived = [];
+  let rederivedCount = 0;
+  let failedCount = 0;
+  let excerptChangedCount = 0;
+
+  for (const raw of rawRecords) {
+    const key = normCelex(raw.celex);
+    const existing = existingByCelex.get(key);
+    if (!existing) continue; // not part of the existing cache; out of scope
+
+    if (raw.enrichError) {
+      failedCount += 1;
+      continue; // existing record is preserved untouched via the merge below
+    }
+
+    const next = { ...existing };
+    if (raw.title) next.title = raw.title;
+    next.excerpt = typeof raw.excerpt === "string" ? raw.excerpt : "";
+    if (next.excerpt !== (existing.excerpt || "")) excerptChangedCount += 1;
+    rederived.push(enrichSearchRecord(next));
+    rederivedCount += 1;
+  }
+
+  // Rederived records win for their CELEX; every other existing record (no
+  // corpus file, or a failed parse) is pushed through unchanged. Order matters
+  // for `push`'s existing-wins-by-key dedup: rederived first, then existing.
+  const merged = [];
+  const mergedSeen = new Set();
+  const push = (rec) => {
+    const key = normCelex(rec.celex);
+    if (!key || mergedSeen.has(key)) return;
+    mergedSeen.add(key);
+    merged.push(rec);
+  };
+  for (const rec of rederived) push(rec);
+  for (const rec of existingRecords) push(rec);
+
+  // Never drop records: rederive only refreshes fields on existing CELEX keys,
+  // it never removes one. Compare against the number of *distinct, keyable*
+  // existing records rather than the raw array length — a duplicate CELEX or a
+  // record with no CELEX at all is collapsed by `push` in the default mode too,
+  // and aborting a multi-hour pass at the write step over one malformed legacy
+  // row would be a worse outcome than reporting it.
+  const expected = new Set();
+  let unkeyable = 0;
+  for (const rec of existingRecords) {
+    const key = normCelex(rec.celex);
+    if (key) expected.add(key);
+    else unkeyable += 1;
+  }
+  if (merged.length < expected.size) {
+    throw new Error(
+      `[corpus-build] rederive record count regressed: ${expected.size} -> ${merged.length}`
+    );
+  }
+
+  // A record with no corpus file was not re-derived. Whether that matters for
+  // the stamp depends on whether it carries parser output at all: a record
+  // harvested from SPARQL alone has a title and no excerpt, so there is no
+  // stale parse in it to misrepresent. One that *does* carry an excerpt was
+  // parsed by some earlier version and is now unreachable offline — that is
+  // what keeps the payload from honestly claiming a single current version.
+  let noCorpusFileCount = 0;
+  let staleUncoveredCount = 0;
+  for (const [key, rec] of existingByCelex) {
+    if (corpusCoveredKeys.has(key)) continue;
+    noCorpusFileCount += 1;
+    if (rec.excerpt) staleUncoveredCount += 1;
+  }
+
+  return {
+    merged,
+    stats: {
+      rederived: rederivedCount,
+      failed: failedCount,
+      noCorpusFile: noCorpusFileCount,
+      staleUncovered: staleUncoveredCount,
+      excerptChanged: excerptChangedCount,
+      unkeyable,
+    },
+  };
+}
+
+// A bare current-version stamp claims every *parser-derived* field in the
+// payload came from that version, so it is only honest when this run left no
+// stale parse behind: no failed parse, and no record still carrying an excerpt
+// from an earlier version that no corpus file could refresh. Records with no
+// corpus file and no excerpt are not a gap — they never held parser output in
+// the first place, and the cache holds tens of thousands of them (SPARQL-only
+// acts outside the harvested corpus), so counting them would make a bare stamp
+// unreachable forever. Any real gap means some records still reflect whatever
+// parser produced the existing payload, so the stamp must MERGE with whatever
+// the payload already carried (mirrors the same bare-vs-merge decision in
+// search-build.js's reEnrichCurrentCache).
+function computeRederiveParserStamp({ existingParserVersion, currentParserVersion, stats }) {
+  const isCompleteRederive = stats.failed === 0 && (stats.staleUncovered || 0) === 0;
+  return isCompleteRederive
+    ? currentParserVersion
+    : mergeParserStamp(existingParserVersion, currentParserVersion);
+}
+
+// ---------------------------------------------------------------------------
 // Driver.
 // ---------------------------------------------------------------------------
 
@@ -239,7 +392,7 @@ async function runPool(jobs, concurrency) {
   return failed;
 }
 
-async function driver({ noEurovoc = false, noInForce = false } = {}) {
+async function driver({ noEurovoc = false, noInForce = false, rederive = false } = {}) {
   const t0 = Date.now();
   const { enrichSearchRecord } = require("./search-ranking.js");
 
@@ -249,54 +402,73 @@ async function driver({ noEurovoc = false, noInForce = false } = {}) {
   const seen = new Set(existingRecords.map((r) => normCelex(r.celex)).filter(Boolean));
   console.log(`[corpus-build] Existing cache: ${existingRecords.length} records`);
 
+  // --rederive gets its own, parser-version-keyed work dir (see the WORK_DIR
+  // comment above): a work dir seeded by a different parser version must never
+  // be read as coverage, since its parsed title/excerpt would be stale by
+  // definition. Default mode is unaffected and keeps the plain WORK_DIR path.
+  const currentParserVersion = rederive ? await getCurrentParserVersion() : null;
+  const workDir = rederive ? `${WORK_DIR}-rederive-v${currentParserVersion}` : WORK_DIR;
+
   // Resume: reuse partials from a previous (possibly interrupted) run. Keyed by
   // CELEX coverage so it's correct regardless of how batches are chunked.
-  fs.mkdirSync(WORK_DIR, { recursive: true });
-  const alreadyParsed = loadParsedCelexes(WORK_DIR);
+  fs.mkdirSync(workDir, { recursive: true });
+  const alreadyParsed = loadParsedCelexes(workDir);
   if (alreadyParsed.size) {
-    console.log(`[corpus-build] Resume: ${alreadyParsed.size} records already parsed in ${WORK_DIR}`);
+    console.log(`[corpus-build] Resume: ${alreadyParsed.size} records already parsed in ${workDir}`);
   }
 
   // FMX first (preferred), then HTML only for celexes not covered by FMX.
-  const fmxAll = listCorpusFiles(FMX_ROOT, ".xml.gz", REUSE_FROM_YEAR);
+  //   default mode: only pre-REUSE_FROM_YEAR acts NOT already in the cache.
+  //   --rederive:   every year, and ONLY celexes ALREADY in the cache — it
+  //                 refreshes existing records, it never adds new ones (see
+  //                 mergeRederivedRecords, which silently ignores any raw
+  //                 record whose CELEX isn't in the existing cache).
+  const yearFloor = rederive ? undefined : REUSE_FROM_YEAR;
+  const fmxAll = listCorpusFiles(FMX_ROOT, ".xml.gz", yearFloor);
   const fmxJobs = [];
   const fmxSeen = new Set();
   for (const item of fmxAll) {
     const key = normCelex(item.celex);
-    if (seen.has(key) || fmxSeen.has(key) || alreadyParsed.has(key)) continue;
+    if (rederive ? !seen.has(key) : seen.has(key)) continue;
+    if (fmxSeen.has(key) || alreadyParsed.has(key)) continue;
     fmxSeen.add(key);
     fmxJobs.push(item);
   }
 
-  const htmlAll = listCorpusFiles(HTML_ROOT, ".html.gz", REUSE_FROM_YEAR);
+  const htmlAll = listCorpusFiles(HTML_ROOT, ".html.gz", yearFloor);
   const htmlJobs = [];
   const htmlSeen = new Set();
   for (const item of htmlAll) {
     const key = normCelex(item.celex);
-    if (seen.has(key) || fmxSeen.has(key) || htmlSeen.has(key) || alreadyParsed.has(key)) continue;
+    if (rederive ? !seen.has(key) : seen.has(key)) continue;
+    if (fmxSeen.has(key) || htmlSeen.has(key) || alreadyParsed.has(key)) continue;
     htmlSeen.add(key);
     htmlJobs.push(item);
   }
 
-  console.log(`[corpus-build] Pre-${REUSE_FROM_YEAR} still to build: FMX=${fmxJobs.length} HTML=${htmlJobs.length}`);
+  console.log(
+    rederive
+      ? `[corpus-build] Rederive: FMX=${fmxJobs.length} HTML=${htmlJobs.length} corpus files to reparse (no year floor)`
+      : `[corpus-build] Pre-${REUSE_FROM_YEAR} still to build: FMX=${fmxJobs.length} HTML=${htmlJobs.length}`
+  );
 
-  // This run's partials go into the shared WORK_DIR under a unique run id so they
+  // This run's partials go into the shared work dir under a unique run id so they
   // never collide with partials carried over from an earlier interrupted run.
   const runId = Date.now().toString(36);
   const jobs = [];
 
   const fmxBatches = chunk(fmxJobs, FMX_BATCH);
   fmxBatches.forEach((batch, idx) => {
-    const batchPath = path.join(WORK_DIR, `fmx-batch-${runId}-${idx}.json`);
-    const outPath = path.join(WORK_DIR, `fmx-out-${runId}-${idx}.json`);
+    const batchPath = path.join(workDir, `fmx-batch-${runId}-${idx}.json`);
+    const outPath = path.join(workDir, `fmx-out-${runId}-${idx}.json`);
     fs.writeFileSync(batchPath, JSON.stringify(batch));
     jobs.push({ label: `fmx#${idx}`, run: () => spawnWorker("fmx", batchPath, outPath) });
   });
 
   const htmlBatches = chunk(htmlJobs, HTML_BATCH);
   htmlBatches.forEach((batch, idx) => {
-    const batchPath = path.join(WORK_DIR, `html-batch-${runId}-${idx}.json`);
-    const outPath = path.join(WORK_DIR, `html-out-${runId}-${idx}.json`);
+    const batchPath = path.join(workDir, `html-batch-${runId}-${idx}.json`);
+    const outPath = path.join(workDir, `html-out-${runId}-${idx}.json`);
     fs.writeFileSync(batchPath, JSON.stringify(batch));
     jobs.push({ label: `html#${idx}`, run: () => spawnWorker("html", batchPath, outPath) });
   });
@@ -304,23 +476,70 @@ async function driver({ noEurovoc = false, noInForce = false } = {}) {
   console.log(`[corpus-build] Spawning ${jobs.length} worker batches, concurrency=${CONCURRENCY}`);
   const failed = await runPool(jobs, CONCURRENCY);
 
-  // Precise dates harvested from SPARQL (work_date_document), persisted by
-  // search-build.js at harvest time. Overlay them onto the corpus records (the
-  // offline worker has no date). A CELEX missing from the manifest keeps its
-  // null date until the next harvest populates it.
-  const corpusDates = readCorpusDates(CORPUS_DIR);
-  let preciseDates = 0;
-
   // Collect ALL partials in the work dir (this run + any carried over from an
-  // interrupted run), enrich to the canonical record shape. Dedup by CELEX
-  // happens in the merge below, so overlap between partials is harmless.
-  const newRecords = [];
-  for (const f of fs.readdirSync(WORK_DIR)) {
+  // interrupted run). Dedup by CELEX happens in the merges below, so overlap
+  // between partials is harmless.
+  const rawRecords = [];
+  for (const f of fs.readdirSync(workDir)) {
     if (!/-out-.*\.json$/.test(f)) continue;
     let raw;
-    try { raw = JSON.parse(fs.readFileSync(path.join(WORK_DIR, f), "utf8")); }
+    try { raw = JSON.parse(fs.readFileSync(path.join(workDir, f), "utf8")); }
     catch { continue; } // skip a corrupt/half-written partial
-    for (const rec of raw) {
+    rawRecords.push(...raw);
+  }
+
+  let merged;
+  let payload;
+
+  if (rederive) {
+    // Any existing CELEX with a corpus file (FMX or HTML, any year) is
+    // "covered" — used only to report how many existing records had no corpus
+    // file to rederive from at all (see mergeRederivedRecords).
+    const corpusCoveredKeys = new Set();
+    for (const item of fmxAll) corpusCoveredKeys.add(normCelex(item.celex));
+    for (const item of htmlAll) corpusCoveredKeys.add(normCelex(item.celex));
+
+    const result = mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys, enrichSearchRecord });
+    merged = result.merged;
+    // Same ordering as buildSearchCache: newest first, records without a date
+    // (corpus acts missing from the manifest) last.
+    merged.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+    const parserVersion = computeRederiveParserStamp({
+      existingParserVersion: existing.parserVersion,
+      currentParserVersion,
+      stats: result.stats,
+    });
+
+    const years = merged.map((r) => Number(r.celexYear)).filter((y) => Number.isFinite(y));
+    // Field order matters: parserVersion must precede records so
+    // assert-parser-freshness.js's streaming header scan finds it without
+    // reading the (huge) records array first.
+    payload = {
+      generatedAt: new Date().toISOString(),
+      fromYear: years.length ? Math.max(...years) : existing.fromYear,
+      toYear: years.length ? Math.min(...years) : existing.toYear,
+      parserVersion,
+      count: merged.length,
+      records: merged,
+    };
+
+    console.log("[corpus-build] Rederive report:");
+    console.log(`  re-derived:                 ${result.stats.rederived}`);
+    console.log(`  unchanged (no corpus file): ${result.stats.noCorpusFile}`);
+    console.log(`    of those, with an excerpt: ${result.stats.staleUncovered}`);
+    console.log(`  failed:                     ${result.stats.failed}`);
+    console.log(`  excerpt changed:            ${result.stats.excerptChanged}`);
+    console.log(`  parserVersion stamp:        ${JSON.stringify(parserVersion)}`);
+  } else {
+    // Precise dates harvested from SPARQL (work_date_document), persisted by
+    // search-build.js at harvest time. Overlay them onto the corpus records (the
+    // offline worker has no date). A CELEX missing from the manifest keeps its
+    // null date until the next harvest populates it.
+    const corpusDates = readCorpusDates(CORPUS_DIR);
+    let preciseDates = 0;
+    const newRecords = [];
+    for (const rec of rawRecords) {
       const enriched = enrichSearchRecord(rec);
       const precise = corpusDates[normalizeCelexKey(enriched.celex)];
       if (precise) {
@@ -329,48 +548,53 @@ async function driver({ noEurovoc = false, noInForce = false } = {}) {
       }
       newRecords.push(enriched);
     }
+    console.log(`[corpus-build] Parsed ${newRecords.length} corpus records (${preciseDates} with precise SPARQL dates, ${failed.length} batches failed this run)`);
+
+    // Merge: existing (as-is) + new, dedup by CELEX (existing wins), primary only.
+    merged = [];
+    const mergedSeen = new Set();
+    const push = (rec) => {
+      const key = normCelex(rec.celex);
+      if (!key || mergedSeen.has(key)) return;
+      mergedSeen.add(key);
+      merged.push(rec);
+    };
+    for (const rec of existingRecords) push(rec);
+    for (const rec of newRecords) {
+      if (!rec.isPrimaryAct) continue;
+      push(rec);
+    }
+
+    // Same ordering as buildSearchCache: newest first, records without a date
+    // (corpus acts missing from the manifest) last.
+    merged.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+    const years = merged.map((r) => Number(r.celexYear)).filter((y) => Number.isFinite(y));
+    payload = {
+      generatedAt: new Date().toISOString(),
+      fromYear: years.length ? Math.max(...years) : existing.fromYear,
+      toYear: years.length ? Math.min(...years) : existing.toYear,
+      count: merged.length,
+      records: merged,
+    };
   }
-  console.log(`[corpus-build] Parsed ${newRecords.length} corpus records (${preciseDates} with precise SPARQL dates, ${failed.length} batches failed this run)`);
 
-  // Merge: existing (as-is) + new, dedup by CELEX (existing wins), primary only.
-  const merged = [];
-  const mergedSeen = new Set();
-  const push = (rec) => {
-    const key = normCelex(rec.celex);
-    if (!key || mergedSeen.has(key)) return;
-    mergedSeen.add(key);
-    merged.push(rec);
-  };
-  for (const rec of existingRecords) push(rec);
-  for (const rec of newRecords) {
-    if (!rec.isPrimaryAct) continue;
-    push(rec);
-  }
-
-  // Same ordering as buildSearchCache: newest first, records without a date
-  // (corpus acts missing from the manifest) last.
-  merged.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-
-  const years = merged.map((r) => Number(r.celexYear)).filter((y) => Number.isFinite(y));
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    fromYear: years.length ? Math.max(...years) : existing.fromYear,
-    toYear: years.length ? Math.min(...years) : existing.toYear,
-    count: merged.length,
-    records: merged,
-  };
-
-  // EuroVoc topics and in-force status are SPARQL metadata, so — like the dates
-  // overlaid above — they can't be reconstructed from disk. These are the only
-  // network calls in an otherwise offline build, and they run *here in the
-  // driver*: the workers keep their hard `fetch` block, so a corpus miss still
-  // fails loudly instead of silently scraping. Skip them with --no-eurovoc /
-  // --no-in-force for a genuinely offline run.
+  // EuroVoc topics and in-force status are SPARQL metadata that can't be
+  // reconstructed from disk. --rederive is specifically a parser-fields-only
+  // pass (title/excerpt), and mergeRederivedRecords already preserves these
+  // fields exactly from the existing record, so refreshing them here would
+  // both add an unwanted network dependency to an otherwise-offline rederive
+  // and risk drifting them from whatever a separate harvest already set. In
+  // the default mode this is unchanged: the only network calls in an
+  // otherwise offline build, run *here in the driver* (the workers keep their
+  // hard `fetch` block), opt-out via --no-eurovoc / --no-in-force.
   //
   // It runs as part of the build rather than as a follow-up pass because a
   // CELEX-keyed sidecar bolted on afterwards strands every record it never saw,
   // silently (see eurovoc-enrich.js). Best-effort: topics never fail a build.
-  if (noEurovoc) {
+  if (rederive) {
+    console.log("[corpus-build] EuroVoc/in-force enrichment skipped (--rederive preserves them as-is)");
+  } else if (noEurovoc) {
     console.log("[corpus-build] EuroVoc enrichment skipped (--no-eurovoc)");
   } else {
     try {
@@ -383,16 +607,18 @@ async function driver({ noEurovoc = false, noInForce = false } = {}) {
     }
   }
 
-  if (noInForce) {
-    console.log("[corpus-build] In-force enrichment skipped (--no-in-force)");
-  } else {
-    try {
-      const stats = await enrichRecordsWithInForce(payload.records, {
-        log: (message) => console.log(`[corpus-build] [in-force] ${message}`),
-      });
-      console.log(`[corpus-build] In-force: ${stats.withStatus} records with status, ${stats.inForce} in force (${stats.fromJournal} from journal, ${stats.fetched} fetched)`);
-    } catch (error) {
-      console.log(`[corpus-build] In-force enrichment failed, cache ships without status: ${error.message}`);
+  if (!rederive) {
+    if (noInForce) {
+      console.log("[corpus-build] In-force enrichment skipped (--no-in-force)");
+    } else {
+      try {
+        const stats = await enrichRecordsWithInForce(payload.records, {
+          log: (message) => console.log(`[corpus-build] [in-force] ${message}`),
+        });
+        console.log(`[corpus-build] In-force: ${stats.withStatus} records with status, ${stats.inForce} in force (${stats.fromJournal} from journal, ${stats.fetched} fetched)`);
+      } catch (error) {
+        console.log(`[corpus-build] In-force enrichment failed, cache ships without status: ${error.message}`);
+      }
     }
   }
 
@@ -408,9 +634,9 @@ async function driver({ noEurovoc = false, noInForce = false } = {}) {
   // Keep the work dir if anything failed this run, so a re-run resumes and
   // retries only the still-missing celexes; clear it only on a clean build.
   if (failed.length === 0) {
-    await fsp.rm(WORK_DIR, { recursive: true, force: true });
+    await fsp.rm(workDir, { recursive: true, force: true });
   } else {
-    console.log(`[corpus-build] Kept ${WORK_DIR} for resume (${failed.length} batches failed)`);
+    console.log(`[corpus-build] Kept ${workDir} for resume (${failed.length} batches failed)`);
   }
 
   const withExcerpt = merged.filter((r) => r.excerpt && r.excerpt.length > 0).length;
@@ -433,6 +659,7 @@ async function main() {
   await driver({
     noEurovoc: args.includes("--no-eurovoc"),
     noInForce: args.includes("--no-in-force"),
+    rederive: args.includes("--rederive"),
   });
 }
 
@@ -443,4 +670,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildPrimaryEli, inferType, listCorpusFiles };
+module.exports = {
+  buildPrimaryEli,
+  inferType,
+  listCorpusFiles,
+  driver,
+  mergeRederivedRecords,
+  computeRederiveParserStamp,
+};

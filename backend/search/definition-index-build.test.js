@@ -119,6 +119,7 @@ test("resumable build reads its checkpoint and only runs pending laws", async ()
   };
   await fs.writeFile(checkpointPath, JSON.stringify({
     indexVersion: INDEX_VERSION,
+    parserVersion: 22,
     processedCelex: ["32020R0001"],
     shards: [completedShard],
   }));
@@ -127,6 +128,7 @@ test("resumable build reads its checkpoint and only runs pending laws", async ()
     files: ["/laws/2020/32020R0001.xml.gz", "/laws/2021/32021R0002.xml.gz"],
     outputPath,
     batchSize: 1,
+    currentParserVersion: 22,
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     workerRunner: async (files) => {
       seen.push(...files);
@@ -142,6 +144,80 @@ test("resumable build reads its checkpoint and only runs pending laws", async ()
   assert.equal(artifact.stats.uniqueTerms, 1);
   await assert.rejects(fs.access(checkpointPath));
   assert.deepEqual(JSON.parse(await fs.readFile(outputPath, "utf8")), artifact);
+});
+
+test("a checkpoint from a different parser version is discarded, not resumed", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "definition-index-"));
+  const outputPath = path.join(directory, "definitions.json");
+  const checkpointPath = `${outputPath}.checkpoint`;
+  const completedShard = {
+    parserVersion: 18,
+    stats: { corpusFiles: 1, parsedLaws: 1, definitions: 0 },
+    failures: [], occurrences: [],
+  };
+  await fs.writeFile(checkpointPath, JSON.stringify({
+    indexVersion: INDEX_VERSION,
+    parserVersion: 18,
+    processedCelex: ["32020R0001"],
+    shards: [completedShard],
+  }));
+  const seen = [];
+  const logs = [];
+  await buildDefinitionIndex({
+    files: ["/laws/2020/32020R0001.xml.gz", "/laws/2021/32021R0002.xml.gz"],
+    outputPath,
+    batchSize: 1,
+    currentParserVersion: 22,
+    progress: true,
+    log: (message) => logs.push(message),
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    workerRunner: async (files) => {
+      seen.push(...files);
+      return {
+        parserVersion: 22,
+        stats: { corpusFiles: 1, parsedLaws: 1, definitions: 0 }, failures: [], occurrences: [],
+      };
+    },
+  });
+  // Both files were reprocessed from scratch: the stale-parser checkpoint was discarded.
+  assert.deepEqual(seen.sort(), ["/laws/2020/32020R0001.xml.gz", "/laws/2021/32021R0002.xml.gz"]);
+  assert.ok(logs.some((message) => message.includes("Discarding checkpoint from parser v18")));
+});
+
+test("a legacy checkpoint with no recorded parser version is discarded, not resumed", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "definition-index-"));
+  const outputPath = path.join(directory, "definitions.json");
+  const checkpointPath = `${outputPath}.checkpoint`;
+  const completedShard = {
+    parserVersion: 17,
+    stats: { corpusFiles: 1, parsedLaws: 1, definitions: 0 },
+    failures: [], occurrences: [],
+  };
+  await fs.writeFile(checkpointPath, JSON.stringify({
+    indexVersion: INDEX_VERSION,
+    processedCelex: ["32020R0001"],
+    shards: [completedShard],
+  }));
+  const seen = [];
+  const logs = [];
+  await buildDefinitionIndex({
+    files: ["/laws/2020/32020R0001.xml.gz", "/laws/2021/32021R0002.xml.gz"],
+    outputPath,
+    batchSize: 1,
+    currentParserVersion: 22,
+    progress: true,
+    log: (message) => logs.push(message),
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    workerRunner: async (files) => {
+      seen.push(...files);
+      return {
+        parserVersion: 22,
+        stats: { corpusFiles: 1, parsedLaws: 1, definitions: 0 }, failures: [], occurrences: [],
+      };
+    },
+  });
+  assert.deepEqual(seen.sort(), ["/laws/2020/32020R0001.xml.gz", "/laws/2021/32021R0002.xml.gz"]);
+  assert.ok(logs.some((message) => message.includes("Discarding checkpoint with no recorded parser version")));
 });
 
 test("CLI accepts corpus build controls", () => {

@@ -13,6 +13,7 @@ const {
   stripCompleteUppercaseAnnexes,
   writeArtifactAtomic,
 } = require("./citation-graph-build");
+const { getCurrentParserVersion, normalizeParserStamp } = require("./parser-stamp");
 
 const gunzip = promisify(zlib.gunzip);
 const INDEX_VERSION = 2;
@@ -339,10 +340,28 @@ function runDefinitionWorker(files, options = {}) {
   });
 }
 
-async function readCheckpoint(checkpointPath, fsApi = fs) {
+async function readCheckpoint(checkpointPath, fsApi = fs, currentParserVersion = null, log = null) {
   try {
     const checkpoint = JSON.parse(await fsApi.readFile(checkpointPath, "utf8"));
-    return checkpoint.indexVersion === INDEX_VERSION ? checkpoint : null;
+    if (checkpoint.indexVersion !== INDEX_VERSION) return null;
+    // A checkpoint's shards were produced by whatever parser was current when it was
+    // written. Resuming from a checkpoint stamped with an older (or absent, i.e.
+    // pre-this-change) parser version would silently merge stale shards into what is
+    // reported as a current-parser artifact. Only an exact match may resume.
+    const checkpointVersions = normalizeParserStamp(checkpoint.parserVersion);
+    const currentVersions = normalizeParserStamp(currentParserVersion);
+    const matches = checkpointVersions.length > 0 && currentVersions.length > 0
+      && checkpointVersions.length === currentVersions.length
+      && checkpointVersions.every((version, index) => version === currentVersions[index]);
+    if (!matches) {
+      if (log) {
+        log(checkpointVersions.length === 0
+          ? `[definitions] Discarding checkpoint with no recorded parser version (current parser is v${currentVersions.join(",")}); starting clean`
+          : `[definitions] Discarding checkpoint from parser v${checkpointVersions.join(",")} (current parser is v${currentVersions.join(",")}); starting clean`);
+      }
+      return null;
+    }
+    return checkpoint;
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -356,13 +375,20 @@ async function buildDefinitionIndex(options = {}) {
   const files = dedupeCorpusFiles(filterCorpusFiles(allFiles, options));
   const outputPath = options.outputPath === undefined ? DEFAULT_OUTPUT_PATH : options.outputPath;
   const checkpointPath = options.checkpointPath || (outputPath ? `${outputPath}.checkpoint` : null);
-  const checkpoint = checkpointPath ? await readCheckpoint(checkpointPath, fsApi) : null;
+  const log = options.progress ? (options.log || console.log) : null;
+  const currentParserVersion = options.currentParserVersion !== undefined
+    ? options.currentParserVersion : await getCurrentParserVersion();
+  // Discarding a checkpoint silently throws away hours of work; say so even
+  // when the caller did not ask for progress output.
+  const checkpointNotice = options.log || console.warn;
+  const checkpoint = checkpointPath
+    ? await readCheckpoint(checkpointPath, fsApi, currentParserVersion, checkpointNotice)
+    : null;
   const processed = new Set(checkpoint?.processedCelex || []);
   const shards = [...(checkpoint?.shards || [])];
   const pending = files.filter((file) => !processed.has(celexForCorpusFile(file)));
   const batchSize = options.batchSize || DEFAULT_BATCH_SIZE;
   const workerRunner = options.workerRunner || runDefinitionWorker;
-  const log = options.progress ? (options.log || console.log) : null;
   let resolverIndex = options.resolverIndex || null;
   if (!resolverIndex) {
     try {
@@ -377,7 +403,7 @@ async function buildDefinitionIndex(options = {}) {
       const shard = await workerRunner(batch, { ...options, resolverIndex });
       shards.push(shard);
       for (const file of batch) processed.add(celexForCorpusFile(file));
-      if (checkpointPath) await writeArtifactAtomic(checkpointPath, { indexVersion: INDEX_VERSION, processedCelex: [...processed], shards }, fsApi);
+      if (checkpointPath) await writeArtifactAtomic(checkpointPath, { indexVersion: INDEX_VERSION, parserVersion: currentParserVersion, processedCelex: [...processed], shards }, fsApi);
       if (log) log(`[definitions] ${processed.size}/${files.length} laws completed; definitions=${shards.reduce((sum, item) => sum + Number(item.stats?.definitions || 0), 0)}`);
     } catch (error) {
       if (batch.length > 1) {
@@ -389,7 +415,7 @@ async function buildDefinitionIndex(options = {}) {
       const celex = celexForCorpusFile(batch[0]);
       shards.push({ parserVersion: null, stats: { corpusFiles: 1, failures: 1 }, failures: [{ celex, type: "worker_failure", error: String(error?.message || error) }], occurrences: [] });
       processed.add(celex);
-      if (checkpointPath) await writeArtifactAtomic(checkpointPath, { indexVersion: INDEX_VERSION, processedCelex: [...processed], shards }, fsApi);
+      if (checkpointPath) await writeArtifactAtomic(checkpointPath, { indexVersion: INDEX_VERSION, parserVersion: currentParserVersion, processedCelex: [...processed], shards }, fsApi);
     }
   }
 
