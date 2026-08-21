@@ -99,6 +99,52 @@ describe("ConsolidationNotice", () => {
     expect(toggle).toBeTruthy();
   });
 
+  it("says it is still checking while the corrected-version query is in flight", async () => {
+    // The correction toggle hangs off /consolidated, which is seconds slower
+    // than the amendment history. Without a placeholder the notice paints
+    // complete and a button appears out of nowhere later.
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32016R0679R(01)", date: "2018-05-23", type: "corrigendum" }],
+    });
+    let resolveVersions;
+    fetchConsolidatedVersions.mockReturnValue(
+      new Promise((resolve) => { resolveVersions = resolve; })
+    );
+
+    await render({ celex: "32016R0679", onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("Checking EUR-Lex for the current version");
+    expect(container.textContent).not.toContain("corrections applied");
+
+    await act(async () => {
+      resolveVersions({ versions: [{ celex: "02016R0679-20160504", date: "2016-05-04" }] });
+    });
+
+    expect(container.textContent).not.toContain("Checking EUR-Lex for the current version");
+    expect(container.textContent).toContain("corrections applied");
+  });
+
+  it("says it is still checking while the consolidated-version query is in flight", async () => {
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32020R0001", date: "2020-01-01", type: "amendment" }],
+    });
+    let resolveVersions;
+    fetchConsolidatedVersions.mockReturnValue(
+      new Promise((resolve) => { resolveVersions = resolve; })
+    );
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("Checking EUR-Lex for the current version");
+
+    await act(async () => {
+      resolveVersions({ versions: [{ celex: "02013R0575-20200101", date: "2020-01-01" }] });
+    });
+
+    expect(container.textContent).not.toContain("Checking EUR-Lex for the current version");
+    expect(container.textContent).toContain("Read this law as amended");
+  });
+
   it("stays quiet above every article for a law that was never amended", async () => {
     // The positive line belongs on the overview. Repeated above each article
     // it is noise, and the inline variant exists to warn.

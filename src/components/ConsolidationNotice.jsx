@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink, History } from "lucide-react";
+import { ArrowLeft, ExternalLink, History, Loader2 } from "lucide-react";
 
 import { useI18n } from "../i18n/useI18n.js";
 import { useConsolidationStatus } from "../hooks/useConsolidationStatus.js";
@@ -53,6 +53,25 @@ export function ConsolidationNotice({
   const status = useConsolidationStatus(
     isConsolidatedFallback || isReadingRequestedVersion ? null : celex
   );
+
+  // The two lookups behind this notice do not land together: the amendment
+  // history answers in a fraction of a second, the consolidated-version
+  // SPARQL query takes seconds on a cold cache. Everything the reader can
+  // *act* on hangs off the slower one, so without this the notice paints
+  // complete and inert, and a button materialises out of nowhere a few
+  // seconds later — the reader has no way to tell that anything is still in
+  // progress, or that waiting is worth it. Occupying the action slot with an
+  // honest "still checking" is the whole point: it is not decoration, it is
+  // the difference between "nothing more is coming" and "not yet".
+  const pendingAction = status.consolidatedStatusPending ? (
+    <span
+      role="status"
+      className="inline-flex items-center gap-1.5 text-inherit opacity-70"
+    >
+      <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+      {t("consolidation.checkingVersion")}
+    </span>
+  ) : null;
 
   // Reverse state: the reader asked for the consolidated text and got it (or
   // didn't — `versionUnavailable` is the backend's honest "I tried and
@@ -139,7 +158,9 @@ export function ConsolidationNotice({
     // consolidated text but not to the act as published, so the text on
     // screen really is uncorrected. Offer the same toggle, labelled for what
     // it actually does here — nothing was amended, the text was corrected.
-    const correctionAction = (corrigenda > 0 && status.consolidated && onToggleVersion) ? (
+    const canOfferCorrection = corrigenda > 0 && onToggleVersion;
+    const correctionAction = (canOfferCorrection && pendingAction) ? pendingAction
+      : (canOfferCorrection && status.consolidated) ? (
       <button
         type="button"
         onClick={() => onToggleVersion("current")}
@@ -249,6 +270,7 @@ export function ConsolidationNotice({
         <span className="text-amber-700/80 dark:text-amber-300/70">{summary}</span>
         {toggleButton}
         {link}
+        {pendingAction}
         {!link && noVersionMessage ? <span className="text-amber-700/80 dark:text-amber-300/70">{noVersionMessage}</span> : null}
       </p>
     );
@@ -264,10 +286,11 @@ export function ConsolidationNotice({
         {summary}
         {!link && noVersionMessage ? <> {noVersionMessage}</> : null}
       </p>
-      {toggleButton || link ? (
+      {toggleButton || link || pendingAction ? (
         <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
           {toggleButton}
           {link}
+          {pendingAction}
         </p>
       ) : null}
     </div>
