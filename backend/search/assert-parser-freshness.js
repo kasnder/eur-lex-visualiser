@@ -69,6 +69,7 @@ async function checkJsonAsset(filePath, asset, current) {
   try {
     const stats = await streamStats(filePath, {
       captureTopLevel: ["parserVersion"],
+      stopWhenCaptured: true,
     });
     return staleFinding(asset, stats.topLevel?.parserVersion, current);
   } catch (error) {

@@ -21,10 +21,11 @@ const zlib = require("zlib");
 //   topLevel   -> members of the top-level object/array (case-law cache)
 const MODES = new Set(["records", "topLevel"]);
 
-function createScanner(mode, { captureTopLevel = [] } = {}) {
+function createScanner(mode, { captureTopLevel = [], stopWhenCaptured = false } = {}) {
   if (!MODES.has(mode)) throw new Error(`Unknown count mode: ${mode}`);
 
   const captureNames = new Set(captureTopLevel);
+  let stopped = false;
   let depth = 0; // nesting depth, 0 = outside the root container
   let inString = false;
   let escaped = false;
@@ -38,6 +39,13 @@ function createScanner(mode, { captureTopLevel = [] } = {}) {
   let pendingCaptureKey = null;
   let capture = null;
   const topLevel = {};
+
+  // Once every requested field has been captured, the rest of the document
+  // (the huge arrays these caches are mostly made of) has nothing left to
+  // tell a stopWhenCaptured caller — it only wants the stamp.
+  function allCaptured() {
+    return captureNames.size > 0 && [...captureNames].every((name) => name in topLevel);
+  }
 
   function finishCapture() {
     if (!capture) return;
@@ -95,11 +103,22 @@ function createScanner(mode, { captureTopLevel = [] } = {}) {
         else if (char === '"') {
           inString = false;
           if (depth === 1) {
+            // A depth-1 string could be a key or a value; whether it's a key
+            // is only known once we see what follows. Stash it as a
+            // candidate and let the guard below discard it unless a colon
+            // (optionally after whitespace) comes right after.
             pendingTopLevelKey = keyBuffer;
             if (mode === "records" && !counting) pendingRecordsKey = keyBuffer === "records";
           }
         } else if (depth === 1) keyBuffer += char;
         continue;
+      }
+
+      // A pending candidate key is only real if a colon follows (whitespace
+      // in between is fine); anything else means the string we just closed
+      // was a value, not a key, so drop the candidate.
+      if (depth === 1 && pendingTopLevelKey !== null && char !== ":" && !/\s/.test(char)) {
+        pendingTopLevelKey = null;
       }
 
       switch (char) {
@@ -139,6 +158,7 @@ function createScanner(mode, { captureTopLevel = [] } = {}) {
         case "\t":
         case "\n":
         case "\r":
+          break; // whitespace neither confirms nor discards a candidate key
         case ":":
           if (depth === 1 && pendingTopLevelKey) {
             if (captureNames.has(pendingTopLevelKey)) pendingCaptureKey = pendingTopLevelKey;
@@ -149,41 +169,68 @@ function createScanner(mode, { captureTopLevel = [] } = {}) {
           if (depth === countingDepth) sawMember = true;
           break;
       }
+
+      if (stopWhenCaptured && allCaptured()) {
+        stopped = true;
+        break; // the rest of the chunk (and document) is unneeded
+      }
     }
   }
 
   return {
     write,
-    result: () => ({ count, complete: depth === 0, topLevel }),
+    result: () => ({ count, complete: stopped || depth === 0, topLevel, stopped }),
   };
 }
 
-function streamStats(inputPath, { mode = "records", gunzip = null, captureTopLevel = [] } = {}) {
+function streamStats(inputPath, { mode = "records", gunzip = null, captureTopLevel = [], stopWhenCaptured = false } = {}) {
   const isGzip = gunzip === null ? inputPath.toLowerCase().endsWith(".gz") : gunzip;
 
   return new Promise((resolve, reject) => {
     // Inside the executor so a bad mode rejects like any other input error.
-    const scanner = createScanner(mode, { captureTopLevel });
+    const scanner = createScanner(mode, { captureTopLevel, stopWhenCaptured });
     const hash = crypto.createHash("sha256");
     const source = inputPath === "-" ? process.stdin : fs.createReadStream(inputPath);
     // The digest covers the decompressed bytes so a gzipped baseline and a
     // plain candidate stay directly comparable.
     const plain = isGzip ? source.pipe(zlib.createGunzip()) : source;
+    let settled = false;
+
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      plain.removeAllListeners();
+      source.removeAllListeners();
+      plain.destroy();
+      if (source !== plain) source.destroy();
+      fn(value);
+    }
+
     plain.on("data", (chunk) => {
       hash.update(chunk);
       scanner.write(chunk);
+      if (stopWhenCaptured) {
+        const { stopped, topLevel } = scanner.result();
+        if (stopped) {
+          // stopWhenCaptured stops mid-document on purpose: count/sha256
+          // would only reflect the bytes read so far, so they are
+          // meaningless and deliberately omitted rather than returned as if
+          // they were real.
+          settle(resolve, { topLevel });
+        }
+      }
     });
-    plain.on("error", reject);
-    source.on("error", reject);
+    plain.on("error", (error) => settle(reject, error));
+    source.on("error", (error) => settle(reject, error));
     plain.on("end", () => {
       const { count, complete, topLevel } = scanner.result();
       if (!complete) {
-        reject(new Error(`${inputPath} is not a complete JSON document`));
+        settle(reject, new Error(`${inputPath} is not a complete JSON document`));
         return;
       }
       const result = { count, sha256: hash.digest("hex") };
       if (captureTopLevel.length) result.topLevel = topLevel;
-      resolve(result);
+      settle(resolve, result);
     });
   });
 }

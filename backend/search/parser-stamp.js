@@ -45,9 +45,9 @@ function mergeParserStamp(existing, current) {
 
 function isFresh(stamp, current) {
   const currentVersions = normalizeParserStamp(current);
-  if (normalizeParserStamp(stamp).length === 0 || currentVersions.length === 0) return false;
   const stampedVersions = normalizeParserStamp(stamp);
-  return currentVersions.every((version) => stampedVersions.includes(version));
+  if (stampedVersions.length === 0 || currentVersions.length === 0) return false;
+  return stampedVersions.every((version) => currentVersions.includes(version));
 }
 
 async function getCurrentParserVersion() {

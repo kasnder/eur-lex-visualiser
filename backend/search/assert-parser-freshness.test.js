@@ -26,7 +26,7 @@ function writeMetadataDatabase(filePath, table, rows) {
 test("fresh JSON and fulltext assets pass, while absent definitions are allowed", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "parser-freshness-fresh-"));
   const searchCachePath = writeJson(dir, "search.json", { parserVersion: 22, records: [] });
-  const citationGraphPath = writeJson(dir, "citation.json", { parserVersion: [21, 22], edges: [] });
+  const citationGraphPath = writeJson(dir, "citation.json", { parserVersion: [22], edges: [] });
   const fulltextSqlitePath = writeMetadataDatabase(path.join(dir, "fulltext.sqlite"), "fulltext_metadata", {
     parser_version: "22",
   });
@@ -39,6 +39,20 @@ test("fresh JSON and fulltext assets pass, while absent definitions are allowed"
   });
   assert.equal(result.fresh, true);
   assert.deepEqual(result.findings, []);
+});
+
+test("reports a mixed-version stamp as drift, not freshness", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "parser-freshness-mixed-"));
+  const searchCachePath = writeJson(dir, "search.json", { parserVersion: "21,22", records: [] });
+  const citationGraphPath = writeJson(dir, "citation.json", { parserVersion: [21, 22], edges: [] });
+  const result = await assertParserFreshness({
+    searchCachePath,
+    citationGraphPath,
+    definitionsPath: path.join(dir, "definitions.json"),
+    currentVersion: 22,
+  });
+  assert.equal(result.fresh, false);
+  assert.deepEqual(result.findings.map((finding) => finding.asset), ["search-cache", "citation-graph"]);
 });
 
 test("reports every drifted or unstamped asset", async () => {

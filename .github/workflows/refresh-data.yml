@@ -81,8 +81,6 @@ jobs:
             --pattern search-cache.json.gz \
             --pattern case-law-cache.json.gz \
             --pattern citation-graph.json.gz \
-            --pattern data.sqlite.gz \
-            --pattern data.sqlite.manifest.json \
             --dir refresh-inputs
           # Definitions are optional at runtime, but a present asset must be
           # downloaded successfully and carried forward unchanged.
@@ -97,7 +95,7 @@ jobs:
           else
             echo "No definitions.json.gz in current data release; continuing without the optional asset"
           fi
-          for asset in search-cache.json.gz case-law-cache.json.gz citation-graph.json.gz data.sqlite.gz data.sqlite.manifest.json; do
+          for asset in search-cache.json.gz case-law-cache.json.gz citation-graph.json.gz; do
             test -s "refresh-inputs/$asset" || { echo "Missing current data asset: $asset" >&2; exit 1; }
           done
 
@@ -128,11 +126,8 @@ jobs:
             > backend/search/data/search-cache.json
           gzip -cd refresh-inputs/case-law-cache.json.gz \
             > backend/law-cache/case-law-cache-v5.json
-          gzip -cd refresh-inputs/data.sqlite.gz \
-            > refresh-output/current-data.sqlite
           test -s backend/search/data/search-cache.json
           test -s backend/law-cache/case-law-cache-v5.json
-          test -s refresh-output/current-data.sqlite
 
       - name: Assert parser freshness of restored data inputs
         env:
@@ -143,8 +138,7 @@ jobs:
           node backend/search/assert-parser-freshness.js \
             --search-cache backend/search/data/search-cache.json \
             --citation-graph refresh-inputs/citation-graph.json.gz \
-            --definitions refresh-inputs/definitions.json.gz \
-            --data-sqlite refresh-output/current-data.sqlite
+            --definitions refresh-inputs/definitions.json.gz
 
       - name: Add corpus acts missing from the cache
         working-directory: backend

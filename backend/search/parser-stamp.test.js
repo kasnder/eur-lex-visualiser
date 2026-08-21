@@ -21,10 +21,11 @@ test("mergeParserStamp unions versions while retaining a multi-version container
   assert.equal(mergeParserStamp(undefined, 22), null);
 });
 
-test("isFresh requires a non-empty stamp containing the current parser version", () => {
+test("isFresh requires a non-empty stamp where every version equals the current parser version", () => {
   assert.equal(isFresh(22, 22), true);
-  assert.equal(isFresh([21, 22], 22), true);
-  assert.equal(isFresh("21,22", 22), true);
+  assert.equal(isFresh([22], 22), true);
+  assert.equal(isFresh([21, 22], 22), false);
+  assert.equal(isFresh("21,22", 22), false);
   assert.equal(isFresh(21, 22), false);
   assert.equal(isFresh("null", 22), false);
   assert.equal(isFresh(undefined, 22), false);
