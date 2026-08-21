@@ -8,6 +8,7 @@ const zlib = require("node:zlib");
 
 const { backfillCache, readCelexIds } = require("./backfill-cache");
 const { buildCelexQuery, harvestActsByCelex } = require("./search-build");
+const { getCurrentParserVersion } = require("./parser-stamp");
 
 function tempCache(payload, { gzip = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backfill-"));
@@ -114,7 +115,7 @@ test("backfillCache merges the current parser version with an existing stamp", a
     enrichImpl: async () => {}
   });
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(cachePath, "utf8")).parserVersion, [21, 22]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(cachePath, "utf8")).parserVersion, [21, await getCurrentParserVersion()]);
 });
 
 // isPrimaryAct is derived from the ELI, so a record without a primary one would
