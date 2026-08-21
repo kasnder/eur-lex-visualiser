@@ -473,6 +473,11 @@
     "readingAsAmendedWithDate": "You are reading this law as amended, as of {date}.",
     "readingAsAmended": "You are reading this law as amended.",
     "backToAsAdopted": "Back to the text as adopted",
-    "versionUnavailable": "The current consolidated text could not be loaded right now — showing the text as adopted instead."
+    "versionUnavailable": "The current consolidated text could not be loaded right now — showing the text as adopted instead.",
+    "upToDate": "You are reading the current text.",
+    "neverAmended": "This law has not been amended since it was adopted.",
+    "correctedOnce": "One corrigendum has been published since. Corrigenda are applied to the consolidated text, not to the act as published here.",
+    "corrected": "{count} corrigenda have been published since. Corrigenda are applied to the consolidated text, not to the act as published here.",
+    "toggleReadCorrected": "Read this law with the corrections applied"
   }
 }

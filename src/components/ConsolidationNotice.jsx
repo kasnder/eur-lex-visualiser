@@ -121,7 +121,52 @@ export function ConsolidationNotice({
   }
 
   if (isConsolidatedFallback) return null;
-  if (!status.isOutdated) return null;
+
+  // Never amended. Silence would be ambiguous — the reader cannot tell "we
+  // checked and it is current" from "we did not check" — so the overview says
+  // so positively. Only the overview: a reassurance repeated above every
+  // article is noise, and the inline variant exists to warn, not to chat.
+  if (!status.isOutdated) {
+    if (variant === "inline") return null;
+    // Say nothing until the history has actually answered. Claiming a law has
+    // never been amended on the strength of a failed or in-flight fetch is
+    // the same error as claiming no consolidated version exists.
+    if (status.amendmentStatusPending || status.amendmentStatusUnknown) return null;
+
+    const corrigenda = status.corrigendumCount;
+    // A corrigendum-only act (the GDPR) is the one case where "not amended"
+    // is true and still misleading: EUR-Lex applies corrigenda to the
+    // consolidated text but not to the act as published, so the text on
+    // screen really is uncorrected. Offer the same toggle, labelled for what
+    // it actually does here — nothing was amended, the text was corrected.
+    const correctionAction = (corrigenda > 0 && status.consolidated && onToggleVersion) ? (
+      <button
+        type="button"
+        onClick={() => onToggleVersion("current")}
+        className="inline-flex items-center gap-1 font-semibold text-slate-900 underline underline-offset-2 hover:no-underline dark:text-slate-100"
+      >
+        {t("consolidation.toggleReadCorrected")}
+      </button>
+    ) : null;
+
+    return (
+      <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+        <div className="flex items-center gap-2 font-medium text-slate-900 dark:text-slate-100">
+          <History size={15} aria-hidden="true" />
+          {t("consolidation.upToDate")}
+        </div>
+        <p className="mt-1 leading-6">
+          {t("consolidation.neverAmended")}
+          {corrigenda > 0 ? (
+            <> {corrigenda === 1
+              ? t("consolidation.correctedOnce")
+              : t("consolidation.corrected", { count: corrigenda })}</>
+          ) : null}
+        </p>
+        {correctionAction ? <p className="mt-2 text-xs">{correctionAction}</p> : null}
+      </div>
+    );
+  }
 
   const amendedOn = formatMetaDate(status.latestAmendmentDate, locale);
   const consolidatedOn = formatMetaDate(status.consolidated?.date, locale);
@@ -167,7 +212,11 @@ export function ConsolidationNotice({
       onClick={() => onToggleVersion("current")}
       className="inline-flex items-center gap-1 font-semibold text-amber-950 underline underline-offset-2 hover:no-underline dark:text-amber-100"
     >
-      <History size={13} aria-hidden="true" />
+      {/* No icon: every branch of this notice already leads with a History
+          glyph, and repeating it on the action reads as a second, unrelated
+          marker rather than as emphasis. `backAction` carries an ArrowLeft
+          for the same reason — a distinct icon earns its place, a repeated
+          one does not. */}
       {t("consolidation.toggleReadAmended")}
     </button>
   ) : null;

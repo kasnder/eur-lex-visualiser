@@ -75,7 +75,11 @@ describe("ConsolidationNotice", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
-  it("renders nothing for a law that only ever had corrigenda", async () => {
+  it("does not warn a law that only ever had corrigenda, but says the text is uncorrected", async () => {
+    // The GDPR. Not amended, so no warning — but nine of its articles read
+    // differently in the consolidated text, Article 37(1)(c)'s "and"/"or"
+    // among them, so silence would leave the reader on uncorrected text with
+    // no way to know.
     fetchAmendments.mockResolvedValue({
       amendments: [{ celex: "32016R0679R(01)", date: "2018-05-23", type: "corrigendum" }],
     });
@@ -83,7 +87,48 @@ describe("ConsolidationNotice", () => {
       versions: [{ celex: "02016R0679-20160504", date: "2016-05-04" }],
     });
 
-    await render({ celex: "32016R0679" });
+    await render({ celex: "32016R0679", onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("You are reading the current text");
+    expect(container.textContent).toContain("has not been amended");
+    expect(container.textContent).toContain("One corrigendum has been published");
+    expect(container.textContent).not.toContain("You are reading this law as adopted");
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent.includes("corrections applied")
+    );
+    expect(toggle).toBeTruthy();
+  });
+
+  it("stays quiet above every article for a law that was never amended", async () => {
+    // The positive line belongs on the overview. Repeated above each article
+    // it is noise, and the inline variant exists to warn.
+    fetchAmendments.mockResolvedValue({ amendments: [] });
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render({ variant: "inline" });
+
+    expect(container.textContent).toBe("");
+  });
+
+  it("says a never-amended law is current, with no correction offer", async () => {
+    fetchAmendments.mockResolvedValue({ amendments: [] });
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("You are reading the current text");
+    expect(container.textContent).toContain("has not been amended");
+    expect(container.textContent).not.toContain("corrigend");
+    expect(container.querySelector("button")).toBe(null);
+  });
+
+  it("claims nothing about a never-amended law when the history could not be fetched", async () => {
+    // `[]` on failure keeps the warning off, but it must not be read as
+    // evidence for the opposite claim.
+    fetchAmendments.mockRejectedValue(new Error("cellar down"));
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render();
 
     expect(container.textContent).toBe("");
   });
