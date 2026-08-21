@@ -196,8 +196,48 @@ jobs:
           gzip -cd rederive-inputs/search-cache.json.gz > backend/search/data/search-cache.json
           test -s backend/search/data/search-cache.json
 
+      # This is the one non-resumable job of the four. build-cache-from-corpus.js
+      # does resume -- it reuses any `*-out-*.json` partial in its work dir,
+      # keyed by CELEX -- but that work dir defaults under os.tmpdir(), which
+      # dies with the runner, so in CI a 240-minute timeout discarded every
+      # completed batch and the next dispatch started cold. Pinning the work dir
+      # into the workspace and carrying it across dispatches as an artifact
+      # gives this job the same resume the definitions and fulltext jobs have.
+      #
+      # The driver appends `-rederive-v<parser>` to CORPUS_BUILD_WORKDIR, so the
+      # directory name binds the partials to the parser that wrote them; the
+      # artifact name binds them to the corpus release as well. Only the parsed
+      # output is carried -- the `*-batch-*.json` inputs are regenerated each
+      # dispatch under a fresh run id.
+      - name: Resume from an interrupted dispatch's parsed batches
+        shell: bash
+        run: |
+          set -euo pipefail
+          workdir="rederive-work/corpus-build-rederive-v${{ needs.resolve.outputs.parser_version }}"
+          mkdir -p "$workdir"
+          artifact=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-search-cache-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+          if [ -z "$artifact" ]; then
+            echo "No search-cache checkpoint from a previous dispatch; starting a cold pass." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          artifact_id=$(jq -er '.id' <<< "$artifact")
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip
+          rm -rf checkpoint && mkdir checkpoint
+          unzip -q checkpoint.zip -d checkpoint
+          partials=$(find checkpoint -name '*-out-*.json' -type f | wc -l | tr -d ' ')
+          if [ "$partials" -eq 0 ]; then
+            echo "Search-cache checkpoint artifact holds no parsed batches; starting a cold pass." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          find checkpoint -name '*-out-*.json' -type f -exec mv -t "$workdir" {} +
+          echo "Resumed $partials parsed batch partials from a previous dispatch." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Rederive search-cache.json from the corpus
         working-directory: backend
+        env:
+          CORPUS_BUILD_WORKDIR: ${{ github.workspace }}/rederive-work/corpus-build
         shell: bash
         run: |
           set -euo pipefail
@@ -205,6 +245,19 @@ jobs:
             node --max-old-space-size=8192 search/build-cache-from-corpus.js --rederive \
             | tee ../rederive-output/search-cache-build.log
           test -s search/data/search-cache.json
+
+      # Runs on timeout/cancellation too, so the batches parsed so far survive
+      # for the next dispatch. A successful pass removes its own work dir, so
+      # this uploads nothing then.
+      - name: Upload interrupted search-cache checkpoint
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-search-cache-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
+          path: rederive-work/corpus-build-rederive-v${{ needs.resolve.outputs.parser_version }}/*-out-*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
 
       - name: Validate and package the candidate search cache
         working-directory: backend
