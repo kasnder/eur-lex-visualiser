@@ -29,10 +29,39 @@ function createParsedLawResolver({
   fetchConsolidatedVersions,
   runSparqlQuery,
 }) {
-  const parsedCache = new Map(); // `${celex}:${lang}:${skipFmxProbe}` -> parsed law
+  const parsedCache = new Map(); // `${celex}:${lang}:${skipFmxProbe}:${version}` -> parsed law
 
-  async function resolveParsedLaw(celex, lang, { skipFmxProbe = false } = {}) {
-    const cacheKey = `${celex}:${lang}:${skipFmxProbe ? 1 : 0}`;
+  /**
+   * Fetches and parses the current consolidated ("as amended") EUR-Lex
+   * version of `celex`, or returns `null` when there isn't one worth
+   * serving: no consolidation mechanism wired up, no versions at all, only
+   * future-dated ones (`selectConsolidatedVersions` already excludes those —
+   * presenting an upcoming text as the one in force would be worse than
+   * saying nothing), or a consolidated Formex that itself parses to nothing
+   * (Cellar's `manifestation_type` occasionally points at a version whose
+   * article bodies are empty). Throws on network/SPARQL/Cellar failure —
+   * every call site is responsible for swallowing that back to its own
+   * fallback; this helper only decides *whether* a usable consolidated
+   * document exists, not what to do when it can't tell.
+   */
+  async function loadConsolidatedLaw(celex, lang) {
+    if (typeof fetchConsolidatedVersions !== 'function' || typeof runSparqlQuery !== 'function') {
+      return null;
+    }
+    const { versions } = await fetchConsolidatedVersions(celex, runSparqlQuery);
+    const { current } = selectConsolidatedVersions(versions);
+    if (!current) return null;
+
+    const { servePath } = await prepareLawPayload(current.celex, lang);
+    const xmlText = fs.readFileSync(servePath, 'utf8');
+    const consolidatedParsed = await parseFmxXml(xmlText);
+    if (!hasParsedLawContent(consolidatedParsed)) return null;
+
+    return { parsed: consolidatedParsed, version: { celex: current.celex, date: current.date } };
+  }
+
+  async function resolveParsedLaw(celex, lang, { skipFmxProbe = false, version = null } = {}) {
+    const cacheKey = `${celex}:${lang}:${skipFmxProbe ? 1 : 0}:${version || 'none'}`;
     const cached = cacheGet(parsedCache, cacheKey);
     if (cached) return cached;
 
@@ -60,6 +89,29 @@ function createParsedLawResolver({
       parsed = await parseFmxXml(xmlText);
     }
 
+    // Keep a handle on the as-adopted parse before anything below may
+    // replace `parsed` — the requested-version path composes against this,
+    // and it must be the act's own recitals, never a consolidated one's
+    // (EUR-Lex consolidations carry zero recitals to begin with).
+    const asAdoptedParsed = parsed;
+
+    // Both the empty-parse fallback and the requested-version path may need
+    // the same consolidated document; fetch it at most once per call and
+    // remember the outcome (including "nothing usable") for the second
+    // consumer.
+    let consolidatedAttempted = false;
+    let consolidatedResult = null;
+    async function getConsolidated() {
+      if (consolidatedAttempted) return consolidatedResult;
+      consolidatedAttempted = true;
+      try {
+        consolidatedResult = await loadConsolidatedLaw(celex, lang);
+      } catch {
+        consolidatedResult = null;
+      }
+      return consolidatedResult;
+    }
+
     let consolidatedVersion = null;
     if (!hasParsedLawContent(parsed)) {
       // The act as adopted parsed to nothing renderable (e.g. REACH, whose
@@ -72,24 +124,73 @@ function createParsedLawResolver({
       // consolidated versions at all) is swallowed back to the empty
       // as-adopted result — a fallback must never turn a rendering law into
       // an error.
-      try {
-        if (typeof fetchConsolidatedVersions === 'function' && typeof runSparqlQuery === 'function') {
-          const { versions } = await fetchConsolidatedVersions(celex, runSparqlQuery);
-          const { current } = selectConsolidatedVersions(versions);
-          if (current) {
-            const { servePath } = await prepareLawPayload(current.celex, lang);
-            const xmlText = fs.readFileSync(servePath, 'utf8');
-            const consolidatedParsed = await parseFmxXml(xmlText);
-            if (hasParsedLawContent(consolidatedParsed)) {
-              parsed = consolidatedParsed;
-              source = 'fmx-consolidated';
-              consolidatedVersion = { celex: current.celex, date: current.date };
-            }
-          }
-        }
-      } catch {
-        // Swallow: keep the empty as-adopted result rather than error out.
+      const loaded = await getConsolidated();
+      if (loaded) {
+        parsed = loaded.parsed;
+        source = 'fmx-consolidated';
+        consolidatedVersion = loaded.version;
       }
+    }
+
+    // The requested-version path: unlike the fallback above (which replaces
+    // an unrenderable as-adopted act wholesale), this always COMPOSES —
+    // consolidated articles/annexes/definitions/crossReferences paired with
+    // the as-adopted recitals, because consolidation never amends recitals,
+    // and EUR-Lex's consolidated Formex omits the <PREAMBLE.RECITALS> block
+    // entirely. Losing recitals would silently break the recital grid, the
+    // TF-IDF recital→article map, AI recital titles and the related-recitals
+    // rail — the whole reason this feature composes instead of just linking
+    // out to the consolidated text (see #144/#170).
+    let versionUnavailable = false;
+    if (version === 'current') {
+      let loaded = null;
+      try {
+        loaded = await getConsolidated();
+      } catch {
+        loaded = null;
+      }
+
+      if (loaded) {
+        const asAdoptedArticleNumbers = new Set(
+          (asAdoptedParsed?.articles || []).map((article) => article.article_number),
+        );
+        const composedArticles = (loaded.parsed.articles || []).map((article) => (
+          asAdoptedArticleNumbers.has(article.article_number)
+            ? article
+            : { ...article, insertedInVersion: true }
+        ));
+        const composedParsed = {
+          ...loaded.parsed,
+          articles: composedArticles,
+          recitals: asAdoptedParsed?.recitals || [],
+        };
+
+        const result = {
+          celex,
+          lang,
+          name: CELEX_NAMES[celex] || null,
+          format: 'combined-v1',
+          ...composedParsed,
+          source: 'fmx-consolidated',
+          version: 'current',
+          versionCelex: loaded.version.celex,
+          versionDate: loaded.version.date,
+          recitalsSource: 'as-adopted',
+          consolidatedVersion: loaded.version,
+        };
+        result.hasContent = hasParsedLawContent(composedParsed);
+
+        cacheSet(parsedCache, cacheKey, result, PARSED_LAW_CACHE_MS, MAX_PARSED_CACHE_ENTRIES);
+        return result;
+      }
+
+      // No consolidated version at all, only future-dated ones, an
+      // unresolvable version (Cellar 406s roughly 1 in 15 listed versions),
+      // or a Cellar/SPARQL outage — a requested version must never turn a
+      // rendering law into an error. Fall through and serve the normal
+      // as-adopted payload, flagged so the frontend can say so honestly
+      // instead of a toggle that silently did nothing.
+      versionUnavailable = true;
     }
 
     const result = {
@@ -102,6 +203,7 @@ function createParsedLawResolver({
     };
     result.hasContent = hasParsedLawContent(parsed);
     if (consolidatedVersion) result.consolidatedVersion = consolidatedVersion;
+    if (versionUnavailable) result.versionUnavailable = true;
 
     cacheSet(parsedCache, cacheKey, result, PARSED_LAW_CACHE_MS, MAX_PARSED_CACHE_ENTRIES);
     return result;

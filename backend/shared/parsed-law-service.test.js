@@ -29,6 +29,50 @@ const EMPTY_FMX = `<?xml version="1.0" encoding="UTF-8"?>
   <BIB.INSTANCE><LG.DOC>EN</LG.DOC></BIB.INSTANCE>
 </ACT>`;
 
+// An as-adopted document with both recitals and one article (Article 1),
+// used for the requested-version compose tests: the consolidated fixture
+// below carries Article 1 (unchanged) plus a new Article 2 that has no
+// as-adopted counterpart, so tests can assert both the recital pairing and
+// `insertedInVersion`.
+const AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE = `<?xml version="1.0" encoding="UTF-8"?>
+<ACT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://formex.publications.europa.eu/schema/formex-05.59-20170418.xd">
+  <BIB.INSTANCE><LG.DOC>EN</LG.DOC></BIB.INSTANCE>
+  <PREAMBLE>
+    <GR.CONSID>
+      <CONSID><NP><NO.P>(1)</NO.P><TXT>As-adopted recital text.</TXT></NP></CONSID>
+    </GR.CONSID>
+  </PREAMBLE>
+  <ENACTING.TERMS>
+    <DIVISION>
+      <ARTICLE IDENTIFIER="001">
+        <TI.ART>Article 1</TI.ART>
+        <ALINEA><P>As-adopted body text.</P></ALINEA>
+      </ARTICLE>
+    </DIVISION>
+  </ENACTING.TERMS>
+</ACT>`;
+
+// The consolidated ("as amended") version of the act above: Article 1 is
+// unchanged, and Article 2 was inserted by a later amendment — EUR-Lex's
+// consolidated Formex carries no <PREAMBLE.RECITALS>/<GR.CONSID> block at
+// all, which is exactly what the compose is for.
+const CONSOLIDATED_FMX_WITH_TWO_ARTICLES = `<?xml version="1.0" encoding="UTF-8"?>
+<ACT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://formex.publications.europa.eu/schema/formex-05.59-20170418.xd">
+  <BIB.INSTANCE><LG.DOC>EN</LG.DOC></BIB.INSTANCE>
+  <ENACTING.TERMS>
+    <DIVISION>
+      <ARTICLE IDENTIFIER="001">
+        <TI.ART>Article 1</TI.ART>
+        <ALINEA><P>As-adopted body text.</P></ALINEA>
+      </ARTICLE>
+      <ARTICLE IDENTIFIER="002">
+        <TI.ART>Article 2</TI.ART>
+        <ALINEA><P>Inserted-by-amendment body text.</P></ALINEA>
+      </ARTICLE>
+    </DIVISION>
+  </ENACTING.TERMS>
+</ACT>`;
+
 function writeTempXml(content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parsed-law-service-test-'));
   const filePath = path.join(dir, 'law.xml');
@@ -235,4 +279,150 @@ test('consolidated fallback: does not run at all when content is already present
   assert.equal(result.source, 'fmx');
   assert.equal(result.hasContent, true);
   assert.equal(fallbackCalled, false);
+});
+
+test('requested version "current": composes consolidated articles with as-adopted recitals', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+  const consolidatedPath = writeTempXml(CONSOLIDATED_FMX_WITH_TWO_ARTICLES);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async (celex) => ({
+      servePath: celex === '32013R0575' ? asAdoptedPath : consolidatedPath,
+    }),
+    fetchConsolidatedVersions: async (celex) => {
+      assert.equal(celex, '32013R0575');
+      return { versions: [{ celex: '02013R0575-20260626', date: '2026-06-26' }] };
+    },
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  assert.equal(result.source, 'fmx-consolidated');
+  assert.equal(result.version, 'current');
+  assert.equal(result.versionCelex, '02013R0575-20260626');
+  assert.equal(result.versionDate, '2026-06-26');
+  assert.equal(result.recitalsSource, 'as-adopted');
+  assert.deepEqual(result.consolidatedVersion, { celex: '02013R0575-20260626', date: '2026-06-26' });
+  assert.equal(result.versionUnavailable, undefined);
+
+  // Articles come from the consolidated document (both Article 1 and 2)…
+  assert.equal(result.articles.length, 2);
+  // …while recitals come from the as-adopted document, not the consolidated
+  // one (which carries none at all).
+  assert.equal(result.recitals.length, 1);
+  assert.equal(result.recitals[0].recital_text, 'As-adopted recital text.');
+});
+
+test('requested version "current": insertedInVersion is set only on articles with no as-adopted counterpart', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+  const consolidatedPath = writeTempXml(CONSOLIDATED_FMX_WITH_TWO_ARTICLES);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async (celex) => ({
+      servePath: celex === '32013R0575' ? asAdoptedPath : consolidatedPath,
+    }),
+    fetchConsolidatedVersions: async () => ({ versions: [{ celex: '02013R0575-20260626', date: '2026-06-26' }] }),
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  const byNumber = Object.fromEntries(result.articles.map((a) => [a.article_number, a]));
+  assert.equal(byNumber['1'].insertedInVersion, undefined, 'Article 1 exists as-adopted, so it must not be flagged');
+  assert.equal(byNumber['2'].insertedInVersion, true, 'Article 2 has no as-adopted counterpart');
+});
+
+test('requested version "current": falls back with versionUnavailable when no consolidated version exists', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async () => ({ servePath: asAdoptedPath }),
+    fetchConsolidatedVersions: async () => ({ versions: [] }),
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  assert.equal(result.versionUnavailable, true);
+  assert.equal(result.source, 'fmx');
+  assert.equal(result.version, undefined);
+  // The as-adopted content is served intact, not an empty stub.
+  assert.equal(result.articles.length, 1);
+  assert.equal(result.recitals.length, 1);
+});
+
+test('requested version "current": falls back with versionUnavailable when every consolidated version is future-dated', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async () => ({ servePath: asAdoptedPath }),
+    fetchConsolidatedVersions: async () => ({ versions: [{ celex: '02013R0575-20990101', date: '2099-01-01' }] }),
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  assert.equal(result.versionUnavailable, true);
+  assert.equal(result.source, 'fmx');
+  assert.equal(result.articles.length, 1);
+});
+
+test('requested version "current": falls back with versionUnavailable when the consolidated fetch fails (Cellar/SPARQL outage or 406)', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async () => ({ servePath: asAdoptedPath }),
+    fetchConsolidatedVersions: async () => { throw new Error('Cellar returned 406'); },
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  assert.equal(result.versionUnavailable, true);
+  assert.equal(result.source, 'fmx');
+  assert.equal(result.articles.length, 1);
+  assert.equal(result.recitals.length, 1);
+});
+
+test('as-adopted and requested-version "current" results are cached under distinct keys', async () => {
+  const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
+  const consolidatedPath = writeTempXml(CONSOLIDATED_FMX_WITH_TWO_ARTICLES);
+  let prepareCalls = 0;
+  let fetchConsolidatedCalls = 0;
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async (celex) => {
+      prepareCalls += 1;
+      return { servePath: celex === '32013R0575' ? asAdoptedPath : consolidatedPath };
+    },
+    fetchConsolidatedVersions: async () => {
+      fetchConsolidatedCalls += 1;
+      return { versions: [{ celex: '02013R0575-20260626', date: '2026-06-26' }] };
+    },
+    runSparqlQuery: async () => ({}),
+  });
+
+  const asAdopted = await resolveParsedLaw('32013R0575', 'ENG', {});
+  assert.equal(asAdopted.source, 'fmx');
+  assert.equal(asAdopted.articles.length, 1);
+  assert.equal(fetchConsolidatedCalls, 0, 'the as-adopted parse has content, so no consolidated fetch is needed');
+
+  const current = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+  assert.equal(current.source, 'fmx-consolidated');
+  assert.equal(current.articles.length, 2);
+  assert.equal(fetchConsolidatedCalls, 1);
+  // Each resolveParsedLaw call is cached under its own key, so the requested
+  // version's own call re-probes the as-adopted FMX (to get the recitals to
+  // compose with) in addition to fetching the consolidated document — that
+  // is the second and third prepareLawPayload calls.
+  assert.equal(prepareCalls, 3);
+
+  // Both are now served from cache without any further fetch/parse work.
+  const asAdoptedAgain = await resolveParsedLaw('32013R0575', 'ENG', {});
+  const currentAgain = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+  assert.equal(asAdoptedAgain.articles.length, 1);
+  assert.equal(currentAgain.articles.length, 2);
+  assert.equal(prepareCalls, 3, 'cached calls must not re-fetch either version');
+  assert.equal(fetchConsolidatedCalls, 1);
 });

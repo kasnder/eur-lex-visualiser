@@ -459,6 +459,41 @@ test("GET /api/laws/:celex/parsed skips the FMX probe when requested", async () 
   assert.equal(prepareCalled, false);
 });
 
+test("GET /api/laws/:celex/parsed rejects an unsupported version value", async () => {
+  const { app } = registerTestRoutes();
+  const handler = app.routes.get("/api/laws/:celex/parsed");
+  const res = createResponseRecorder();
+
+  await handler({
+    params: { celex: "32013R0575" },
+    query: { lang: "ENG", version: "2024-01-01" },
+  }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.payload.error, "Unsupported version. Expected: current");
+});
+
+test("GET /api/laws/:celex/parsed accepts ?version=current and forwards it to resolveParsedLaw", async () => {
+  const calls = [];
+  const { app } = registerTestRoutes({
+    resolveParsedLaw: async (celex, lang, options) => {
+      calls.push({ celex, lang, options });
+      return { celex, lang, source: "fmx-consolidated", version: "current", format: "combined-v1" };
+    },
+  });
+  const handler = app.routes.get("/api/laws/:celex/parsed");
+  const res = createResponseRecorder();
+
+  await handler({
+    params: { celex: "32013R0575" },
+    query: { lang: "ENG", version: "current" },
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.version, "current");
+  assert.deepEqual(calls, [{ celex: "32013R0575", lang: "ENG", options: { skipFmxProbe: false, version: "current" } }]);
+});
+
 test("GET /api/laws/:celex/case-law uses a short cache ttl", async () => {
   const resolutionCache = new Map();
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "case-law-route-"));

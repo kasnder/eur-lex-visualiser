@@ -287,7 +287,8 @@
     "judgmentInterprets": "judgment interprets",
     "judgmentsInterpret": "judgments interpret",
     "sidebarLabel": "Case law",
-    "noMatchSuffix": "in the sidebar for the full list and an AI digest."
+    "noMatchSuffix": "in the sidebar for the full list and an AI digest.",
+    "insertedInVersion": "This article was inserted by a later amendment, so no case law is mapped to it — CJEU rulings are indexed against the text as adopted."
   },
   "caseLawDigest": {
     "generate": "Generate case-law digest",
@@ -331,7 +332,8 @@
       "article": "Article {n}",
       "recital": "Recital {n}",
       "annex": "Annex {n}"
-    }
+    },
+    "insertedInVersion": "This article was inserted by a later amendment, so nothing is known to cite it — the citation graph is built from the text as adopted."
   },
   "lawViewer": {
     "notAvailableTitle": "This law is not available here yet",
@@ -466,6 +468,11 @@
     "amendedAtLeast": "It has been amended at least {count} times since.",
     "readConsolidated": "Read the consolidated text as of {date} on EUR-Lex",
     "noConsolidatedVersion": "EUR-Lex has not published a consolidated version.",
-    "consolidatedVersionPending": "A consolidated version has been prepared but is not yet in force."
+    "consolidatedVersionPending": "A consolidated version has been prepared but is not yet in force.",
+    "toggleReadAmended": "Read this law as amended",
+    "readingAsAmendedWithDate": "You are reading this law as amended, as of {date}.",
+    "readingAsAmended": "You are reading this law as amended.",
+    "backToAsAdopted": "Back to the text as adopted",
+    "versionUnavailable": "The current consolidated text could not be loaded right now — showing the text as adopted instead."
   }
 }

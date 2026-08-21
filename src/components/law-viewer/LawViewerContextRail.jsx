@@ -123,6 +123,7 @@ export function LawViewerContextRail({
   isExternalReferencePending,
   onOpenLaw,
   definitionComparison,
+  insertedInVersion = false,
   t,
 }) {
   const [tab, setTab] = useState("recitals");
@@ -203,7 +204,7 @@ export function LawViewerContextRail({
         ) : null}
 
         {tab === "cases" ? (
-          <RelatedCaseLaw celex={celex} articleNumber={articleNumber} currentLang={currentLang} compact />
+          <RelatedCaseLaw celex={celex} articleNumber={articleNumber} currentLang={currentLang} insertedInVersion={insertedInVersion} compact />
         ) : null}
 
         {tab === "references" ? (
@@ -229,6 +230,7 @@ export function LawViewerContextRail({
             articleNumber={articleNumber}
             currentLang={currentLang}
             onOpenLaw={onOpenLaw}
+            insertedInVersion={insertedInVersion}
             compact
           />
         ) : null}
