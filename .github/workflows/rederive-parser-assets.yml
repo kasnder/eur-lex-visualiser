@@ -201,7 +201,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --max-old-space-size=8192 search/build-cache-from-corpus.js --rederive \
+          "${{ github.workspace }}/.github/scripts/memory-watch.sh" search-cache -- \
+            node --max-old-space-size=8192 search/build-cache-from-corpus.js --rederive \
             | tee ../rederive-output/search-cache-build.log
           test -s search/data/search-cache.json
 
@@ -315,7 +316,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --max-old-space-size=8192 search/citation-graph-build.js \
+          "${{ github.workspace }}/.github/scripts/memory-watch.sh" citation-graph -- \
+            node --max-old-space-size=8192 search/citation-graph-build.js \
             --corpusDir search/data/laws \
             --workerHeapMb 4096 \
             --out ../rederive-output/citation-graph.json \
@@ -452,7 +454,8 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          node --max-old-space-size=4096 search/definition-index-build.js \
+          "${{ github.workspace }}/.github/scripts/memory-watch.sh" definitions -- \
+            node --max-old-space-size=4096 search/definition-index-build.js \
             --corpusDir search/data/laws \
             --out ../rederive-output/definitions.json \
             | tee ../rederive-output/definitions-build.log
@@ -618,6 +621,7 @@ jobs:
           set -uo pipefail
           set +e
           SEARCH_CACHE_PATH="$PWD/search/data/search-cache.json.gz" \
+            "${{ github.workspace }}/.github/scripts/memory-watch.sh" fulltext -- \
             timeout --signal=INT 300m \
             node --max-old-space-size=3072 search/fulltext-index-build.js \
               --corpusDir search/data/fulltext-corpus \

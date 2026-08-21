@@ -15,6 +15,10 @@ jobs:
       # The release-tag grammar is shared by the three refresh workflows, which
       # only ever run on a schedule; this keeps it honest on every PR.
       - run: bash .github/scripts/release-tags.sh selftest
+      # The memory watch wraps the four corpus-wide rebuild steps; a regression
+      # in it (a swallowed exit status, a leaked sampler) would otherwise only
+      # surface part-way into a multi-hour rebuild.
+      - run: bash .github/scripts/memory-watch.sh selftest
       - uses: actions/setup-node@v5
         with: { node-version: '24' }
       - run: npm ci
