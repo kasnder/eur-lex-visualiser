@@ -327,6 +327,65 @@ test('get_law_part structure returns the table of contents', async () => {
   });
 });
 
+test('get_law_part passes version=current through and reports the version it served', async () => {
+  let seenOptions = null;
+  const deps = makeDeps({
+    resolveParsedLaw: async (celex, lang, options) => {
+      seenOptions = options;
+      return {
+        ...FIXTURE_LAW,
+        source: 'fmx-consolidated',
+        version: 'current',
+        versionCelex: '02016R0679-20160504',
+        versionDate: '2016-05-04',
+        recitalsSource: 'as-adopted',
+        articles: [
+          FIXTURE_LAW.articles[0],
+          { ...FIXTURE_LAW.articles[1], insertedInVersion: true },
+        ],
+      };
+    },
+  });
+
+  await withClient(deps, async (client) => {
+    const body = parseResult(await client.callTool({
+      name: 'get_law_part',
+      arguments: { celex: '32016R0679', part: 'structure', version: 'current' },
+    }));
+
+    assert.deepEqual(seenOptions, { version: 'current' });
+    assert.equal(body.version, 'current');
+    assert.equal(body.versionCelex, '02016R0679-20160504');
+    assert.equal(body.versionDate, '2016-05-04');
+    assert.equal(body.recitalsSource, 'as-adopted');
+    // The article added by a later amendment is flagged, so a caller knows
+    // not to expect case law or citations for it.
+    const flagged = body.chapters
+      .flatMap((chapter) => chapter.articles)
+      .filter((article) => article.insertedInVersion);
+    assert.equal(flagged.length, 1);
+  });
+});
+
+test('get_law_part omits the version fields entirely when no version is requested', async () => {
+  let seenOptions = null;
+  const deps = makeDeps({
+    resolveParsedLaw: async (celex, lang, options) => { seenOptions = options; return FIXTURE_LAW; },
+  });
+
+  await withClient(deps, async (client) => {
+    const body = parseResult(await client.callTool({
+      name: 'get_law_part',
+      arguments: { celex: '32016R0679', part: 'structure' },
+    }));
+
+    assert.deepEqual(seenOptions, {});
+    assert.ok(!('version' in body), 'as-adopted responses keep their previous shape');
+    assert.ok(!('versionCelex' in body));
+    assert.ok(!('recitalsSource' in body));
+  });
+});
+
 test('get_law_part article returns plain text and cross-references', async () => {
   await withClient(makeDeps(), async (client) => {
     const body = parseResult(await client.callTool({ name: 'get_law_part', arguments: { celex: '32016R0679', part: 'article', number: '17' } }));

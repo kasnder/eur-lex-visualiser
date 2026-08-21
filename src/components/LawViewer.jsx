@@ -64,6 +64,10 @@ export function LawViewer() {
   const sourceUrl = searchParams.get("sourceUrl");
   const definitionTerm = searchParams.get("definition") || "";
   const definitionSource = searchParams.get("definitionSource") || "";
+  // Only the literal "current" is a recognised version (#149's first slice;
+  // the backend 400s on anything else) — treat any other value as unset
+  // rather than forwarding garbage to the document hooks.
+  const requestedVersion = searchParams.get("version") === "current" ? "current" : null;
   const { allLaws, libraryVersion } = useLandingLibrary();
 
   const preferences = useLawViewerPreferences({
@@ -95,11 +99,13 @@ export function LawViewer() {
     celex: source.effectiveCelex,
     lang: preferences.formexLang,
     t,
+    version: requestedVersion,
   });
   const secondaryDocument = useSecondaryLawDocument({
     celex: source.effectiveCelex,
     secondaryLang: preferences.secondaryLang,
     t,
+    version: requestedVersion,
   });
   const selection = useLawSelection({
     data: primaryDocument.data,
@@ -124,6 +130,12 @@ export function LawViewer() {
     () => getSelectedEntry(primaryDocument.data, selection.selected),
     [primaryDocument.data, selection.selected]
   );
+  // Set by the backend (`?version=current`) on an article inserted by
+  // amendment with no as-adopted counterpart: nothing has ever been mapped to
+  // it, so the case-law/cited-by rails must say why they're empty instead of
+  // rendering as if the article were simply unremarkable.
+  const isSelectedArticleInsertedInVersion = selection.selected.kind === "article"
+    && !!primarySelectedEntry?.insertedInVersion;
   const processedHtml = useProcessedLawHtml({
     data: primaryDocument.data,
     selected: selection.selected,
@@ -185,6 +197,18 @@ export function LawViewer() {
     nextParams.delete("definition");
     nextParams.delete("definitionSource");
     setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Toggles `?version=current` on the URL, which is what makes a consolidated
+  // reading shareable/bookmarkable and lets it survive article navigation
+  // (state derived from the URL, not held in a component). Pushes a history
+  // entry (no `replace`) so the back button can undo the toggle, the same as
+  // navigating between articles does.
+  const setVersion = React.useCallback((nextVersion) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextVersion) nextParams.set("version", nextVersion);
+    else nextParams.delete("version");
+    setSearchParams(nextParams);
   }, [searchParams, setSearchParams]);
 
   const definitionComparison = definitionTerm ? {
@@ -393,6 +417,10 @@ export function LawViewer() {
                   onOpenCitedLaw={interactions.handleOpenLawByCelex}
                   isExternalReferencePending={interactions.isExternalReferencePending}
                   locale={locale}
+                  version={requestedVersion}
+                  versionUnavailable={derived.versionUnavailable}
+                  versionDate={derived.versionDate}
+                  onToggleVersion={setVersion}
                   t={t}
                 />
               ) : (
@@ -414,11 +442,16 @@ export function LawViewer() {
                     locale={locale}
                     variant="inline"
                     source={primaryDocument.data.source}
+                    version={requestedVersion}
+                    versionUnavailable={derived.versionUnavailable}
+                    versionDate={derived.versionDate}
+                    onToggleVersion={setVersion}
                   />
 
                   <ConsolidatedFallbackNotice
                     source={primaryDocument.data.source}
                     consolidatedVersion={derived.consolidatedVersion}
+                    version={requestedVersion}
                   />
 
                   {interactions.isResolvingExternalLaw ? (
@@ -499,6 +532,7 @@ export function LawViewer() {
                   celex={source.effectiveCelex}
                   articleNumber={selection.selected.id}
                   currentLang={displayedFormexLang}
+                  insertedInVersion={isSelectedArticleInsertedInVersion}
                 />
                 <CrossReferences
                   articleNumber={selection.selected.id}
@@ -514,6 +548,7 @@ export function LawViewer() {
                   articleNumber={selection.selected.id}
                   currentLang={displayedFormexLang}
                   onOpenLaw={interactions.handleOpenLawByCelex}
+                  insertedInVersion={isSelectedArticleInsertedInVersion}
                 />
               </div>
             ) : null}
@@ -585,6 +620,7 @@ export function LawViewer() {
                   isExternalReferencePending={interactions.isExternalReferencePending}
                   onOpenLaw={interactions.handleOpenLawByCelex}
                   definitionComparison={definitionComparison}
+                  insertedInVersion={isSelectedArticleInsertedInVersion}
                   t={t}
                 />
               </div>

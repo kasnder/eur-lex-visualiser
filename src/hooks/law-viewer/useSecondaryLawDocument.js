@@ -22,7 +22,7 @@ function applyRecitalTitles(data, titles) {
   return changed ? { ...data, recitals } : data;
 }
 
-export function useSecondaryLawDocument({ celex, secondaryLang, t }) {
+export function useSecondaryLawDocument({ celex, secondaryLang, t, version = null }) {
   const [data, setData] = useState(EMPTY_LAW_DATA);
   const [loading, setLoading] = useState(false);
   const [recitalTitlesLoading, setRecitalTitlesLoading] = useState(false);
@@ -46,20 +46,45 @@ export function useSecondaryLawDocument({ celex, secondaryLang, t }) {
     (async () => {
       try {
         let nextData = null;
-        const cached = await getCachedLawPayload(celex, secondaryLang);
-        if (cached) {
-          nextData = parseLawPayloadToCombined(cached);
+        if (version) {
+          // Same one-line pass-through as the primary document: side-by-side
+          // must show the same requested version in both columns, and the
+          // requested-version path has no raw-XML short-circuit to take (see
+          // useLawDocument.js).
+          nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, secondaryLang, { version }));
         } else {
-          try {
-            const xmlText = await fetchFormex(celex, secondaryLang);
-            nextData = parseLawPayloadToCombined(xmlText);
-            cacheParsedLaw(celex, secondaryLang, nextData, xmlText);
-          } catch (error) {
-            if (!isMissingStructuredLawText(error)) {
-              throw error;
+          const cached = await getCachedLawPayload(celex, secondaryLang);
+          if (cached) {
+            nextData = parseLawPayloadToCombined(cached);
+          } else {
+            try {
+              const xmlText = await fetchFormex(celex, secondaryLang);
+              nextData = parseLawPayloadToCombined(xmlText);
+              cacheParsedLaw(celex, secondaryLang, nextData, xmlText);
+            } catch (error) {
+              if (!isMissingStructuredLawText(error)) {
+                throw error;
+              }
+              nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, secondaryLang));
             }
-            nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, secondaryLang));
           }
+        }
+
+        // The backend soft-falls to the as-adopted text when the requested
+        // consolidated version cannot be served. Do not show that fallback in
+        // a parallel-language column: the primary column may still be reading
+        // the current version, which would make the comparison silently mix
+        // two legal versions.
+        if (version && nextData.versionUnavailable) {
+          if (!cancelled) {
+            setLoadError({
+              title: t("lawViewer.structuredVersionUnavailable"),
+              message: t("lawViewer.lawContentUnavailable"),
+              tone: "notice",
+            });
+            setData(EMPTY_LAW_DATA);
+          }
+          return;
         }
 
         if (!cancelled) setData(nextData);
@@ -94,7 +119,7 @@ export function useSecondaryLawDocument({ celex, secondaryLang, t }) {
     return () => {
       cancelled = true;
     };
-  }, [celex, secondaryLang, t]);
+  }, [celex, secondaryLang, t, version]);
 
   return {
     data,

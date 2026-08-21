@@ -1,4 +1,4 @@
-import { ExternalLink, History } from "lucide-react";
+import { ArrowLeft, ExternalLink, History } from "lucide-react";
 
 import { useI18n } from "../i18n/useI18n.js";
 import { useConsolidationStatus } from "../hooks/useConsolidationStatus.js";
@@ -7,33 +7,166 @@ import { buildEurlexCelexUrl } from "../utils/url.js";
 
 /**
  * Tells the reader that the text on screen is the act as adopted, and that it
- * has since been amended.
+ * has since been amended — and, once a current consolidated version exists,
+ * lets them switch to reading it (`?version=current`, #149's first slice).
  *
- * Everything LegalViz renders is the original published text; for a heavily
- * amended act that is the wrong answer to most practical questions, and nothing
- * in the reader said so. The consolidated text itself is not rendered here (it
- * is a different Formex schema, and EUR-Lex strips the recitals this app is
- * built around) — so the notice links out to it rather than pretending.
+ * Everything LegalViz renders by default is the original published text; for
+ * a heavily amended act that is the wrong answer to most practical questions,
+ * and nothing in the reader said so before this notice. Historically the only
+ * remedy was linking out to EUR-Lex — the consolidated text is a different
+ * Formex schema this app didn't parse. It does now (the backend composes
+ * consolidated articles with the as-adopted recitals, since EUR-Lex publishes
+ * consolidated texts with none), so the toggle button is the primary action
+ * and the EUR-Lex link stays only as a secondary escape hatch.
  *
  * Renders nothing at all when the act has never been amended, which is the
  * common case, and while the amendment history is still loading.
  *
- * Also renders nothing when `source` is `"fmx-consolidated"` — that means the
- * reader is already looking at the consolidated text (the as-adopted act had
- * no renderable content, so `resolveParsedLaw` fell back to a consolidated
- * version; see `ConsolidatedFallbackNotice`). This notice's copy ("you are
- * reading this law as adopted") would be false in that case.
+ * `source: "fmx-consolidated"` is ambiguous by itself: it's stamped both by
+ * the #170 fallback (the as-adopted act has no renderable content at all —
+ * see `ConsolidatedFallbackNotice`) *and* by a reader-requested `?version=
+ * current` load. Those need opposite copy — this notice's "you are reading
+ * this law as adopted" is false in the first case and beside the point in the
+ * second — so `version` (not `source`) is what's checked to tell them apart:
+ * `version === "current"` means the reader asked for it and gets the reverse
+ * banner below; a bare `fmx-consolidated` source with no requested version is
+ * the forced #170 case and this notice stays silent, deferring to
+ * `ConsolidatedFallbackNotice`.
  */
-export function ConsolidationNotice({ celex, currentLang = "EN", locale = "en", variant = "banner", source = null }) {
+export function ConsolidationNotice({
+  celex,
+  currentLang = "EN",
+  locale = "en",
+  variant = "banner",
+  source = null,
+  version = null,
+  versionUnavailable = false,
+  versionDate = null,
+  onToggleVersion = null,
+}) {
   const { t } = useI18n();
-  const isConsolidatedFallback = source === "fmx-consolidated";
-  // Pass no celex when already reading the consolidated fallback, so the
-  // hook's amendment/consolidated-version fetches don't fire for a notice
-  // that is about to render nothing anyway.
-  const status = useConsolidationStatus(isConsolidatedFallback ? null : celex);
+  const isReadingRequestedVersion = version === "current";
+  const isConsolidatedFallback = source === "fmx-consolidated" && !isReadingRequestedVersion;
+  // Pass no celex when already reading the consolidated fallback or a
+  // requested version, so the hook's amendment/consolidated-version fetches
+  // don't fire for a notice that already knows what it's about to render.
+  const status = useConsolidationStatus(
+    isConsolidatedFallback || isReadingRequestedVersion ? null : celex
+  );
+
+  // Reverse state: the reader asked for the consolidated text and got it (or
+  // didn't — `versionUnavailable` is the backend's honest "I tried and
+  // couldn't", never a silent fallback). Neither branch touches
+  // `useConsolidationStatus` above, so this can't contradict it.
+  if (isReadingRequestedVersion) {
+    const backAction = (
+      <button
+        type="button"
+        onClick={() => onToggleVersion?.(null)}
+        className="inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:no-underline"
+      >
+        <ArrowLeft size={13} aria-hidden="true" />
+        {t("consolidation.backToAsAdopted")}
+      </button>
+    );
+
+    if (versionUnavailable) {
+      const message = (
+        <>
+          <span>{t("consolidation.versionUnavailable")}</span> {backAction}
+        </>
+      );
+      if (variant === "inline") {
+        return (
+          <p className="mb-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-amber-800 dark:text-amber-300">
+            <History size={13} className="translate-y-px" aria-hidden="true" />
+            {message}
+          </p>
+        );
+      }
+      return (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100">
+          <div className="flex items-center gap-2 font-medium">
+            <History size={15} aria-hidden="true" />
+            {t("consolidation.versionUnavailable")}
+          </div>
+          <p className="mt-1 leading-6">{backAction}</p>
+        </div>
+      );
+    }
+
+    const asOfDate = formatMetaDate(versionDate, locale);
+    const readingSummary = asOfDate
+      ? t("consolidation.readingAsAmendedWithDate", { date: asOfDate })
+      : t("consolidation.readingAsAmended");
+
+    if (variant === "inline") {
+      return (
+        <p className="mb-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-teal-800 dark:text-teal-300">
+          <History size={13} className="translate-y-px" aria-hidden="true" />
+          <span>{readingSummary}</span>
+          {backAction}
+        </p>
+      );
+    }
+    return (
+      <div className="mb-6 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-950 dark:border-teal-900/60 dark:bg-teal-950/20 dark:text-teal-100">
+        <div className="flex items-center gap-2 font-medium">
+          <History size={15} aria-hidden="true" />
+          {readingSummary}
+        </div>
+        <p className="mt-1 leading-6">{backAction}</p>
+      </div>
+    );
+  }
 
   if (isConsolidatedFallback) return null;
-  if (!status.isOutdated) return null;
+
+  // Never amended. Silence would be ambiguous — the reader cannot tell "we
+  // checked and it is current" from "we did not check" — so the overview says
+  // so positively. Only the overview: a reassurance repeated above every
+  // article is noise, and the inline variant exists to warn, not to chat.
+  if (!status.isOutdated) {
+    if (variant === "inline") return null;
+    // Say nothing until the history has actually answered. Claiming a law has
+    // never been amended on the strength of a failed or in-flight fetch is
+    // the same error as claiming no consolidated version exists.
+    if (status.amendmentStatusPending || status.amendmentStatusUnknown) return null;
+
+    const corrigenda = status.corrigendumCount;
+    // A corrigendum-only act (the GDPR) is the one case where "not amended"
+    // is true and still misleading: EUR-Lex applies corrigenda to the
+    // consolidated text but not to the act as published, so the text on
+    // screen really is uncorrected. Offer the same toggle, labelled for what
+    // it actually does here — nothing was amended, the text was corrected.
+    const correctionAction = (corrigenda > 0 && status.consolidated && onToggleVersion) ? (
+      <button
+        type="button"
+        onClick={() => onToggleVersion("current")}
+        className="inline-flex items-center gap-1 font-semibold text-slate-900 underline underline-offset-2 hover:no-underline dark:text-slate-100"
+      >
+        {t("consolidation.toggleReadCorrected")}
+      </button>
+    ) : null;
+
+    return (
+      <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+        <div className="flex items-center gap-2 font-medium text-slate-900 dark:text-slate-100">
+          <History size={15} aria-hidden="true" />
+          {t("consolidation.upToDate")}
+        </div>
+        <p className="mt-1 leading-6">
+          {t("consolidation.neverAmended")}
+          {corrigenda > 0 ? (
+            <> {corrigenda === 1
+              ? t("consolidation.correctedOnce")
+              : t("consolidation.corrected", { count: corrigenda })}</>
+          ) : null}
+        </p>
+        {correctionAction ? <p className="mt-2 text-xs">{correctionAction}</p> : null}
+      </div>
+    );
+  }
 
   const amendedOn = formatMetaDate(status.latestAmendmentDate, locale);
   const consolidatedOn = formatMetaDate(status.consolidated?.date, locale);
@@ -55,24 +188,51 @@ export function ConsolidationNotice({ celex, currentLang = "EN", locale = "en", 
       : "consolidation.amendedAtLeast");
   const summary = t(summaryKey, { count: status.amendmentCount, date: amendedOn });
 
+  // Secondary action: EUR-Lex still gets a direct link (no recital pairing,
+  // no in-app navigation, but it's EUR-Lex's own authoritative page).
   const link = consolidatedUrl ? (
     <a
       href={consolidatedUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:no-underline"
+      className="inline-flex items-center gap-1 text-amber-800/80 underline underline-offset-2 hover:no-underline dark:text-amber-300/70"
     >
       {t("consolidation.readConsolidated", { date: consolidatedOn })}
-      <ExternalLink size={13} aria-hidden="true" />
+      <ExternalLink size={12} aria-hidden="true" />
     </a>
   ) : null;
 
-  // No link means either: no consolidated version has ever been published
-  // (say so), only future-dated ones exist (say that instead, honestly), or
-  // the /consolidated fetch itself failed (say nothing — we don't know).
+  // Primary action: read it in-app. Only offered when a current consolidated
+  // version actually exists to read (`consolidatedUrl`/`link`) — an act with
+  // no published consolidation, or only a future-dated one, gets no toggle at
+  // all, since `?version=current` would have nothing to switch to.
+  const toggleButton = (consolidatedUrl && onToggleVersion) ? (
+    <button
+      type="button"
+      onClick={() => onToggleVersion("current")}
+      className="inline-flex items-center gap-1 font-semibold text-amber-950 underline underline-offset-2 hover:no-underline dark:text-amber-100"
+    >
+      {/* No icon: every branch of this notice already leads with a History
+          glyph, and repeating it on the action reads as a second, unrelated
+          marker rather than as emphasis. `backAction` carries an ArrowLeft
+          for the same reason — a distinct icon earns its place, a repeated
+          one does not. */}
+      {t("consolidation.toggleReadAmended")}
+    </button>
+  ) : null;
+
+  // No link means either: the query has not answered yet (say nothing), no
+  // consolidated version has ever been published (say so), only future-dated
+  // ones exist (say that instead, honestly), or the /consolidated fetch
+  // itself failed (say nothing — we don't know).
   let noVersionMessage = null;
   if (!link) {
-    if (status.consolidatedStatusUnknown) {
+    if (status.consolidatedStatusPending) {
+      // The query is still in flight — claiming either way would be a guess,
+      // and the wrong guess flashes on every amended act before the toggle
+      // appears.
+      noVersionMessage = null;
+    } else if (status.consolidatedStatusUnknown) {
       noVersionMessage = null;
     } else if (status.hasUpcomingConsolidation) {
       noVersionMessage = t("consolidation.consolidatedVersionPending");
@@ -87,7 +247,9 @@ export function ConsolidationNotice({ celex, currentLang = "EN", locale = "en", 
         <History size={13} className="translate-y-px" aria-hidden="true" />
         <span>{t("consolidation.asAdopted")}</span>
         <span className="text-amber-700/80 dark:text-amber-300/70">{summary}</span>
+        {toggleButton}
         {link}
+        {!link && noVersionMessage ? <span className="text-amber-700/80 dark:text-amber-300/70">{noVersionMessage}</span> : null}
       </p>
     );
   }
@@ -100,8 +262,14 @@ export function ConsolidationNotice({ celex, currentLang = "EN", locale = "en", 
       </div>
       <p className="mt-1 leading-6">
         {summary}
-        {link ? <> {link}</> : (noVersionMessage ? <> {noVersionMessage}</> : null)}
+        {!link && noVersionMessage ? <> {noVersionMessage}</> : null}
       </p>
+      {toggleButton || link ? (
+        <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          {toggleButton}
+          {link}
+        </p>
+      ) : null}
     </div>
   );
 }

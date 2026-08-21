@@ -14,7 +14,7 @@ import { PARSER_VERSION } from "./fmxParser.js";
 // takes effect once made.
 
 const DB_NAME = "formex-cache";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_NAME = "laws";
 const META_STORE_NAME = "lawMeta";
 
@@ -291,6 +291,68 @@ describe("parsed-law fetch persistence", () => {
     const cached = await getCachedLawPayload(CELEX, "EN");
     expect(cached.payload.source).toBe("fmx-consolidated");
     expect(cached.payload.consolidatedVersion).toEqual({ celex: "02006R1907-20260511", date: "2026-05-11" });
+  });
+});
+
+describe("versioned cache key (#149 ?version=current)", () => {
+  const VERSIONED_CACHE_KEY = `${CELEX}_ENG_current`;
+
+  it("caches the as-adopted and requested-version reads under distinct keys, neither evicting the other", async () => {
+    const asAdopted = { title: "As adopted", articles: [{ number: "1" }], recitals: [{}], annexes: [] };
+    const asAmended = {
+      title: "As amended",
+      articles: [{ number: "1" }, { number: "2", insertedInVersion: true }],
+      recitals: [{}],
+      annexes: [],
+      source: "fmx-consolidated",
+      version: "current",
+      versionDate: "2026-01-01",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(asAdopted))
+      .mockResolvedValueOnce(jsonResponse(asAmended));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fetchParsedLaw, getCachedLawPayload } = await importFormexApi();
+
+    const fetchedAsAdopted = await fetchParsedLaw(CELEX, "EN");
+    const fetchedAsAmended = await fetchParsedLaw(CELEX, "EN", { version: "current" });
+
+    expect(fetchedAsAdopted.title).toBe("As adopted");
+    expect(fetchedAsAmended.title).toBe("As amended");
+
+    // Both entries survive in IndexedDB under their own keys...
+    expect((await readCache(CACHE_KEY)).payload.title).toBe("As adopted");
+    expect((await readCache(VERSIONED_CACHE_KEY)).payload.title).toBe("As amended");
+
+    // ...and re-reading either one afterwards is a cache hit, not a refetch
+    // that would prove the other had overwritten it.
+    expect(await getCachedLawPayload(CELEX, "EN")).toMatchObject({ payload: { title: "As adopted" } });
+    const versionedCached = await readCache(VERSIONED_CACHE_KEY);
+    expect(versionedCached.payload.title).toBe("As amended");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still groups under one CELEX for pruning and the offline library despite the extra key segment", async () => {
+    const asAdopted = { title: "As adopted", articles: [{ number: "1" }], recitals: [], annexes: [] };
+    const asAmended = { title: "As amended", articles: [{ number: "1" }], recitals: [], annexes: [] };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(asAdopted))
+      .mockResolvedValueOnce(jsonResponse(asAmended)));
+
+    const { fetchParsedLaw, getLawMeta, listCachedCelexes } = await importFormexApi();
+    await fetchParsedLaw(CELEX, "EN");
+    await fetchParsedLaw(CELEX, "EN", { version: "current" });
+
+    // pruneCacheIfNeeded and listCachedCelexes both derive the CELEX from
+    // `key.split("_")[0]` — the versioned key must still resolve to the same
+    // CELEX, not register as a second law in the offline library.
+    const celexes = await listCachedCelexes();
+    expect(celexes.filter((c) => c === CELEX)).toHaveLength(1);
+
+    // Law meta is keyed by bare CELEX, so both fetches wrote to (and share)
+    // one meta row rather than the version producing its own.
+    expect(await getLawMeta(CELEX)).toMatchObject({ celex: CELEX });
   });
 });
 

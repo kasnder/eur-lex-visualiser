@@ -94,7 +94,7 @@ function CaseCard({ c, currentLang }) {
 // `compact` renders for the narrow context rail: no outer gutters, no title
 // row (the rail tab already says "Case law"), the judgment list open by
 // default and in a single column.
-export function RelatedCaseLaw({ celex, articleNumber, currentLang = "EN", compact = false }) {
+export function RelatedCaseLaw({ celex, articleNumber, currentLang = "EN", compact = false, insertedInVersion = false }) {
   const { t } = useI18n();
   const [isListOpen, setIsListOpen] = useState(compact);
   const [digestRequested, setDigestRequested] = useState(false);
@@ -113,6 +113,22 @@ export function RelatedCaseLaw({ celex, articleNumber, currentLang = "EN", compa
   }, [celex, articleNumber, currentLang]);
 
   if (!articleNumber) return null;
+
+  // An article inserted by amendment (`?version=current`, #149) has no
+  // as-adopted counterpart, so nothing has ever been matched to it — CJEU
+  // rulings are indexed against the as-adopted text. Saying so beats a rail
+  // that just isn't there, which reads as "no case law exists" rather than
+  // "not mapped yet".
+  if (insertedInVersion) {
+    return (
+      <div className={compact ? "" : "mt-6 px-6 md:px-12"}>
+        <div className={`flex items-center gap-2 py-3 text-sm ${compact ? "" : "border-y border-gray-200 dark:border-gray-800"}`}>
+          <Scale size={16} className="shrink-0 text-gray-400 dark:text-gray-500" />
+          <span className="text-gray-500 dark:text-gray-400">{t("relatedCaseLaw.insertedInVersion")}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !loaded) {
     if (compact) {

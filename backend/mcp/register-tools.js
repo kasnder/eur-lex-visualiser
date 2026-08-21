@@ -129,6 +129,11 @@ function buildStructure(law, recitalTitles) {
       number: art.article_number,
       title: art.article_title || null,
       ...(section ? { section: { number: section.number, title: section.title } } : {}),
+      // Only present when reading a version (see `version` on get_law_part):
+      // this article has no counterpart in the act as adopted, so case-law
+      // and citation lookups keyed to the original text will find nothing
+      // for it.
+      ...(art.insertedInVersion ? { insertedInVersion: true } : {}),
     });
   }
 
@@ -299,7 +304,7 @@ function registerTools(server, deps) {
     {
       title: 'Read part of an EU law',
       description:
-        'Read a slice of a law by CELEX id. Call with part="structure" FIRST to get the table of contents (chapters, article numbers + titles, recital list, annex ids, definition terms), then request individual pieces. Never returns the whole law at once. Parts: "structure" (the map), "article" (one article, requires number), "recital" (one recital, requires number), "annex" (one annex, requires the annex id in number), "definitions" (all defined terms, optional number filters by substring). NOTE: the first fetch of a law that is not yet cached can take up to ~30 seconds while it is downloaded from EUR-Lex; subsequent calls are fast.',
+        'Read a slice of a law by CELEX id. Call with part="structure" FIRST to get the table of contents (chapters, article numbers + titles, recital list, annex ids, definition terms), then request individual pieces. Never returns the whole law at once. By default this is the act AS ADOPTED; pass version="current" to read it as amended. Parts: "structure" (the map), "article" (one article, requires number), "recital" (one recital, requires number), "annex" (one annex, requires the annex id in number), "definitions" (all defined terms, optional number filters by substring). NOTE: the first fetch of a law that is not yet cached can take up to ~30 seconds while it is downloaded from EUR-Lex; subsequent calls are fast.',
       inputSchema: {
         celex: z.string().describe('CELEX id, e.g. 32016R0679'),
         part: z.enum(['structure', 'article', 'recital', 'annex', 'definitions'])
@@ -307,15 +312,26 @@ function registerTools(server, deps) {
         number: z.string().optional()
           .describe('Article/recital number or annex id (required for article/recital/annex); optional substring filter for definitions'),
         lang: z.string().optional().describe('3-letter language code (default ENG)'),
+        version: z.literal('current').optional()
+          .describe('Pass "current" to read the act as amended (the latest consolidated version) instead of as adopted. The CELEX stays the same — a consolidated text is another version of the act, not a different act. Articles, annexes and definitions then come from the consolidated text while recitals stay as adopted (consolidation does not amend recitals), and articles added by a later amendment are marked insertedInVersion. If no consolidated version can be served, the act as adopted is returned with versionUnavailable: true rather than an error.'),
       },
     },
-    makeHandler(async ({ celex, part, number, lang }) => {
+    makeHandler(async ({ celex, part, number, lang, version }) => {
       requireCelex(celex);
       const language = requireLang(lang);
       record('get_law_part', { celex });
 
-      const law = await resolveParsedLaw(celex, language, {});
+      const law = await resolveParsedLaw(celex, language, version ? { version } : {});
       const base = { celex, lang: language, title: law.title, langCode: law.langCode, source: law.source };
+      // Only surface the version fields when a version was asked for, so the
+      // as-adopted response shape is byte-for-byte what it was before.
+      if (version) {
+        base.version = law.version || null;
+        base.versionCelex = law.versionCelex || null;
+        base.versionDate = law.versionDate || null;
+        if (law.versionUnavailable) base.versionUnavailable = true;
+        if (law.recitalsSource) base.recitalsSource = law.recitalsSource;
+      }
 
       if (part === 'structure') {
         const cached = getCachedRecitalTitles({

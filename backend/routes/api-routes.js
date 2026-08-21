@@ -299,7 +299,18 @@ function registerApiRoutes(app, deps) {
         return res.status(400).json({ error: `Invalid language code: ${rawLang}` });
       }
 
-      const parsed = await resolveParsedLaw(celex, lang, { skipFmxProbe });
+      // Only the literal `current` is supported today (#149 slice 1).
+      // Arbitrary `?version=YYYY-MM-DD` is a planned later slice — rejecting
+      // it now, rather than silently ignoring it, keeps that addition
+      // additive instead of a silent behaviour change on URLs already in
+      // the wild.
+      const rawVersion = req.query.version;
+      if (rawVersion !== undefined && rawVersion !== 'current') {
+        return res.status(400).json({ error: 'Unsupported version. Expected: current' });
+      }
+      const version = rawVersion === 'current' ? 'current' : null;
+
+      const parsed = await resolveParsedLaw(celex, lang, { skipFmxProbe, version });
       res.json(parsed);
     } catch (err) {
       if (!res.headersSent) {

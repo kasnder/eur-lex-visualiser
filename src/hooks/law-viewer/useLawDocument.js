@@ -22,7 +22,7 @@ function applyRecitalTitles(data, titles) {
   return changed ? { ...data, recitals } : data;
 }
 
-export function useLawDocument({ celex, lang, t, enabled = true }) {
+export function useLawDocument({ celex, lang, t, enabled = true, version = null }) {
   const [data, setData] = useState(EMPTY_LAW_DATA);
   const [loading, setLoading] = useState(false);
   const [recitalTitlesLoading, setRecitalTitlesLoading] = useState(false);
@@ -47,19 +47,29 @@ export function useLawDocument({ celex, lang, t, enabled = true }) {
 
     try {
       let nextData = null;
-      const cached = await getCachedLawPayload(celex, lang);
-      if (cached) {
-        nextData = parseLawPayloadToCombined(cached);
+      if (version) {
+        // A requested version (currently only "current", #149) has no raw-XML
+        // path to short-circuit through: `fetchFormex` fetches the act's base
+        // CELEX, which is the as-adopted document, and `isFmxDocument` rejects
+        // the consolidated `<CONS.ACT>` schema outright. Go straight to
+        // `/parsed?version=`, which composes the consolidated articles with
+        // the as-adopted recitals server-side.
+        nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, lang, { version }));
       } else {
-        try {
-          const xmlText = await fetchFormex(celex, lang);
-          nextData = parseLawPayloadToCombined(xmlText);
-          cacheParsedLaw(celex, lang, nextData, xmlText);
-        } catch (error) {
-          if (!isMissingStructuredLawText(error)) {
-            throw error;
+        const cached = await getCachedLawPayload(celex, lang);
+        if (cached) {
+          nextData = parseLawPayloadToCombined(cached);
+        } else {
+          try {
+            const xmlText = await fetchFormex(celex, lang);
+            nextData = parseLawPayloadToCombined(xmlText);
+            cacheParsedLaw(celex, lang, nextData, xmlText);
+          } catch (error) {
+            if (!isMissingStructuredLawText(error)) {
+              throw error;
+            }
+            nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, lang));
           }
-          nextData = parseLawPayloadToCombined(await fetchParsedLaw(celex, lang));
         }
       }
 
@@ -92,7 +102,7 @@ export function useLawDocument({ celex, lang, t, enabled = true }) {
     } finally {
       if (requestRef.current === requestId) setLoading(false);
     }
-  }, [celex, enabled, lang, t]);
+  }, [celex, enabled, lang, t, version]);
 
   useEffect(() => {
     reload();

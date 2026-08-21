@@ -72,6 +72,8 @@ export function useLawViewerDerivedState({
     isLegacyHtmlFallback,
     isConsolidatedFallback,
     consolidatedVersion: primaryDocument.data.consolidatedVersion || null,
+    versionUnavailable: !!primaryDocument.data.versionUnavailable,
+    versionDate: primaryDocument.data.versionDate || null,
     hasLoadedContent,
     hasCelex,
     isSideBySide,

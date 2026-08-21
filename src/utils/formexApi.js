@@ -36,7 +36,7 @@ export function apiFetch(url, options = {}) {
 }
 
 // Cache version — bump to invalidate all cached entries
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const RECITAL_TITLE_CACHE_VERSION = 2;
 const DB_NAME = "formex-cache";
 const STORE_NAME = "laws";
@@ -194,8 +194,17 @@ export async function closeFormexDb() {
   }
 }
 
-function makeCacheKey(celex, lang = "EN") {
-  return `${celex}_${toApiLang(lang)}`;
+// `version` is an optional dimension on top of celex+lang (e.g. "current" for
+// the consolidated/as-amended reading, added for #149). Omitted, the key is
+// unchanged from before this dimension existed, so the as-adopted cache entry
+// keeps its historical key. A versioned key still starts with the bare CELEX
+// (`32013R0575_ENG_current`), which is all `pruneCacheIfNeeded` and
+// `listCachedCelexes` key off (`key.split("_")[0]`) — so the two versions of
+// an act group under one library entry and evict together, they just don't
+// share a cache slot and can't overwrite one another.
+function makeCacheKey(celex, lang = "EN", version = null) {
+  const base = `${celex}_${toApiLang(lang)}`;
+  return version ? `${base}_${version}` : base;
 }
 
 function makeRecitalTitleCacheKey(celex, lang = "EN") {
@@ -265,16 +274,23 @@ function createCombinedLawEnvelope(payload, rawXml = null) {
   const envelope = {
     format: "combined-v1",
     parserVersion: Number.isFinite(reported) ? reported : PARSER_VERSION,
+    cachedAt: Date.now(),
     payload,
   };
   if (rawXml) envelope.rawXml = rawXml;
   return envelope;
 }
 
+// A consolidated version is addressed as "current", so unlike an as-adopted
+// CELEX it can change when EUR-Lex publishes a newer manifestation. Keep the
+// offline convenience bounded; otherwise the first successful (or fallback)
+// response would be served forever.
+const CURRENT_VERSION_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 // Bump whenever the shape of a cached API payload changes (e.g. renaming a
 // summary field) so stale cache-first entries are invalidated rather than
 // served for up to API_JSON_CACHE_MAX_AGE_MS under the old shape.
-const API_JSON_CACHE_VERSION = 4;
+const API_JSON_CACHE_VERSION = 5;
 // After this age, cache-first entries are revalidated against the network
 // (still served from cache if the network is unavailable).
 const API_JSON_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1183,12 +1199,26 @@ export async function fetchFormexByReference(reference, lang = "EN") {
   return res.text();
 }
 
-export async function fetchParsedLaw(celex, lang = "EN") {
+// `version` — only the literal "current" is meaningful today (#149's first
+// slice; the backend 400s on anything else) — asks the backend for the
+// consolidated ("as amended") reading instead of the act as adopted. It is
+// forwarded both as a query param and as a cache-key dimension (via
+// `makeCacheKey`): the two readings are different documents that happen to
+// share a CELEX, and without the key dimension whichever one loaded last
+// would silently overwrite the other in IndexedDB.
+export async function fetchParsedLaw(celex, lang = "EN", { version = null } = {}) {
   const apiLang = toApiLang(lang);
-  const cacheKey = makeCacheKey(celex, lang);
+  const cacheKey = makeCacheKey(celex, lang, version);
   return getInFlightRequest(`parsed:${cacheKey}`, async () => {
     const cached = await cacheGet(cacheKey);
-    if (isCombinedLawEnvelope(cached) && cached.parserVersion === PARSER_VERSION) {
+    const isFreshCurrentVersion = version !== "current"
+      || (
+        Number.isFinite(cached?.cachedAt)
+        && Date.now() - cached.cachedAt < CURRENT_VERSION_CACHE_MAX_AGE_MS
+        && cached.payload?.version === "current"
+        && !cached.payload?.versionUnavailable
+      );
+    if (isCombinedLawEnvelope(cached) && cached.parserVersion === PARSER_VERSION && isFreshCurrentVersion) {
       console.log(`[FormexAPI] Cache hit: ${cacheKey}`);
       return cached.payload;
     }
@@ -1196,6 +1226,9 @@ export async function fetchParsedLaw(celex, lang = "EN") {
     const params = new URLSearchParams({ lang: apiLang });
     if (hasKnownMissingFmx(celex, lang)) {
       params.set("skipFmxProbe", "1");
+    }
+    if (version) {
+      params.set("version", version);
     }
     const url = `${API_BASE}/api/laws/${encodeURIComponent(celex)}/parsed?${params.toString()}`;
     const res = await apiFetch(url);
@@ -1205,7 +1238,12 @@ export async function fetchParsedLaw(celex, lang = "EN") {
     }
 
     const payload = await res.json();
-    if (payloadHasContent(payload)) {
+    // A requested current version that fell back to the as-adopted text is
+    // deliberately not persisted: a transient outage must not poison this
+    // mutable selector until the user clears site data.
+    const cacheablePayload = version !== "current"
+      || (payload.version === "current" && !payload.versionUnavailable);
+    if (payloadHasContent(payload) && cacheablePayload) {
       await cacheSet(cacheKey, createCombinedLawEnvelope(payload));
       await upsertLawMeta(celex, { cachedAt: Date.now() });
       await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);

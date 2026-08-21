@@ -853,6 +853,55 @@ export function buildFallbackDefRegex(lang) {
 }
 
 /**
+ * Build a regex for the *unquoted, verb-anchored* "term: meansVerb …" shape,
+ * where the term carries no quote marks at all but the meansVerb immediately
+ * follows the colon:
+ *
+ *   substance: means a chemical element and its compounds in the natural
+ *   state or obtained by any manufacturing process, …
+ *   article: means an object which during production is given a special
+ *   shape, surface or design which determines its function …
+ *
+ * (Regulation (EC) No 1907/2006 — REACH — Article 3: all 44 of its
+ * definitions are drafted this way, with zero quoted terms anywhere in the
+ * article.) `buildColonDefRegex` above already matches an unquoted colon
+ * shape, but treats the meansVerb as an optional bonus and instead leans on
+ * its caller's own word-count/length corroboration (see
+ * eurlex-html-parser.js's `unquotedDefinitionEntry`) — appropriate there
+ * because that caller has no quote-based signal to fall back on at all. This
+ * function is for callers (fmxParser.mjs) that *do* have quote-based
+ * patterns to try first and only reach for the unquoted shape as a last
+ * resort, where a bare `term: definition` with no verb is far too weak a
+ * signal on its own — that shape is deliberately handled only for LT/SV's
+ * quote-less `buildFallbackDefRegex`, which documents itself as the most
+ * over-match-prone pattern here. Requiring the verb right after the colon is
+ * what makes this pattern safe to add: no verb after the colon, no match —
+ * ordinary prose containing an incidental colon ("Member States shall
+ * ensure that: …") never has "means"/"shall mean" immediately following it,
+ * so it is never mistaken for a definition.
+ *
+ * Verb-first languages (FR, IT, ES, PT) put the meansVerb *before* the term
+ * ("on entend par «terme»", "si intende per «termine»") — their drafting can
+ * never produce an unquoted "term: verb" shape, so this returns null for
+ * them rather than emitting a pattern that can never match.
+ *
+ * Capture group 1 = the term text; the trailing meansVerb (and an optional
+ * colon/comma before the definition continues under a nested list, the same
+ * empty-group-2 shape buildMeansRegex documents as expected) is consumed.
+ */
+export function buildUnquotedMeansRegex(lang) {
+  if (lang.definitionFormat === "verb_first") return null;
+  const verb = `(?:${lang.meansVerb})`;
+  // Term sanity mirrors buildColonDefRegex: no sentence punctuation inside
+  // the term, and a length cap so a stray colon deep in a long sentence that
+  // happens to contain the meansVerb can't retroactively become a "term".
+  return new RegExp(
+    `^([^:;.,\\u2013\\u2014]{2,60}?)\\s*:\\s*${verb}\\s*[:,]?(?:\\s+|$)`,
+    "i"
+  );
+}
+
+/**
  * Build a regex for the *unquoted* colon shape, where the term carries no
  * quotation marks at all and the colon is the only separator:
  *

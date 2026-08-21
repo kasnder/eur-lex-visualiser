@@ -13,7 +13,7 @@
  *  3. Textual:    Recital reference patterns in each language
  */
 
-import { getLangConfig, buildMeansRegex, buildFallbackDefRegex } from "./languages.mjs";
+import { getLangConfig, buildMeansRegex, buildFallbackDefRegex, buildUnquotedMeansRegex } from "./languages.mjs";
 import { buildEurlexSearchUrl } from "./url.mjs";
 import {
   ACT_CELEX_MAP,
@@ -33,7 +33,7 @@ import {
  * Bump this whenever the parser output changes (new fields, bug fixes, etc.)
  * so that cached parsed results are automatically re-parsed from raw XML.
  */
-export const PARSER_VERSION = 22;
+export const PARSER_VERSION = 23;
 
 // ---------------------------------------------------------------------------
 // FMX → HTML conversion helpers
@@ -1516,6 +1516,11 @@ export function parseFmxToCombined(xmlText) {
   const lang = getLangConfig(langCode);
   const meansRegex = buildMeansRegex(lang);
   const fallbackDefRegex = buildFallbackDefRegex(lang);
+  // Last-resort, unquoted-but-verb-anchored pattern (REACH, 32006R1907,
+  // Article 3: "substance: means a chemical element …" — no quote marks
+  // anywhere). Null for verb-first languages (FR, IT, ES, PT), whose
+  // drafting can never produce this shape.
+  const unquotedMeansRegex = buildUnquotedMeansRegex(lang);
 
   // --- Title ---
   // FMX <TI> contains multiple <P> elements; join them with spaces
@@ -1714,7 +1719,7 @@ export function parseFmxToCombined(xmlText) {
   // <CONTENTS>. Fall back to that so their articles aren't dropped; exclude any
   // <CONTENTS> that belongs to an <ANNEX> (annexes carry their own).
   const enactingTerms = root.querySelector("ENACTING\\.TERMS")
-    || Array.from(root.querySelectorAll("CONTENTS")).find((el) => !el.closest("ANNEX"));
+    || Array.from(root.querySelectorAll("CONTENTS")).find((el) => !el.closest("ANNEX, CONS\\.ANNEX"));
   if (enactingTerms) {
     // The container sits one level above the first real DIVISION, so start one
     // level higher to make the first nested DIVISION a chapter.
@@ -1733,7 +1738,7 @@ export function parseFmxToCombined(xmlText) {
     // rendered and indexed several times.
     const unnumberedRoot = legalRoots[0] || root;
     const unnumberedBody = Array.from(unnumberedRoot.children).find((child) => child.tagName === "PROLOG")
-      || Array.from(unnumberedRoot.children).find((child) => child.tagName === "CONTENTS" && !child.closest("ANNEX"))
+      || Array.from(unnumberedRoot.children).find((child) => child.tagName === "CONTENTS" && !child.closest("ANNEX, CONS\\.ANNEX"))
       || Array.from(unnumberedRoot.querySelectorAll("ENACTING\\.TERMS")).find((element) => allText(element))
       // Older competition-decision summaries place every substantive section
       // under PREAMBLE/GR.CONSID and leave ENACTING.TERMS empty. Selecting the
@@ -1784,7 +1789,11 @@ export function parseFmxToCombined(xmlText) {
   // same number, mis-attributing the annex's definitions to the act body.
   const articleElementsByNumber = new Map();
   for (const element of root.querySelectorAll("ARTICLE")) {
-    if (element.closest("QUOT\\.S") || element.closest("ANNEX")) continue;
+    // Consolidated documents name their annexes <CONS.ANNEX> rather than
+    // <ANNEX> (see the annex-extraction comment above); exclude both so a
+    // consolidated annex's restarted "Article 1" cannot shadow the same
+    // number in the enacting terms.
+    if (element.closest("QUOT\\.S") || element.closest("ANNEX, CONS\\.ANNEX")) continue;
     const id = (element.getAttribute("IDENTIFIER") || "").replace(/^0+/, "").toUpperCase();
     if (id && !articleElementsByNumber.has(id)) articleElementsByNumber.set(id, element);
   }
@@ -1923,17 +1932,36 @@ export function parseFmxToCombined(xmlText) {
 
       // Verb-first languages (GA, IT, ES, PT): meansVerb 'term' definition.
       // Term-first languages: 'term' meansVerb definition.
-      // Either way, try the configured meansVerb first, then fall back to the
-      // quoted-term pattern for languages where the verb appears only in the
-      // article intro (DE, FR, CS, SK, HU, FI, ET, LV, LT, EL, NL, DA, SV …).
-      // The verb-first languages need that fallback too: FR/IT/ES/PT state
-      // the verb once ("on entend par:") and then list «terme», définition.
+      // Try the configured meansVerb first, then — before giving up on a
+      // verb entirely — the unquoted-but-verb-anchored shape (REACH's
+      // "substance: means …", see buildUnquotedMeansRegex), then finally
+      // fall back to the quoted-term pattern for languages where the verb
+      // appears only in the article intro (DE, FR, CS, SK, HU, FI, ET, LV,
+      // LT, EL, NL, DA, SV …). The verb-first languages need that last
+      // fallback too: FR/IT/ES/PT state the verb once ("on entend par:")
+      // and then list «terme», définition.
       const termMatch = text.match(meansRegex);
       if (termMatch?.[1]) {
         const term = termMatch[1].trim();
         const definition = text.slice(termMatch[0].length).trim();
         // meansRegex always requires a quote character around the term.
         matched = makeDefinition(term, definition, true);
+      } else if (unquotedMeansRegex && unquotedMeansRegex.test(text)) {
+        const uqMatch = text.match(unquotedMeansRegex);
+        const term = uqMatch[1].trim();
+        const definition = text.slice(uqMatch[0].length).trim();
+        // REACH-style unquoted term with the meansVerb immediately after the
+        // colon ("substance: means a chemical element …"). Flagged NOT
+        // `quoted`, like LT/SV's quote-less fallback below: the meansVerb
+        // anchor is good evidence, but no quote character was seen, and the
+        // `quoted` flag governs exactly one thing — whether matches count in
+        // an article that does *not* title itself "Definitions" (see the
+        // corroboration bar near the end of this function). Acts drafted this
+        // way put their definitions in a titled article (REACH's Article 3
+        // does, so all 44 are kept), so restricting this pattern to titled
+        // articles costs nothing real and keeps a quote-less shape from
+        // clearing the bar in ordinary operative text.
+        matched = makeDefinition(term, definition, false);
       } else {
         const fbMatch = text.match(fallbackDefRegex);
         if (fbMatch?.[1]) {
@@ -2059,7 +2087,12 @@ export function parseFmxToCombined(xmlText) {
   const validArticleNumbers = new Set(articles.map((article) => article.article_number));
   // In combined documents, ANNEX elements are siblings of ACT
   const annexContainer = docRoot.tagName === "COMBINED.FMX" ? docRoot : root;
-  for (const annexEl of annexContainer.querySelectorAll("ANNEX")) {
+  // Consolidated ("as amended") documents root at <CONS.ACT> and name their
+  // annexes <CONS.ANNEX> instead of <ANNEX> — a distinct element, not a variant
+  // matched by the plain "ANNEX" selector. Left unhandled, every consolidated
+  // text (e.g. REACH, 32006R1907) parsed with annexes: [] despite the annex
+  // content being present in the source and structurally identical to <ANNEX>.
+  for (const annexEl of annexContainer.querySelectorAll("ANNEX, CONS\\.ANNEX")) {
     const annexTi = annexEl.querySelector("TITLE > TI");
     const annexSti = annexEl.querySelector("TITLE > STI");
     const tiText = annexTi ? allText(annexTi) : "";

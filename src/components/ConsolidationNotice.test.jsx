@@ -75,7 +75,11 @@ describe("ConsolidationNotice", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
-  it("renders nothing for a law that only ever had corrigenda", async () => {
+  it("does not warn a law that only ever had corrigenda, but says the text is uncorrected", async () => {
+    // The GDPR. Not amended, so no warning — but nine of its articles read
+    // differently in the consolidated text, Article 37(1)(c)'s "and"/"or"
+    // among them, so silence would leave the reader on uncorrected text with
+    // no way to know.
     fetchAmendments.mockResolvedValue({
       amendments: [{ celex: "32016R0679R(01)", date: "2018-05-23", type: "corrigendum" }],
     });
@@ -83,7 +87,48 @@ describe("ConsolidationNotice", () => {
       versions: [{ celex: "02016R0679-20160504", date: "2016-05-04" }],
     });
 
-    await render({ celex: "32016R0679" });
+    await render({ celex: "32016R0679", onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("You are reading the current text");
+    expect(container.textContent).toContain("has not been amended");
+    expect(container.textContent).toContain("One corrigendum has been published");
+    expect(container.textContent).not.toContain("You are reading this law as adopted");
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent.includes("corrections applied")
+    );
+    expect(toggle).toBeTruthy();
+  });
+
+  it("stays quiet above every article for a law that was never amended", async () => {
+    // The positive line belongs on the overview. Repeated above each article
+    // it is noise, and the inline variant exists to warn.
+    fetchAmendments.mockResolvedValue({ amendments: [] });
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render({ variant: "inline" });
+
+    expect(container.textContent).toBe("");
+  });
+
+  it("says a never-amended law is current, with no correction offer", async () => {
+    fetchAmendments.mockResolvedValue({ amendments: [] });
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("You are reading the current text");
+    expect(container.textContent).toContain("has not been amended");
+    expect(container.textContent).not.toContain("corrigend");
+    expect(container.querySelector("button")).toBe(null);
+  });
+
+  it("claims nothing about a never-amended law when the history could not be fetched", async () => {
+    // `[]` on failure keeps the warning off, but it must not be read as
+    // evidence for the opposite claim.
+    fetchAmendments.mockRejectedValue(new Error("cellar down"));
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render();
 
     expect(container.textContent).toBe("");
   });
@@ -99,6 +144,33 @@ describe("ConsolidationNotice", () => {
     expect(container.textContent).toContain("amended once");
     expect(container.textContent).toContain("has not published a consolidated version");
     expect(container.querySelector("a")).toBe(null);
+  });
+
+  it("does not claim no consolidated version exists while the query is still in flight", async () => {
+    // The amendment history resolves first (it is the faster of the two
+    // queries), so without a pending state the notice renders its summary
+    // beside "EUR-Lex has not published a consolidated version" — a claim it
+    // has no basis for yet, and one that is wrong for most amended acts. It
+    // then flips to a toggle a moment later.
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32020R0001", date: "2020-01-01", type: "amendment" }],
+    });
+    let resolveVersions;
+    fetchConsolidatedVersions.mockReturnValue(
+      new Promise((resolve) => { resolveVersions = resolve; })
+    );
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("amended once");
+    expect(container.textContent).not.toContain("has not published a consolidated version");
+
+    await act(async () => {
+      resolveVersions({ versions: [{ celex: "02013R0575-20200101", date: "2020-01-01" }] });
+    });
+
+    expect(container.textContent).not.toContain("has not published a consolidated version");
+    expect(container.textContent).toContain("Read this law as amended");
   });
 
   it("stays silent when the amendment history cannot be fetched", async () => {
@@ -153,6 +225,72 @@ describe("ConsolidationNotice", () => {
     await render({ source: "fmx-consolidated" });
 
     expect(container.textContent).toBe("");
+    expect(fetchAmendments).not.toHaveBeenCalled();
+  });
+
+  it("offers a toggle to read the consolidated text when a current version exists", async () => {
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32019R0876", date: "2019-05-20", type: "amendment" }],
+    });
+    fetchConsolidatedVersions.mockResolvedValue({
+      versions: [{ celex: "02013R0575-20260626", date: "2026-06-26" }],
+    });
+    const onToggleVersion = vi.fn();
+
+    await render({ onToggleVersion });
+
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent.includes("Read this law as amended")
+    );
+    expect(toggle).toBeTruthy();
+
+    await act(async () => { toggle.click(); });
+    expect(onToggleVersion).toHaveBeenCalledWith("current");
+  });
+
+  it("renders no toggle when no current consolidated version exists", async () => {
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32020R0001", date: "2020-01-01", type: "amendment" }],
+    });
+    fetchConsolidatedVersions.mockResolvedValue({ versions: [] });
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.querySelector("button")).toBe(null);
+  });
+
+  it("shows the reverse state and an honest date once the reader is reading the requested version", async () => {
+    const onToggleVersion = vi.fn();
+
+    await render({
+      source: "fmx-consolidated",
+      version: "current",
+      versionDate: "2026-06-26",
+      onToggleVersion,
+    });
+
+    expect(container.textContent).toContain("You are reading this law as amended, as of");
+    expect(fetchAmendments).not.toHaveBeenCalled();
+
+    const back = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent.includes("Back to the text as adopted")
+    );
+    expect(back).toBeTruthy();
+
+    await act(async () => { back.click(); });
+    expect(onToggleVersion).toHaveBeenCalledWith(null);
+  });
+
+  it("says so honestly when the requested version could not be served", async () => {
+    await render({
+      source: "fmx-eurlex",
+      version: "current",
+      versionUnavailable: true,
+      onToggleVersion: vi.fn(),
+    });
+
+    expect(container.textContent).toContain("could not be loaded right now");
+    expect(container.textContent).not.toContain("You are reading this law as amended");
     expect(fetchAmendments).not.toHaveBeenCalled();
   });
 

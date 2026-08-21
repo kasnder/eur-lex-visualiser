@@ -95,6 +95,10 @@ export function LawOverviewPage({
   onOpenCitedLaw,
   isExternalReferencePending,
   locale = "en",
+  version = null,
+  versionUnavailable = false,
+  versionDate = null,
+  onToggleVersion,
   t,
 }) {
   const meta = useLawMetadata(effectiveCelex);
@@ -189,11 +193,16 @@ export function LawOverviewPage({
         currentLang={formexLang}
         locale={locale}
         source={data?.source}
+        version={version}
+        versionUnavailable={versionUnavailable}
+        versionDate={versionDate}
+        onToggleVersion={onToggleVersion}
       />
 
       <ConsolidatedFallbackNotice
         source={data?.source}
         consolidatedVersion={data?.consolidatedVersion}
+        version={version}
       />
 
       {/* Actions */}
@@ -219,7 +228,7 @@ export function LawOverviewPage({
         ) : null}
       </div>
 
-      <LawSummary celex={effectiveCelex} lang={formexLang} onArticleClick={onArticleClick} />
+      <LawSummary celex={effectiveCelex} lang={formexLang} version={version} onArticleClick={onArticleClick} />
 
       <MetadataPanel
         amendments={meta.amendments}

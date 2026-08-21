@@ -9,7 +9,7 @@ import { buildCitedByDisplay, isCitedByUnavailableError } from "./citedByDisplay
 
 // `compact` renders the panel for the narrow context rail: no outer gutters
 // and no title row (the rail tab already says "Cited by").
-export function CitedByPanel({ celex, articleNumber, currentLang = "EN", onOpenLaw, compact = false }) {
+export function CitedByPanel({ celex, articleNumber, currentLang = "EN", onOpenLaw, compact = false, insertedInVersion = false }) {
   const { t } = useI18n();
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -30,7 +30,11 @@ export function CitedByPanel({ celex, articleNumber, currentLang = "EN", onOpenL
   }, [celex, articleNumber]);
 
   useEffect(() => {
-    if (!celex || !articleNumber || loaded) return;
+    // An article inserted by amendment (`?version=current`, #149) has no
+    // as-adopted counterpart, so the citation graph — built from the
+    // as-adopted text — has nothing to map to it. Skip the fetch rather than
+    // ask an endpoint that can only ever answer "nothing".
+    if (!celex || !articleNumber || loaded || insertedInVersion) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -59,7 +63,7 @@ export function CitedByPanel({ celex, articleNumber, currentLang = "EN", onOpenL
     return () => {
       cancelled = true;
     };
-  }, [articleNumber, celex, loaded]);
+  }, [articleNumber, celex, loaded, insertedInVersion]);
 
   const retry = useCallback(() => {
     setError(null);
@@ -85,6 +89,17 @@ export function CitedByPanel({ celex, articleNumber, currentLang = "EN", onOpenL
   }), [expanded, payload, t]);
 
   if (!celex || !articleNumber || suppressed) return null;
+
+  if (insertedInVersion) {
+    return (
+      <div className={outerClass}>
+        <div className={`flex items-center gap-2 py-3 text-sm text-gray-500 dark:text-gray-400 ${compact ? "" : "border-y border-gray-200 dark:border-gray-800"}`}>
+          <Link2 size={16} className="shrink-0 text-gray-400 dark:text-gray-500" />
+          <span>{t("citedBy.insertedInVersion")}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !loaded) {
     if (compact) {
