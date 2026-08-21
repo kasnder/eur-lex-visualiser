@@ -333,6 +333,28 @@ test('requested version "current": insertedInVersion is set only on articles wit
   assert.equal(byNumber['2'].insertedInVersion, true, 'Article 2 has no as-adopted counterpart');
 });
 
+test('requested version "current": does not label every article inserted when the as-adopted baseline is empty', async () => {
+  const emptyAsAdoptedPath = writeTempXml(EMPTY_FMX);
+  const consolidatedPath = writeTempXml(CONSOLIDATED_FMX_WITH_TWO_ARTICLES);
+
+  const resolveParsedLaw = createParsedLawResolver({
+    prepareLawPayload: async (celex) => ({
+      servePath: celex === '32013R0575' ? emptyAsAdoptedPath : consolidatedPath,
+    }),
+    fetchConsolidatedVersions: async () => ({ versions: [{ celex: '02013R0575-20260626', date: '2026-06-26' }] }),
+    runSparqlQuery: async () => ({}),
+  });
+
+  const result = await resolveParsedLaw('32013R0575', 'ENG', { version: 'current' });
+
+  assert.equal(result.articles.length, 2);
+  assert.equal(
+    result.articles.some((article) => article.insertedInVersion),
+    false,
+    'an empty baseline cannot prove that any consolidated article was inserted',
+  );
+});
+
 test('requested version "current": falls back with versionUnavailable when no consolidated version exists', async () => {
   const asAdoptedPath = writeTempXml(AS_ADOPTED_FMX_WITH_RECITALS_AND_ARTICLE);
 

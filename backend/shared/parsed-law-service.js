@@ -151,11 +151,13 @@ function createParsedLawResolver({
       }
 
       if (loaded) {
+        const asAdoptedArticles = asAdoptedParsed?.articles || [];
+        const hasUsableAsAdoptedArticleBaseline = asAdoptedArticles.length > 0;
         const asAdoptedArticleNumbers = new Set(
-          (asAdoptedParsed?.articles || []).map((article) => article.article_number),
+          asAdoptedArticles.map((article) => article.article_number),
         );
         const composedArticles = (loaded.parsed.articles || []).map((article) => (
-          asAdoptedArticleNumbers.has(article.article_number)
+          !hasUsableAsAdoptedArticleBaseline || asAdoptedArticleNumbers.has(article.article_number)
             ? article
             : { ...article, insertedInVersion: true }
         ));

@@ -70,6 +70,23 @@ export function useSecondaryLawDocument({ celex, secondaryLang, t, version = nul
           }
         }
 
+        // The backend soft-falls to the as-adopted text when the requested
+        // consolidated version cannot be served. Do not show that fallback in
+        // a parallel-language column: the primary column may still be reading
+        // the current version, which would make the comparison silently mix
+        // two legal versions.
+        if (version && nextData.versionUnavailable) {
+          if (!cancelled) {
+            setLoadError({
+              title: t("lawViewer.structuredVersionUnavailable"),
+              message: t("lawViewer.lawContentUnavailable"),
+              tone: "notice",
+            });
+            setData(EMPTY_LAW_DATA);
+          }
+          return;
+        }
+
         if (!cancelled) setData(nextData);
 
         if (nextData.recitals?.length > 0) {

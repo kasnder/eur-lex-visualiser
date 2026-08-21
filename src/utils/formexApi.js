@@ -274,11 +274,18 @@ function createCombinedLawEnvelope(payload, rawXml = null) {
   const envelope = {
     format: "combined-v1",
     parserVersion: Number.isFinite(reported) ? reported : PARSER_VERSION,
+    cachedAt: Date.now(),
     payload,
   };
   if (rawXml) envelope.rawXml = rawXml;
   return envelope;
 }
+
+// A consolidated version is addressed as "current", so unlike an as-adopted
+// CELEX it can change when EUR-Lex publishes a newer manifestation. Keep the
+// offline convenience bounded; otherwise the first successful (or fallback)
+// response would be served forever.
+const CURRENT_VERSION_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Bump whenever the shape of a cached API payload changes (e.g. renaming a
 // summary field) so stale cache-first entries are invalidated rather than
@@ -1204,7 +1211,14 @@ export async function fetchParsedLaw(celex, lang = "EN", { version = null } = {}
   const cacheKey = makeCacheKey(celex, lang, version);
   return getInFlightRequest(`parsed:${cacheKey}`, async () => {
     const cached = await cacheGet(cacheKey);
-    if (isCombinedLawEnvelope(cached) && cached.parserVersion === PARSER_VERSION) {
+    const isFreshCurrentVersion = version !== "current"
+      || (
+        Number.isFinite(cached?.cachedAt)
+        && Date.now() - cached.cachedAt < CURRENT_VERSION_CACHE_MAX_AGE_MS
+        && cached.payload?.version === "current"
+        && !cached.payload?.versionUnavailable
+      );
+    if (isCombinedLawEnvelope(cached) && cached.parserVersion === PARSER_VERSION && isFreshCurrentVersion) {
       console.log(`[FormexAPI] Cache hit: ${cacheKey}`);
       return cached.payload;
     }
@@ -1224,7 +1238,12 @@ export async function fetchParsedLaw(celex, lang = "EN", { version = null } = {}
     }
 
     const payload = await res.json();
-    if (payloadHasContent(payload)) {
+    // A requested current version that fell back to the as-adopted text is
+    // deliberately not persisted: a transient outage must not poison this
+    // mutable selector until the user clears site data.
+    const cacheablePayload = version !== "current"
+      || (payload.version === "current" && !payload.versionUnavailable);
+    if (payloadHasContent(payload) && cacheablePayload) {
       await cacheSet(cacheKey, createCombinedLawEnvelope(payload));
       await upsertLawMeta(celex, { cachedAt: Date.now() });
       await pruneCacheIfNeeded(celex, PROTECTED_BUNDLED_CELEXES);

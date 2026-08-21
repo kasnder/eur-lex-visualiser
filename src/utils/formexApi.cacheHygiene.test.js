@@ -78,6 +78,7 @@ describe("formexApi cache hygiene", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -198,6 +199,61 @@ describe("formexApi cache hygiene", () => {
       const envelope = await api.getCachedLawPayload("32016R0679", "EN");
       expect(envelope).toMatchObject({ format: "combined-v1", parserVersion: PARSER_VERSION });
       expect(envelope.payload).toEqual(currentPayload);
+    });
+
+    it("revalidates a stale current-version payload", async () => {
+      const firstPayload = {
+        title: "GDPR",
+        articles: [{}],
+        recitals: [],
+        annexes: [],
+        version: "current",
+        versionDate: "2026-01-01",
+      };
+      const secondPayload = { ...firstPayload, versionDate: "2026-02-01" };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(firstPayload))
+        .mockResolvedValueOnce(jsonResponse(secondPayload));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const api = await importFormexApi();
+      await api.fetchParsedLaw("32016R0679", "EN", { version: "current" });
+      await api.fetchParsedLaw("32016R0679", "EN", { version: "current" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(new Date(Date.now() + 25 * 60 * 60 * 1000));
+      await expect(api.fetchParsedLaw("32016R0679", "EN", { version: "current" }))
+        .resolves.toMatchObject({ versionDate: "2026-02-01" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not persist an as-adopted fallback for a failed current-version request", async () => {
+      const fallbackPayload = {
+        title: "GDPR",
+        articles: [{}],
+        recitals: [],
+        annexes: [],
+        versionUnavailable: true,
+      };
+      const currentPayload = {
+        ...fallbackPayload,
+        versionUnavailable: undefined,
+        version: "current",
+        versionDate: "2026-02-01",
+      };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(fallbackPayload))
+        .mockResolvedValueOnce(jsonResponse(currentPayload));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const api = await importFormexApi();
+      await expect(api.fetchParsedLaw("32016R0679", "EN", { version: "current" }))
+        .resolves.toMatchObject({ versionUnavailable: true });
+      expect(await getLawEntry(indexedDb, "32016R0679_ENG_current")).toBeUndefined();
+
+      await expect(api.fetchParsedLaw("32016R0679", "EN", { version: "current" }))
+        .resolves.toMatchObject({ version: "current" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("discards a pre-versioning envelope without raw XML instead of stamping it as current", async () => {
