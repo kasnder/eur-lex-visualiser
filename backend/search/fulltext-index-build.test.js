@@ -12,6 +12,7 @@ const {
   writeManifest,
   FULLTEXT_SCHEMA_VERSION,
 } = require("./fulltext-index-build");
+const { getCurrentParserVersion } = require("./parser-stamp");
 
 const FIXTURE_DIR = path.join(__dirname, "..", "shared", "__fixtures__", "corpus");
 
@@ -249,7 +250,7 @@ test("buildFulltextIndex resumes across two real invocations sharing a celex, wi
   });
   assert.equal(secondSummary.newlyParsed, 1, "the already-indexed act must not be re-parsed");
   assert.equal(secondSummary.actCount, 2);
-  assert.equal(secondSummary.parserVersion, "21,22");
+  assert.equal(secondSummary.parserVersion, `21,${await getCurrentParserVersion()}`);
 
   const db = openFulltextDatabase(outputPath);
   try {

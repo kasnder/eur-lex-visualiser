@@ -15,12 +15,11 @@ const {
   requestWithRetry,
 } = require("./search-build");
 const { writeCorpusXml } = require("./law-corpus-store");
+const { getCurrentParserVersion } = require("./parser-stamp");
 
-// The current PARSER_VERSION at the time these tests were written; kept as a
-// literal (like the assertions below already were) rather than re-deriving it
-// from parser-stamp, so a bump makes these tests fail loudly instead of
-// trivially passing against a moving target.
-const CURRENT_PARSER_VERSION = 22;
+// Read from the parser rather than pinned to a literal: these tests assert the
+// merge/overwrite *rule*, not which version happens to be current, and a
+// routine PARSER_VERSION bump should not turn them red.
 
 const SAMPLE_FMX_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <ACT>
@@ -63,7 +62,7 @@ test("reEnrichCurrentCache merges onto an existing stamp for a default (partial)
   // acts, so this run touches nothing here — it must MERGE onto the
   // existing "21" stamp, not overwrite it with a bare "22" that would
   // falsely claim every record was re-derived by the current parser.
-  assert.deepEqual(JSON.parse(written).parserVersion, [21, CURRENT_PARSER_VERSION]);
+  assert.deepEqual(JSON.parse(written).parserVersion, [21, await getCurrentParserVersion()]);
   assert.ok(written.indexOf('"parserVersion"') < written.indexOf('"records"'));
 });
 
@@ -118,7 +117,7 @@ test("reEnrichCurrentCache writes a bare current version only for a complete re-
   }
 
   const written = fs.readFileSync(cachePath, "utf8");
-  assert.equal(JSON.parse(written).parserVersion, CURRENT_PARSER_VERSION);
+  assert.equal(JSON.parse(written).parserVersion, await getCurrentParserVersion());
   assert.ok(written.indexOf('"parserVersion"') < written.indexOf('"records"'));
 });
 
