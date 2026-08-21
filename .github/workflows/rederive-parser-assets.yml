@@ -251,6 +251,12 @@ jobs:
           CORPUS_BUILD_CONCURRENCY: "2"
           CORPUS_BUILD_FMX_BATCH: "150"
           CORPUS_BUILD_HTML_BATCH: "200"
+          # Halving the batches did not stop the worker deaths -- the third
+          # dispatch still lost fmx#117 and fmx#128 with ~9 GiB free and no
+          # swap, so the 4096 MB worker cap, not the runner's RAM, is what a
+          # batch runs into. Two workers at 6 GiB plus the parent still fits
+          # the observed 8.7 GiB peak comfortably inside 15.6.
+          CORPUS_BUILD_WORKER_HEAP_MB: "6144"
         shell: bash
         run: |
           set -euo pipefail

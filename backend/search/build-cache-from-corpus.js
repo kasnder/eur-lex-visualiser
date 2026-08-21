@@ -85,7 +85,10 @@ const REUSE_FROM_YEAR = 2010;
 const FMX_BATCH = Number(process.env.CORPUS_BUILD_FMX_BATCH) || 300;
 const HTML_BATCH = Number(process.env.CORPUS_BUILD_HTML_BATCH) || 500;
 const CONCURRENCY = Number(process.env.CORPUS_BUILD_CONCURRENCY) || 3;
-const WORKER_HEAP_MB = 4096;
+// Env-overridable like the batch sizes above. A worker that exhausts this cap
+// dies on V8's own fatal handler while the machine still has headroom, so the
+// cap -- not the runner's RAM -- is what bounds a single batch.
+const WORKER_HEAP_MB = Number(process.env.CORPUS_BUILD_WORKER_HEAP_MB) || 4096;
 
 const ELI_SEGMENT = { regulation: "reg", directive: "dir", decision: "dec" };
 
@@ -378,6 +381,51 @@ function spawnWorker(variant, batchPath, outPath) {
   });
 }
 
+// A worker that dies takes its whole batch with it, and nothing retried it: one
+// document heavy enough to exhaust the worker heap cost every record batched
+// alongside it -- 13 such batches across the corpus cost 4,100 records, which is
+// enough on its own to put a bare current-version parser stamp out of reach.
+// Bisect instead, the way citation-graph-build.js already does, so a failure
+// narrows to the documents actually responsible and every other record in the
+// batch still gets written. Sub-batch partials keep the `-out-` infix the
+// resume scan and the raw-record collection both match on.
+function writeBatchFile(variant, items, workDir, runId, tag) {
+  const batchPath = path.join(workDir, `${variant}-batch-${runId}-${tag}.json`);
+  const outPath = path.join(workDir, `${variant}-out-${runId}-${tag}.json`);
+  fs.writeFileSync(batchPath, JSON.stringify(items));
+  return { batchPath, outPath };
+}
+
+async function runBatchBisecting(variant, items, context, tag, casualties = []) {
+  const { workDir, runId, spawn: spawnFn = spawnWorker, log = console.error } = context;
+  const { batchPath, outPath } = writeBatchFile(variant, items, workDir, runId, tag);
+  try {
+    await spawnFn(variant, batchPath, outPath);
+    return casualties;
+  } catch (error) {
+    if (items.length <= 1) {
+      const celex = items[0]?.celex || "(empty batch)";
+      casualties.push({ celex, error: error.message });
+      log(`[corpus-build] ${variant}#${tag} lost ${celex}: ${error.message}`);
+      return casualties;
+    }
+    log(`[corpus-build] ${variant}#${tag} failed on ${items.length} documents; bisecting`);
+    const middle = Math.floor(items.length / 2);
+    await runBatchBisecting(variant, items.slice(0, middle), context, `${tag}a`, casualties);
+    await runBatchBisecting(variant, items.slice(middle), context, `${tag}b`, casualties);
+    return casualties;
+  }
+}
+
+// Throws only for the documents bisection could not rescue, so runPool's
+// failure list counts individual casualties rather than whole batches.
+async function runBatchJob(variant, items, context, tag) {
+  const casualties = await runBatchBisecting(variant, items, context, tag);
+  if (casualties.length > 0) {
+    throw new Error(`${casualties.length} document(s) unparseable: ${casualties.map((c) => c.celex).join(", ")}`);
+  }
+}
+
 async function runPool(jobs, concurrency) {
   let next = 0;
   let done = 0;
@@ -467,20 +515,16 @@ async function driver({ noEurovoc = false, noInForce = false, rederive = false }
   const runId = Date.now().toString(36);
   const jobs = [];
 
-  const fmxBatches = chunk(fmxJobs, FMX_BATCH);
-  fmxBatches.forEach((batch, idx) => {
-    const batchPath = path.join(workDir, `fmx-batch-${runId}-${idx}.json`);
-    const outPath = path.join(workDir, `fmx-out-${runId}-${idx}.json`);
-    fs.writeFileSync(batchPath, JSON.stringify(batch));
-    jobs.push({ label: `fmx#${idx}`, run: () => spawnWorker("fmx", batchPath, outPath) });
+  // Batch files are written by runBatchBisecting as each batch is dispatched,
+  // not all up front, so a bisected retry can write its own narrower ones.
+  const batchContext = { workDir, runId };
+
+  chunk(fmxJobs, FMX_BATCH).forEach((batch, idx) => {
+    jobs.push({ label: `fmx#${idx}`, run: () => runBatchJob("fmx", batch, batchContext, String(idx)) });
   });
 
-  const htmlBatches = chunk(htmlJobs, HTML_BATCH);
-  htmlBatches.forEach((batch, idx) => {
-    const batchPath = path.join(workDir, `html-batch-${runId}-${idx}.json`);
-    const outPath = path.join(workDir, `html-out-${runId}-${idx}.json`);
-    fs.writeFileSync(batchPath, JSON.stringify(batch));
-    jobs.push({ label: `html#${idx}`, run: () => spawnWorker("html", batchPath, outPath) });
+  chunk(htmlJobs, HTML_BATCH).forEach((batch, idx) => {
+    jobs.push({ label: `html#${idx}`, run: () => runBatchJob("html", batch, batchContext, String(idx)) });
   });
 
   console.log(`[corpus-build] Spawning ${jobs.length} worker batches, concurrency=${CONCURRENCY}`);
@@ -682,6 +726,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  runBatchBisecting,
+  runBatchJob,
   buildPrimaryEli,
   inferType,
   listCorpusFiles,

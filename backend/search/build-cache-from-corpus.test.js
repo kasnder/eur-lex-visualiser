@@ -330,3 +330,78 @@ test("driver({ rederive: true }) re-parses the corpus-backed record, preserves t
   // not a complete rederive, so the stamp must merge onto the prior "21".
   assert.deepEqual(payload.parserVersion, [21, await getCurrentParserVersion()]);
 });
+
+// A worker that exhausts its heap cap dies on V8's fatal handler while the
+// machine still has RAM to spare, so the whole batch used to be abandoned: three
+// corpus-wide dispatches each lost the same 4,100 records that way (13 batches),
+// which alone puts a bare current-version parser stamp out of reach. Bisection
+// narrows a failure to the documents actually responsible.
+test("bisecting a failed batch rescues every document except the poison one", async () => {
+  const { runBatchBisecting } = require("./build-cache-from-corpus.js");
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-bisect-"));
+  try {
+    const items = Array.from({ length: 8 }, (_, i) => ({ celex: `CELEX${i}`, file: `/corpus/${i}.xml.gz` }));
+    const poison = "CELEX5";
+    const parsed = [];
+
+    const spawn = async (variant, batchPath, outPath) => {
+      const batch = JSON.parse(fs.readFileSync(batchPath, "utf8"));
+      if (batch.some((entry) => entry.celex === poison)) {
+        throw new Error("worker exited null: heap out of memory");
+      }
+      parsed.push(...batch.map((entry) => entry.celex));
+      fs.writeFileSync(outPath, JSON.stringify(batch));
+    };
+
+    const casualties = await runBatchBisecting(
+      "fmx", items, { workDir, runId: "test", spawn, log: () => {} }, "0",
+    );
+
+    assert.deepEqual(casualties.map((c) => c.celex), [poison]);
+    // All seven survivors were written, rather than dying alongside the poison.
+    assert.deepEqual(parsed.sort(), items.map((i) => i.celex).filter((c) => c !== poison).sort());
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("bisected partials keep the -out- infix the resume scan matches", async () => {
+  const { runBatchBisecting } = require("./build-cache-from-corpus.js");
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-bisect-"));
+  try {
+    const items = Array.from({ length: 4 }, (_, i) => ({ celex: `C${i}`, file: `/corpus/${i}.xml.gz` }));
+    const spawn = async (variant, batchPath, outPath) => {
+      const batch = JSON.parse(fs.readFileSync(batchPath, "utf8"));
+      if (batch.length > 1) throw new Error("worker exited null: heap out of memory");
+      fs.writeFileSync(outPath, JSON.stringify(batch));
+    };
+
+    await runBatchBisecting("fmx", items, { workDir, runId: "test", spawn, log: () => {} }, "0");
+
+    const partials = fs.readdirSync(workDir).filter((f) => /-out-.*\.json$/.test(f));
+    assert.equal(partials.length, 4, "each single-document sub-batch wrote a partial");
+    const celexes = partials.flatMap((f) => JSON.parse(fs.readFileSync(path.join(workDir, f), "utf8")).map((r) => r.celex));
+    assert.deepEqual(celexes.sort(), ["C0", "C1", "C2", "C3"]);
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("a clean batch never bisects and reports no casualties", async () => {
+  const { runBatchBisecting } = require("./build-cache-from-corpus.js");
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-bisect-"));
+  try {
+    const items = Array.from({ length: 6 }, (_, i) => ({ celex: `C${i}`, file: `/corpus/${i}.html.gz` }));
+    let spawns = 0;
+    const spawn = async (variant, batchPath, outPath) => {
+      spawns += 1;
+      fs.writeFileSync(outPath, fs.readFileSync(batchPath));
+    };
+
+    const casualties = await runBatchBisecting("html", items, { workDir, runId: "test", spawn, log: () => {} }, "0");
+    assert.deepEqual(casualties, []);
+    assert.equal(spawns, 1, "no extra worker spawns when the batch succeeds");
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
