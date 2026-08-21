@@ -1599,6 +1599,108 @@ describe("definition extraction beyond the titled definitions article", () => {
     expect(result.definitions).toEqual([]);
   });
 
+  it("extracts annexes from consolidated (CONS.ACT / CONS.ANNEX) documents", () => {
+    // Consolidated ("as amended") EUR-Lex documents root at <CONS.ACT> and name
+    // their annexes <CONS.ANNEX> rather than <ANNEX> — a distinct element name,
+    // not a variant the plain "ANNEX" selector matches. Unhandled, this parsed
+    // every consolidated document (REACH, the consolidated CRR, etc.) with
+    // annexes: [] even though the annex content was present in the source.
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<COMBINED.FMX>
+  <CONS.ACT>
+    <TITLE><TI><P>Consolidated text of Regulation (EU) No 575/2013</P></TI></TITLE>
+    <ENACTING.TERMS>
+      <ARTICLE>
+        <TI.ART>Article 1</TI.ART>
+        <ALINEA><P>This Regulation lays down uniform rules.</P></ALINEA>
+      </ARTICLE>
+    </ENACTING.TERMS>
+  </CONS.ACT>
+  <CONS.ANNEX>
+    <TITLE>
+      <TI><P>ANNEX I</P></TI>
+      <STI><P>Classification of off-balance-sheet items</P></STI>
+    </TITLE>
+    <CONTENTS><P>Full risk items.</P></CONTENTS>
+  </CONS.ANNEX>
+  <CONS.ANNEX>
+    <TITLE>
+      <TI><P>ANNEX II</P></TI>
+      <STI><P>Types of derivatives</P></STI>
+    </TITLE>
+    <CONTENTS><P>Interest-rate contracts.</P></CONTENTS>
+  </CONS.ANNEX>
+</COMBINED.FMX>`;
+
+    const result = parseFmxToCombined(xml);
+    expect(result.annexes).toHaveLength(2);
+    expect(result.annexes[0].annex_id).toBe("I");
+    expect(result.annexes[0].annex_title).toBe("ANNEX I — Classification of off-balance-sheet items");
+    expect(result.annexes[0].annex_html.length).toBeGreaterThan(0);
+    expect(result.annexes[1].annex_id).toBe("II");
+    expect(result.annexes[1].annex_title).toBe("ANNEX II — Types of derivatives");
+    expect(result.annexes[1].annex_html.length).toBeGreaterThan(0);
+  });
+
+  it("does not let a CONS.ANNEX article shadow an enacting article of the same number", () => {
+    // Same shadowing bug as "does not let an annex article shadow an enacting
+    // article of the same number" above, but for consolidated documents. A
+    // <CONS.ANNEX> routinely restarts its own "Article 1", just like a plain
+    // <ANNEX> — but before this fix, articleElementsByNumber's exclusion only
+    // checked closest("ANNEX"), so a CONS.ANNEX article was never excluded.
+    // Because *every* consolidated document roots its annexes at CONS.ANNEX,
+    // this made the shadowing bug reachable in every single one of them, not
+    // just the odd malformed document.
+    //
+    // articleElementsByNumber resolves each identifier first-wins in document
+    // order, so the CONS.ANNEX is placed before CONS.ACT here to put its
+    // restarted <ARTICLE IDENTIFIER="001"> ahead of the real one — the exact
+    // ordering that would let it win the map slot were it not excluded, so
+    // this genuinely exercises the guard rather than merely repeating an
+    // identifier the map would resolve correctly by document order alone.
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<COMBINED.FMX>
+  <CONS.ANNEX>
+    <TITLE><TI>ANNEX</TI></TITLE>
+    <CONTENTS>
+      <ARTICLE IDENTIFIER="001">
+        <TI.ART>Article 1</TI.ART>
+        <ALINEA>
+          <P>For the purposes of this Annex, the following definitions apply:</P>
+          <LIST TYPE="ARAB">
+            <ITEM><NP><NO.P>(a)</NO.P><TXT>${quoted("annex term")} means something specific to the annex.</TXT></NP></ITEM>
+          </LIST>
+        </ALINEA>
+      </ARTICLE>
+    </CONTENTS>
+  </CONS.ANNEX>
+  <CONS.ACT>
+    <TITLE><TI><P>Consolidated text of Regulation (EU) No 575/2013</P></TI></TITLE>
+    <ENACTING.TERMS>
+      <ARTICLE IDENTIFIER="001">
+        <TI.ART>Article 1</TI.ART>
+        <STI.ART>Definitions</STI.ART>
+        <ALINEA>
+          <P>For the purposes of this Regulation, the following definitions apply:</P>
+          <LIST TYPE="ARAB">
+            <ITEM><NP><NO.P>(a)</NO.P><TXT>${quoted("own funds")} means the sum of Tier 1 capital and Tier 2 capital;</TXT></NP></ITEM>
+          </LIST>
+        </ALINEA>
+      </ARTICLE>
+    </ENACTING.TERMS>
+  </CONS.ACT>
+</COMBINED.FMX>`;
+
+    const result = parseFmxToCombined(xml);
+
+    // The enacting Article 1's own definition must come through untouched...
+    expect(result.definitions).toHaveLength(1);
+    expect(result.definitions[0]).toMatchObject({ term: "own funds", sourceArticle: "1" });
+    // ...and the CONS.ANNEX article's "Article 1" must never be the one that
+    // articleElementsByNumber resolves "1" to, so its term must not surface.
+    expect(result.definitions.some((d) => d.term === "annex term")).toBe(false);
+  });
+
   it("does not corroborate an untitled article from SV's quote-less colon fallback", () => {
     // 32013R0575 SWE gained ~31 junk definitions this way in production: the
     // SV fallback pattern (buildFallbackDefRegex) needs no quote characters
@@ -1647,6 +1749,76 @@ describe("definition extraction beyond the titled definitions article", () => {
       </ARTICLE>`));
 
     expect(result.definitions.map((d) => d.term)).toEqual(["kreditinstitut"]);
+  });
+
+  it("reads an unquoted 'term: means …' definition (REACH's own drafting style)", () => {
+    // Regulation (EC) No 1907/2006 (REACH), Article 3: every one of its 44
+    // definitions states an unquoted term followed by a colon and "means" —
+    // no QUOT.START/QUOT.END anywhere in the article — which both
+    // buildMeansRegex and buildFallbackDefRegex miss entirely because they
+    // require quote characters around the term.
+    const result = parseFmxToCombined(actWithArticles(`
+      <ARTICLE IDENTIFIER="003">
+        <TI.ART>Article 3</TI.ART>
+        <STI.ART>Definitions</STI.ART>
+        <ALINEA>
+          <P>For the purposes of this Regulation:</P>
+          <LIST TYPE="ARAB">
+            <ITEM><NP><NO.P>1.</NO.P><TXT>substance: means a chemical element and its compounds in the natural state or obtained by any manufacturing process.</TXT></NP></ITEM>
+            <ITEM><NP><NO.P>3.</NO.P><TXT>article: means an object which during production is given a special shape, surface or design.</TXT></NP></ITEM>
+          </LIST>
+        </ALINEA>
+      </ARTICLE>`));
+
+    expect(result.definitions.map((d) => d.term)).toEqual(["substance", "article"]);
+    expect(result.definitions[0].definition).toBe(
+      "a chemical element and its compounds in the natural state or obtained by any manufacturing process."
+    );
+  });
+
+  it("does not treat a bare unquoted 'term: definition' with no verb as a definition", () => {
+    // The guard against over-matching: an unquoted term is only trusted when
+    // the meansVerb immediately follows the colon. Without it, this shape is
+    // indistinguishable from ordinary prose ("Member States shall ensure
+    // that: …") and must not become a definition, even in a titled
+    // definitions article where the corroboration bar would otherwise wave
+    // it through.
+    const result = parseFmxToCombined(actWithArticles(`
+      <ARTICLE IDENTIFIER="003">
+        <TI.ART>Article 3</TI.ART>
+        <STI.ART>Definitions</STI.ART>
+        <ALINEA>
+          <P>For the purposes of this Regulation:</P>
+          <LIST TYPE="ARAB">
+            <ITEM><NP><NO.P>1.</NO.P><TXT>substance: a chemical element and its compounds in the natural state.</TXT></NP></ITEM>
+          </LIST>
+        </ALINEA>
+      </ARTICLE>`));
+
+    expect(result.definitions).toEqual([]);
+  });
+
+  it("does not read unquoted 'term: means …' in an article that is not titled Definitions", () => {
+    // Deliberately conservative: the unquoted shape is flagged NOT `quoted`,
+    // so — exactly like LT/SV's quote-less fallback — it cannot clear the
+    // corroboration bar in an article that does not declare itself a
+    // definitions article. Acts drafted this way (REACH) title the article,
+    // so nothing real is lost, and ordinary operative text that happens to
+    // put a meansVerb after a colon twice cannot manufacture definitions.
+    const result = parseFmxToCombined(actWithArticles(`
+      <ARTICLE IDENTIFIER="012">
+        <TI.ART>Article 12</TI.ART>
+        <STI.ART>Obligations of manufacturers</STI.ART>
+        <ALINEA>
+          <P>For the purposes of this Article:</P>
+          <LIST TYPE="ARAB">
+            <ITEM><NP><NO.P>1.</NO.P><TXT>substance: means a chemical element and its compounds in the natural state.</TXT></NP></ITEM>
+            <ITEM><NP><NO.P>2.</NO.P><TXT>article: means an object which during production is given a special shape.</TXT></NP></ITEM>
+          </LIST>
+        </ALINEA>
+      </ARTICLE>`));
+
+    expect(result.definitions).toEqual([]);
   });
 });
 
