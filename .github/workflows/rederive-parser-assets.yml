@@ -146,7 +146,7 @@ jobs:
     needs: resolve
     if: ${{ needs.resolve.outputs.want_search_cache == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -234,10 +234,23 @@ jobs:
           find checkpoint -name '*-out-*.json' -type f -exec mv -t "$workdir" {} +
           echo "Resumed $partials parsed batch partials from a previous dispatch." >> "$GITHUB_STEP_SUMMARY"
 
+      # Both earlier dispatches lost the same 13 HTML worker batches to OOM --
+      # identical `missed: 4100`, identical `parserVersion stamp: null`, peak
+      # 13.7 GiB and 13.4 GiB of 15.6 with swap engaged. The workers died on
+      # V8's own fatal handler, i.e. they hit their 4096 MB cap (a code
+      # constant, not env-overridable), so the lever is batch size: jsdom
+      # memory is not fully released between documents, and 500 HTML documents
+      # in one batch can cluster enough large ones to exceed that cap. Smaller
+      # batches cap per-worker growth; two workers instead of three keeps the
+      # machine off swap, which is also what made the second pass 129 minutes
+      # against the first pass's 76.
       - name: Rederive search-cache.json from the corpus
         working-directory: backend
         env:
           CORPUS_BUILD_WORKDIR: ${{ github.workspace }}/rederive-work/corpus-build
+          CORPUS_BUILD_CONCURRENCY: "2"
+          CORPUS_BUILD_FMX_BATCH: "150"
+          CORPUS_BUILD_HTML_BATCH: "200"
         shell: bash
         run: |
           set -euo pipefail
@@ -246,11 +259,14 @@ jobs:
             | tee ../rederive-output/search-cache-build.log
           test -s search/data/search-cache.json
 
-      # Runs on timeout/cancellation too, so the batches parsed so far survive
-      # for the next dispatch. A successful pass removes its own work dir, so
-      # this uploads nothing then.
+      # always(), not just failure/cancellation: the build exits 0 even when
+      # worker batches died, and keeps its work dir precisely then ("Kept ...
+      # for resume (13 batches failed)"). That partial success is the case that
+      # most needs resuming, and a failure-only condition skipped it -- both
+      # earlier dispatches discarded 76k parsed records that way. A clean pass
+      # deletes its own work dir, so this uploads nothing then.
       - name: Upload interrupted search-cache checkpoint
-        if: ${{ failure() || cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: rederive-search-cache-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
@@ -258,6 +274,22 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           retention-days: 14
+
+      # Fail here rather than three jobs and several hours later in validate.
+      # A run that misses any corpus-covered record cannot claim a bare current
+      # stamp, so its cache is unpublishable the moment it is written -- but
+      # the build still exits 0, and the citation-graph, definitions and
+      # fulltext passes would each run to completion before the gate noticed.
+      # The checkpoint above is already uploaded when this fires, so the next
+      # dispatch retries only the records this one missed.
+      - name: Assert the rederived cache carries a current parser stamp
+        working-directory: backend
+        env:
+          ALLOW_PARSER_DRIFT: ""
+        shell: bash
+        run: |
+          set -euo pipefail
+          node search/assert-parser-freshness.js --search-cache search/data/search-cache.json
 
       - name: Validate and package the candidate search cache
         working-directory: backend
