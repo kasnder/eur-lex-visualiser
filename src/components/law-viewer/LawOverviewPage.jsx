@@ -223,7 +223,7 @@ export function LawOverviewPage({
         ) : null}
       </div>
 
-      <LawSummary celex={effectiveCelex} lang={formexLang} onArticleClick={onArticleClick} />
+      <LawSummary celex={effectiveCelex} lang={formexLang} version={version} onArticleClick={onArticleClick} />
 
       <MetadataPanel
         amendments={meta.amendments}

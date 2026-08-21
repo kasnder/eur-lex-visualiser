@@ -456,7 +456,9 @@
     "scope": "Scope",
     "keyPoints": "Key points",
     "structure": "Structure",
-    "generatedOn": "Static summary generated {date}"
+    "generatedOn": "Static summary generated {date}",
+    "asAdoptedBadge": "As adopted",
+    "asAdoptedNote": "This overview describes the law as adopted. It is not regenerated for the amended text, so it does not reflect later amendments."
   },
   "consolidation": {
     "asAdopted": "You are reading this law as adopted.",

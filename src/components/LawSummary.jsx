@@ -44,11 +44,16 @@ function SectionLabel({ children }) {
   );
 }
 
-export function LawSummary({ celex, lang = "EN", onArticleClick, className = "rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900" }) {
+export function LawSummary({ celex, lang = "EN", version = null, onArticleClick, className = "rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900" }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(true);
   const { summary, metadata, loading, loaded, error, retry } = useLawSummary(celex);
   const showEnglishOnlyNote = (lang || "EN").toUpperCase() !== "EN";
+  // The summary endpoint has no version dimension: it is generated from the
+  // act as adopted and served unchanged whichever version is being read. That
+  // is only worth saying when the two diverge — labelling an as-adopted
+  // overview "as adopted" while reading the as-adopted text is noise.
+  const showAsAdoptedNote = Boolean(version);
 
   if (!celex) return null;
 
@@ -67,6 +72,11 @@ export function LawSummary({ celex, lang = "EN", onArticleClick, className = "ro
             {t("lawSummary.englishOnly")}
           </span>
         ) : null}
+        {showAsAdoptedNote ? (
+          <span className="shrink-0 rounded border border-amber-300 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:text-amber-400">
+            {t("lawSummary.asAdoptedBadge")}
+          </span>
+        ) : null}
         <span className="ml-auto hidden shrink-0 text-[11.5px] text-gray-400 dark:text-gray-500 sm:inline">
           {t("lawSummary.verifyNote")}
         </span>
@@ -77,6 +87,11 @@ export function LawSummary({ celex, lang = "EN", onArticleClick, className = "ro
 
       {open ? (
         <div className="space-y-4 px-5 py-4 text-sm leading-6 text-gray-700 dark:text-gray-300">
+          {showAsAdoptedNote ? (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] leading-5 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              {t("lawSummary.asAdoptedNote")}
+            </p>
+          ) : null}
           {loading && !loaded ? (
             <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
               <Loader2 size={14} className="animate-spin" />
