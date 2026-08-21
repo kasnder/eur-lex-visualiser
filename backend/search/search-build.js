@@ -12,6 +12,7 @@ const { readCorpusXml, writeCorpusXml } = require("./law-corpus-store");
 const { mergeCorpusDates } = require("./law-corpus-dates");
 const { enrichRecordsWithEurovoc } = require("./eurovoc-enrich");
 const { enrichRecordsWithInForce } = require("./in-force-enrich");
+const { getCurrentParserVersion, mergeParserStamp } = require("./parser-stamp");
 
 const execFileAsync = promisify(execFile);
 const SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql";
@@ -814,6 +815,12 @@ async function enrichRecords(records, options = {}) {
   let processed = 0;
   let enriched = 0;
   let failed = 0;
+  // Counts records whose enrichment threw and therefore kept their prior
+  // excerpt untouched (see the catch branch below) — i.e. records that were
+  // NOT genuinely re-derived at the current parser version. reEnrichCurrentCache
+  // uses this to decide whether a run is eligible to claim a bare parserVersion
+  // stamp for the whole payload.
+  let excerptFallback = 0;
 
   for (let batchStart = 0; batchStart < eligibleIndices.length; batchStart += concurrency) {
     const batchIndices = eligibleIndices.slice(batchStart, batchStart + concurrency);
@@ -821,6 +828,7 @@ async function enrichRecords(records, options = {}) {
     const batchResults = await Promise.all(batchIndices.map(async (index) => {
       const current = records[index];
       const next = { ...current };
+      let fellBackToPreviousExcerpt = false;
       try {
         const titleResult = await extractOfficialTitleWithFallback(current.celex, { corpusDir, htmlFallback });
         if (titleResult.title) next.title = normalizeTitle(titleResult.title);
@@ -832,12 +840,16 @@ async function enrichRecords(records, options = {}) {
           ? (titleResult.fmxError?.message || null)
           : null;
       } catch (error) {
+        // next.excerpt still holds current.excerpt here (next was seeded from
+        // current and never overwritten) — this is a deliberate fallback to
+        // the previous excerpt, not a fresh re-derive at the current parser.
         next.excerpt = next.excerpt || "";
         next.fmxAvailable = false;
         next.fmxUnavailable = String(error.message || error).includes("No FMX URI found");
         next.enrichError = error.message;
+        fellBackToPreviousExcerpt = true;
       }
-      return { index, record: enrichSearchRecord(next) };
+      return { index, record: enrichSearchRecord(next), fellBackToPreviousExcerpt };
     }));
 
     for (const result of batchResults) {
@@ -847,6 +859,9 @@ async function enrichRecords(records, options = {}) {
         enriched += 1;
       } else {
         failed += 1;
+      }
+      if (result.fellBackToPreviousExcerpt) {
+        excerptFallback += 1;
       }
     }
 
@@ -887,6 +902,7 @@ async function enrichRecords(records, options = {}) {
     processed,
     enriched,
     failed,
+    excerptFallback,
     complete: true,
   };
 }
@@ -926,11 +942,37 @@ async function reEnrichCurrentCache(options = {}) {
     }
   });
 
+  const currentParserVersion = await getCurrentParserVersion();
+  // A bare stamp of the current version is only true when this run genuinely
+  // re-derived every single record at that version: no title/primary-act
+  // filter left records untouched, no maxRecords cap truncated the pass short
+  // of the full record set, and no record fell back to its previous excerpt
+  // after a failed re-enrichment (see the `excerptFallback` counter in
+  // enrichRecords). Any of those makes this a partial pass, and a partial
+  // pass must MERGE onto whatever stamp the payload already carried —
+  // otherwise records this run never touched (most of them, by default)
+  // would be falsely claimed as current, which is exactly the false-fresh
+  // stamp assert-parser-freshness.js exists to catch.
+  const isCompleteRederive = !onlyMissingTitles
+    && !primaryActsOnly
+    && !maxRecords
+    && enrichResult.excerptFallback === 0
+    && enrichResult.processed === records.length;
+  const parserVersion = isCompleteRederive
+    ? currentParserVersion
+    : mergeParserStamp(payload.parserVersion, currentParserVersion);
+  const generatedAt = new Date().toISOString();
   const nextPayload = {
+    generatedAt,
+    parserVersion,
+    records: enrichResult.records,
     ...payload,
-    generatedAt: new Date().toISOString(),
-    records: enrichResult.records
   };
+  // Keep the header order stable even when the input was a legacy unstamped
+  // payload (or carried an older stamp): parserVersion must precede records.
+  nextPayload.generatedAt = generatedAt;
+  nextPayload.parserVersion = parserVersion;
+  nextPayload.records = enrichResult.records;
   nextPayload.count = nextPayload.records.length;
 
   await attachEurovocTopics(nextPayload.records, options, logProgress);
@@ -1089,10 +1131,12 @@ async function buildSearchCache(options = {}) {
     },
   });
 
+  const parserVersion = await getCurrentParserVersion();
   const payload = {
     generatedAt: new Date().toISOString(),
     fromYear,
     toYear,
+    parserVersion,
     records: enrichResult.records
       .filter((record) => record.isPrimaryAct)
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))

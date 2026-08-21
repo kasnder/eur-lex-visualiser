@@ -8,6 +8,7 @@ const zlib = require("node:zlib");
 
 const { backfillCache, readCelexIds } = require("./backfill-cache");
 const { buildCelexQuery, harvestActsByCelex } = require("./search-build");
+const { getCurrentParserVersion } = require("./parser-stamp");
 
 function tempCache(payload, { gzip = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backfill-"));
@@ -49,6 +50,7 @@ test("backfillCache adds a missing record with the shipped record shape", async 
   assert.deepEqual(result.addedIds, ["32014D0055"]);
   const written = JSON.parse(fs.readFileSync(cachePath, "utf8"));
   assert.equal(written.count, 2);
+  assert.equal(written.parserVersion, null);
   const added = written.records.find((r) => r.celex === "32014D0055");
   // enrichSearchRecord's derived fields must be baked in, like the swept records.
   assert.equal(added.isPrimaryAct, true);
@@ -95,6 +97,25 @@ test("backfillCache round-trips a gzipped cache", async () => {
   const written = JSON.parse(zlib.gunzipSync(fs.readFileSync(cachePath)).toString("utf8"));
   assert.equal(written.count, 1);
   assert.equal(written.records[0].celex, "32014D0055");
+});
+
+test("backfillCache merges the current parser version with an existing stamp", async () => {
+  const cachePath = tempCache({ count: 0, parserVersion: 21, records: [] });
+
+  await backfillCache({
+    cachePath,
+    celex: "32014D0055",
+    corpusDir: null,
+    eurovoc: false,
+    inForce: false,
+    harvestImpl: async () => [{
+      celex: "32014D0055", title: "Decision", date: "2014-12-15",
+      eli: "http://data.europa.eu/eli/dec/2015/425/oj", type: "decision"
+    }],
+    enrichImpl: async () => {}
+  });
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(cachePath, "utf8")).parserVersion, [21, await getCurrentParserVersion()]);
 });
 
 // isPrimaryAct is derived from the ELI, so a record without a primary one would

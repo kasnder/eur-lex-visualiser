@@ -129,6 +129,17 @@ jobs:
           test -s backend/search/data/search-cache.json
           test -s backend/law-cache/case-law-cache-v5.json
 
+      - name: Assert parser freshness of restored data inputs
+        env:
+          ALLOW_PARSER_DRIFT: ${{ vars.ALLOW_PARSER_DRIFT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node backend/search/assert-parser-freshness.js \
+            --search-cache backend/search/data/search-cache.json \
+            --citation-graph refresh-inputs/citation-graph.json.gz \
+            --definitions refresh-inputs/definitions.json.gz
+
       - name: Add corpus acts missing from the cache
         working-directory: backend
         shell: bash

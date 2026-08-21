@@ -1,0 +1,1175 @@
+name: Rederive parser assets
+
+# One-off, offline, corpus-wide re-derive of the precomputed release assets
+# after a parser fix, so they all carry the current parser stamp (issue #180).
+#
+# The normal refresh workflows cannot do this:
+#   - refresh-data.yml only packages assets when the search/case-law hash
+#     changed, so a citation-graph/definitions-only rebuild publishes nothing.
+#   - refresh-fulltext.yml sets `changed` purely from actCount > baseline, so a
+#     fresh index over the same acts is built and then discarded, and its
+#     checkpoint step only adopts a checkpoint with MORE acts than the
+#     published index -- a partial fresh rebuild is always thrown away there.
+#   - Both open separate one-argument Docker tag-bump PRs; this opens one PR
+#     bumping both DATA_RELEASE_TAG and FULLTEXT_RELEASE_TAG together.
+#
+# Every builder below writes to a brand-new output path -- never over a
+# restored/published input -- and the whole candidate set is gated on
+# backend/search/assert-parser-freshness.js passing with no
+# ALLOW_PARSER_DRIFT escape before anything is published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_search_cache:
+        description: Rederive search-cache.json (MiniSearch metadata cache)
+        type: boolean
+        default: true
+      rebuild_citation_graph:
+        description: Rederive citation-graph.json (reverse-citation graph)
+        type: boolean
+        default: true
+      rebuild_definitions:
+        description: Rederive definitions.json (definition index)
+        type: boolean
+        default: true
+      rebuild_fulltext:
+        description: Rederive fulltext.sqlite (full-text index, cold build)
+        type: boolean
+        default: true
+      dry_run:
+        description: Validate everything but publish no release and open no PR
+        type: boolean
+        default: false
+      allow_non_default_ref:
+        description: Allow a deliberate test run from a non-default parser ref
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rederive-parser-assets
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Resolve current release tags and which assets this run will rebuild.
+  # ---------------------------------------------------------------------
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      data_tag: ${{ steps.tags.outputs.data_tag }}
+      fulltext_tag: ${{ steps.tags.outputs.fulltext_tag }}
+      corpus_tag: ${{ steps.tags.outputs.corpus_tag }}
+      parser_version: ${{ steps.tags.outputs.parser_version }}
+      want_search_cache: ${{ steps.wants.outputs.search_cache }}
+      want_citation_graph: ${{ steps.wants.outputs.citation_graph }}
+      want_definitions: ${{ steps.wants.outputs.definitions }}
+      want_fulltext: ${{ steps.wants.outputs.fulltext }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reject non-default dispatch refs unless explicitly overridden
+        if: ${{ github.ref_name != github.event.repository.default_branch && github.event.inputs.allow_non_default_ref != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::Ref '${{ github.ref_name }}' is not the repository default branch '${{ github.event.repository.default_branch }}'. Publishing parser-derived assets from this ref could stamp assets with a parser that is not running on the default branch; set allow_non_default_ref=true only for a deliberate test run after accepting that risk." >&2
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Resolve current release tags and latest corpus
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          data_tags=$(sed -n 's/^ARG DATA_RELEASE_TAG=//p' backend/Dockerfile)
+          test "$(printf '%s\n' "$data_tags" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
+          data_tag=$(printf '%s\n' "$data_tags" | sed -n '1p')
+          .github/scripts/release-tags.sh validate data "$data_tag"
+
+          fulltext_tags=$(sed -n 's/^ARG FULLTEXT_RELEASE_TAG=//p' backend/Dockerfile)
+          test "$(printf '%s\n' "$fulltext_tags" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
+          fulltext_tag=$(printf '%s\n' "$fulltext_tags" | sed -n '1p')
+          .github/scripts/release-tags.sh validate fulltext "$fulltext_tag"
+
+          corpus_tag=$(.github/scripts/release-tags.sh latest corpus)
+          parser_version=$(node -e 'require("./backend/search/parser-stamp").getCurrentParserVersion().then((v) => process.stdout.write(String(v)))')
+
+          {
+            echo "data_tag=$data_tag"
+            echo "fulltext_tag=$fulltext_tag"
+            echo "corpus_tag=$corpus_tag"
+            echo "parser_version=$parser_version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Current data release: $data_tag"
+            echo "Current fulltext release: $fulltext_tag"
+            echo "Latest immutable corpus: $corpus_tag"
+            echo "Current parser version: $parser_version"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Determine which assets to rederive
+        id: wants
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "search_cache=${{ github.event.inputs.rebuild_search_cache }}"
+            echo "citation_graph=${{ github.event.inputs.rebuild_citation_graph }}"
+            echo "definitions=${{ github.event.inputs.rebuild_definitions }}"
+            echo "fulltext=${{ github.event.inputs.rebuild_fulltext }}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Rebuilding: search-cache=${{ github.event.inputs.rebuild_search_cache }} citation-graph=${{ github.event.inputs.rebuild_citation_graph }} definitions=${{ github.event.inputs.rebuild_definitions }} fulltext=${{ github.event.inputs.rebuild_fulltext }} (dry_run=${{ github.event.inputs.dry_run }})" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # search-cache.json -- offline, corpus-wide MiniSearch metadata rebuild.
+  #
+  # build-cache-from-corpus.js --rederive requires an existing cache at
+  # search/data/search-cache.json (it refreshes title/excerpt for every
+  # already-present CELEX by reparsing its corpus file, for every year, with
+  # no year floor -- it never adds new CELEX ids, and leaves date/eurovoc/
+  # in-force fields untouched). The currently published cache is restored
+  # into that path below so it has something to refresh; the write-back is
+  # in place by design (backed up to search-cache.json.bak first), which is
+  # fine here since it is this job's only output, not shared with anything
+  # else in this workflow.
+  # ---------------------------------------------------------------------
+  rebuild-search-cache:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.want_search_cache == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
+
+      - name: Download corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rederive-inputs rederive-output backend/search/data
+          gh release download "${{ needs.resolve.outputs.corpus_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern laws.tar \
+            --pattern laws-html.tar \
+            --dir rederive-inputs
+          for archive in laws.tar laws-html.tar; do
+            test -s "rederive-inputs/$archive" || { echo "Missing corpus asset: $archive" >&2; exit 1; }
+            tar -xf "rederive-inputs/$archive" -C backend/search/data
+          done
+          test -d backend/search/data/laws
+          test -d backend/search/data/laws-html
+
+      - name: Download and restore the currently published search cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "${{ needs.resolve.outputs.data_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern search-cache.json.gz \
+            --dir rederive-inputs
+          test -s rederive-inputs/search-cache.json.gz
+          gzip -cd rederive-inputs/search-cache.json.gz > backend/search/data/search-cache.json
+          test -s backend/search/data/search-cache.json
+
+      - name: Rederive search-cache.json from the corpus
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --max-old-space-size=8192 search/build-cache-from-corpus.js --rederive \
+            | tee ../rederive-output/search-cache-build.log
+          test -s search/data/search-cache.json
+
+      - name: Validate and package the candidate search cache
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          stats=$(node search/json-stream-stats.js search/data/search-cache.json --mode records)
+          count=$(jq -er '.count | numbers' <<< "$stats")
+          test "$count" -gt 0 || { echo "Rederived search cache has no records" >&2; exit 1; }
+          echo "Rederived search cache: $count records." >> "$GITHUB_STEP_SUMMARY"
+          gzip --best --stdout search/data/search-cache.json > ../rederive-output/search-cache.json.gz
+          gzip --test ../rederive-output/search-cache.json.gz
+          test -s ../rederive-output/search-cache.json.gz
+
+      - name: Upload candidate search cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-search-cache-${{ github.run_id }}
+          path: rederive-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # citation-graph.json -- largest RAM risk (shards retained, then copied
+  # into a second parent array; some acts need ~4 GB against the 768 MB
+  # worker default), no incremental path, so a timeout costs a full restart
+  # of this asset alone -- hence its own job.
+  #
+  # Consumes the just-rebuilt search cache when one was produced this run
+  # (ordering via `needs`), otherwise the currently published one.
+  # ---------------------------------------------------------------------
+  rebuild-citation-graph:
+    needs: [resolve, rebuild-search-cache]
+    if: ${{ !cancelled() && needs.resolve.outputs.want_citation_graph == 'true' && (needs.rebuild-search-cache.result == 'success' || needs.rebuild-search-cache.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
+
+      - name: Download corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rederive-inputs rederive-output backend/search/data backend/law-cache
+          gh release download "${{ needs.resolve.outputs.corpus_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern laws.tar \
+            --pattern laws-html.tar \
+            --dir rederive-inputs
+          for archive in laws.tar laws-html.tar; do
+            test -s "rederive-inputs/$archive" || { echo "Missing corpus asset: $archive" >&2; exit 1; }
+            tar -xf "rederive-inputs/$archive" -C backend/search/data
+          done
+          test -d backend/search/data/laws
+          test -d backend/search/data/laws-html
+
+      - name: Download search-cache resolver input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.resolve.outputs.want_search_cache }}" = true ] && [ "${{ needs.rebuild-search-cache.result }}" = success ]; then
+            echo "Using this run's rederived search cache." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p from-search-cache-job
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "rederive-search-cache-${{ github.run_id }}" \
+              --dir from-search-cache-job
+            cp from-search-cache-job/search-cache.json.gz rederive-inputs/search-cache.json.gz
+          else
+            echo "Using the currently published search cache ($( echo '${{ needs.resolve.outputs.data_tag }}' ))." >> "$GITHUB_STEP_SUMMARY"
+            gh release download "${{ needs.resolve.outputs.data_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern search-cache.json.gz \
+              --dir rederive-inputs
+          fi
+          test -s rederive-inputs/search-cache.json.gz
+
+          gh release download "${{ needs.resolve.outputs.data_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern case-law-cache.json.gz \
+            --dir rederive-inputs
+          test -s rederive-inputs/case-law-cache.json.gz
+          gzip -cd rederive-inputs/case-law-cache.json.gz > backend/law-cache/case-law-cache-v5.json
+          test -s backend/law-cache/case-law-cache-v5.json
+
+      # Fresh output path: never the restored/published citation-graph.json,
+      # so a partial or re-run build can never be mistaken for the old asset.
+      - name: Rederive citation-graph.json from the corpus
+        working-directory: backend
+        env:
+          SEARCH_CACHE_PATH: ${{ github.workspace }}/rederive-inputs/search-cache.json.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --max-old-space-size=8192 search/citation-graph-build.js \
+            --corpusDir search/data/laws \
+            --workerHeapMb 4096 \
+            --out ../rederive-output/citation-graph.json \
+            | tee ../rederive-output/citation-graph-build.log
+          test -s ../rederive-output/citation-graph.json
+
+      - name: Package the candidate citation graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip --best --stdout rederive-output/citation-graph.json > rederive-output/citation-graph.json.gz
+          gzip --test rederive-output/citation-graph.json.gz
+          test -s rederive-output/citation-graph.json.gz
+          rm rederive-output/citation-graph.json
+
+      - name: Upload candidate citation graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-citation-graph-${{ github.run_id }}
+          path: rederive-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # definitions.json -- resumes per batch via its own checkpoint. Fresh --out
+  # path gives a fresh checkpoint path for free; any checkpoint adopted from a
+  # previous dispatch of this same job is still validated against the current
+  # parser version before use and discarded otherwise, so a leftover
+  # stale-parser checkpoint can never contaminate this rebuild. The artifact
+  # name also binds it to both the parser version and corpus release.
+  # ---------------------------------------------------------------------
+  rebuild-definitions:
+    needs: [resolve, rebuild-search-cache]
+    if: ${{ !cancelled() && needs.resolve.outputs.want_definitions == 'true' && (needs.rebuild-search-cache.result == 'success' || needs.rebuild-search-cache.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
+
+      - name: Download corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rederive-inputs rederive-output backend/search/data
+          gh release download "${{ needs.resolve.outputs.corpus_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern laws.tar \
+            --pattern laws-html.tar \
+            --dir rederive-inputs
+          for archive in laws.tar laws-html.tar; do
+            test -s "rederive-inputs/$archive" || { echo "Missing corpus asset: $archive" >&2; exit 1; }
+            tar -xf "rederive-inputs/$archive" -C backend/search/data
+          done
+          test -d backend/search/data/laws
+          test -d backend/search/data/laws-html
+
+      - name: Download search-cache resolver input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.resolve.outputs.want_search_cache }}" = true ] && [ "${{ needs.rebuild-search-cache.result }}" = success ]; then
+            echo "Using this run's rederived search cache." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p from-search-cache-job
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "rederive-search-cache-${{ github.run_id }}" \
+              --dir from-search-cache-job
+            cp from-search-cache-job/search-cache.json.gz rederive-inputs/search-cache.json.gz
+          else
+            echo "Using the currently published search cache (${{ needs.resolve.outputs.data_tag }})." >> "$GITHUB_STEP_SUMMARY"
+            gh release download "${{ needs.resolve.outputs.data_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern search-cache.json.gz \
+              --dir rederive-inputs
+          fi
+          test -s rederive-inputs/search-cache.json.gz
+
+      # Resume from a checkpoint left by an earlier (timed-out) dispatch of
+      # this same job -- but only if it was stamped by the current parser.
+      # An absent or mismatched checkpoint is discarded explicitly here, on
+      # top of definition-index-build.js's own version check, rather than
+      # trusted implicitly.
+      - name: Resume from an interrupted run's checkpoint, if still fresh
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../rederive-output
+          artifact=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-definitions-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+          if [ -z "$artifact" ]; then
+            echo "No definitions checkpoint from a previous run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          artifact_id=$(jq -er '.id' <<< "$artifact")
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > ../checkpoint.zip
+          rm -rf ../checkpoint && mkdir ../checkpoint
+          unzip -q ../checkpoint.zip -d ../checkpoint
+          test -s ../checkpoint/definitions.json.checkpoint || { echo "Checkpoint artifact is empty; ignoring it." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          current_version=$(node -e 'require("./search/parser-stamp").getCurrentParserVersion().then((v) => process.stdout.write(String(v)))')
+          checkpoint_version=$(jq -r '.parserVersion // empty' ../checkpoint/definitions.json.checkpoint 2>/dev/null || true)
+          if [ "$checkpoint_version" = "$current_version" ]; then
+            mkdir -p ../rederive-output
+            mv ../checkpoint/definitions.json.checkpoint ../rederive-output/definitions.json.checkpoint
+            echo "Resumed definitions checkpoint stamped with the current parser version ($current_version)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Discarding definitions checkpoint (stamped '$checkpoint_version', current is '$current_version')." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Fresh output path: never the restored/published definitions.json.
+      - name: Rederive definitions.json from the corpus
+        working-directory: backend
+        env:
+          SEARCH_CACHE_PATH: ${{ github.workspace }}/rederive-inputs/search-cache.json.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          node --max-old-space-size=4096 search/definition-index-build.js \
+            --corpusDir search/data/laws \
+            --out ../rederive-output/definitions.json \
+            | tee ../rederive-output/definitions-build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error::definitions build exited with status $build_status; its checkpoint is uploaded for the next dispatch to resume from"
+            exit "$build_status"
+          fi
+          test -s ../rederive-output/definitions.json
+          test ! -e ../rederive-output/definitions.json.checkpoint
+
+      - name: Package the candidate definitions index
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip --best --stdout rederive-output/definitions.json > rederive-output/definitions.json.gz
+          gzip --test rederive-output/definitions.json.gz
+          test -s rederive-output/definitions.json.gz
+          rm rederive-output/definitions.json
+
+      # Runs on timeout/cancellation too, so batches completed so far survive
+      # for the next dispatch of this job to resume from.
+      - name: Upload interrupted definitions checkpoint
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-definitions-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
+          path: rederive-output/definitions.json.checkpoint
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+      - name: Upload candidate definitions index
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-definitions-${{ github.run_id }}
+          path: rederive-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # fulltext.sqlite -- the wall-clock risk. This is a COLD build (never the
+  # restored/published index, so its doneCelex resume never preserves stale
+  # rows), budgeted like refresh-fulltext's incremental pass but very unlikely
+  # to finish the whole corpus in one dispatch; it resumes from its own
+  # checkpoint artifact across re-dispatches of this workflow, accepted
+  # whenever it covers more than zero acts (a partial fresh build is
+  # legitimately below the published baseline, unlike refresh-fulltext.yml's
+  # incremental case). The checkpoint artifact name is bound to this parser
+  # version and corpus release. The interrupted database has no parser_version
+  # metadata until the pool drains and final metadata is written, so the name
+  # is the only binding available for this checkpoint.
+  # ---------------------------------------------------------------------
+  rebuild-fulltext:
+    needs: [resolve, rebuild-search-cache]
+    if: ${{ !cancelled() && needs.resolve.outputs.want_fulltext == 'true' && (needs.rebuild-search-cache.result == 'success' || needs.rebuild-search-cache.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_PATH: ${{ github.workspace }}/backend/node_modules
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
+
+      - name: Download corpus and build the merged fulltext corpus tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rederive-inputs rederive-output backend/search/data
+          gh release download "${{ needs.resolve.outputs.corpus_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern laws.tar \
+            --pattern laws-html.tar \
+            --dir rederive-inputs
+          for archive in laws.tar laws-html.tar; do
+            test -s "rederive-inputs/$archive" || { echo "Missing corpus asset: $archive" >&2; exit 1; }
+            tar -xf "rederive-inputs/$archive" -C backend/search/data
+          done
+          test -d backend/search/data/laws
+          test -d backend/search/data/laws-html
+          mkdir -p backend/search/data/fulltext-corpus
+          cp -al backend/search/data/laws/. backend/search/data/fulltext-corpus/
+          cp -al backend/search/data/laws-html/. backend/search/data/fulltext-corpus/
+
+      - name: Download search-cache resolver input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.resolve.outputs.want_search_cache }}" = true ] && [ "${{ needs.rebuild-search-cache.result }}" = success ]; then
+            echo "Using this run's rederived search cache." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p from-search-cache-job
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "rederive-search-cache-${{ github.run_id }}" \
+              --dir from-search-cache-job
+            cp from-search-cache-job/search-cache.json.gz backend/search/data/search-cache.json.gz
+          else
+            echo "Using the currently published search cache ($( echo '${{ needs.resolve.outputs.data_tag }}' ))." >> "$GITHUB_STEP_SUMMARY"
+            gh release download "${{ needs.resolve.outputs.data_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern search-cache.json.gz \
+              --dir backend/search/data
+          fi
+          test -s backend/search/data/search-cache.json.gz
+
+      # This run's own checkpoint artifact only -- never refresh-fulltext's
+      # `fulltext-checkpoint`, and never compared against the published
+      # index's act count (a fresh cold build starts at 0 by design).
+      - name: Resume from an interrupted dispatch of this job
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+          if [ -z "$artifact" ]; then
+            echo "No fulltext checkpoint from a previous dispatch; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          artifact_id=$(jq -er '.id' <<< "$artifact")
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip
+          rm -rf checkpoint && mkdir checkpoint
+          unzip -q checkpoint.zip -d checkpoint
+          test -s checkpoint/fulltext.sqlite || { echo "Checkpoint artifact has no fulltext.sqlite; ignoring it." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          checkpoint_act_count=$(node -e '
+            const Database = require("better-sqlite3");
+            const db = new Database("checkpoint/fulltext.sqlite", { readonly: true });
+            process.stdout.write(String(db.prepare("SELECT COUNT(DISTINCT celex) n FROM units").get().n));
+            db.close();
+          ') || { echo "Checkpoint is unreadable; starting a cold build." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          if [ "$checkpoint_act_count" -le 0 ]; then
+            echo "Checkpoint has no acts; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          mkdir -p rederive-output
+          mv checkpoint/fulltext.sqlite rederive-output/fulltext.sqlite
+          rm -f rederive-output/fulltext.sqlite-wal rederive-output/fulltext.sqlite-shm
+          echo "Resumed from this job's own checkpoint: $checkpoint_act_count acts already indexed." >> "$GITHUB_STEP_SUMMARY"
+
+      # Fresh output path: this is a cold build, never the restored/published
+      # fulltext.sqlite, so doneCelex-based resume can never preserve stale
+      # (previous-parser) rows under a fresh tag.
+      - name: Incrementally build the rederived fulltext index
+        working-directory: backend
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          SEARCH_CACHE_PATH="$PWD/search/data/search-cache.json.gz" \
+            timeout --signal=INT 300m \
+            node --max-old-space-size=3072 search/fulltext-index-build.js \
+              --corpusDir search/data/fulltext-corpus \
+              --pool 2 \
+              --workerHeapMb 512 \
+              --out ../rederive-output/fulltext.sqlite \
+            | tee ../rederive-output/fulltext-build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if [ -s ../rederive-output/fulltext.sqlite ]; then
+            node -e 'const Database=require("better-sqlite3"); const db=new Database("../rederive-output/fulltext.sqlite"); db.pragma("wal_checkpoint(TRUNCATE)"); db.close();'
+            rm -f ../rederive-output/fulltext.sqlite-wal ../rederive-output/fulltext.sqlite-shm
+          fi
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error::fulltext build exited with status $build_status; the partial index is uploaded as this job's checkpoint for the next dispatch to resume from"
+            exit "$build_status"
+          fi
+          test -s ../rederive-output/fulltext.sqlite
+          test ! -e ../rederive-output/fulltext.sqlite-wal
+          test ! -e ../rederive-output/fulltext.sqlite-shm
+
+      - name: Build the candidate fulltext manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const crypto = require("node:crypto");
+          const Database = require("better-sqlite3");
+
+          const normalize = (value) => String(value || "").trim().toUpperCase();
+          const db = new Database("rederive-output/fulltext.sqlite", { readonly: true });
+          const rows = db.prepare("SELECT DISTINCT celex FROM units").all();
+          const celex = new Set(rows.map((row) => normalize(row.celex)).filter(Boolean));
+          const counts = {
+            unitCount: db.prepare("SELECT COUNT(*) n FROM units").get().n,
+            articleCount: db.prepare("SELECT COUNT(*) n FROM units WHERE unit_type='article'").get().n,
+            recitalCount: db.prepare("SELECT COUNT(*) n FROM units WHERE unit_type='recital'").get().n,
+            actCount: celex.size,
+          };
+          const metadata = new Map(db.prepare("SELECT key, value FROM fulltext_metadata").all().map((r) => [r.key, r.value]));
+          db.close();
+          if (counts.actCount <= 0) throw new Error("rederived fulltext index has no acts");
+
+          const hashFile = (file) => {
+            const hash = crypto.createHash("sha256");
+            const fd = fs.openSync(file, "r");
+            try {
+              const buf = Buffer.allocUnsafe(1024 * 1024);
+              let read = 0;
+              while ((read = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, read));
+            } finally {
+              fs.closeSync(fd);
+            }
+            return hash.digest("hex");
+          };
+          const stat = fs.statSync("rederive-output/fulltext.sqlite");
+          const sha256 = hashFile("rederive-output/fulltext.sqlite");
+          const manifest = {
+            generatedAt: new Date().toISOString(),
+            ...counts,
+            bytes: stat.size,
+            sha256,
+            parserVersion: metadata.get("parser_version") || null,
+          };
+          fs.writeFileSync("rederive-output/fulltext.sqlite.manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+          console.log(`Rederived fulltext index: ${counts.actCount} acts, ${counts.unitCount} units.`);
+          NODE
+          echo "Rederived fulltext index acts: $(jq -r '.actCount' rederive-output/fulltext.sqlite.manifest.json)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package the candidate fulltext index
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip --best --stdout rederive-output/fulltext.sqlite > rederive-output/fulltext.sqlite.gz
+          gzip --test rederive-output/fulltext.sqlite.gz
+          test -s rederive-output/fulltext.sqlite.gz
+          raw_bytes=$(stat -c %s rederive-output/fulltext.sqlite)
+          gz_bytes=$(stat -c %s rederive-output/fulltext.sqlite.gz)
+          echo "Fulltext asset: $((raw_bytes / 1048576)) MiB raw, $((gz_bytes / 1048576)) MiB gz." >> "$GITHUB_STEP_SUMMARY"
+          test "$gz_bytes" -le "$((1536 * 1048576))" || {
+            echo "fulltext.sqlite.gz is $((gz_bytes / 1048576)) MiB, over the 1536 MiB release-asset guard" >&2
+            exit 1
+          }
+          rm rederive-output/fulltext.sqlite
+
+      # Runs on timeout/cancellation too, so acts indexed so far survive for
+      # the next dispatch of this job to resume from.
+      - name: Upload interrupted fulltext checkpoint
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
+          path: rederive-output/fulltext.sqlite
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+      - name: Upload candidate fulltext index
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-fulltext-${{ github.run_id }}
+          path: rederive-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # Assemble the COMPLETE candidate asset set (rederived assets plus the
+  # unchanged carry-forwards for anything not selected this run), assert
+  # parser freshness with no drift escape, rebuild data.sqlite, and run the
+  # existing integrity/non-regression checks. This is the single gate that
+  # decides whether anything gets published.
+  # ---------------------------------------------------------------------
+  validate:
+    needs: [resolve, rebuild-search-cache, rebuild-citation-graph, rebuild-definitions, rebuild-fulltext]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      artifact_name: rederive-release-assets-${{ github.run_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify every requested rebuild job actually succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          check() {
+            local wanted="$1" result="$2" label="$3"
+            if [ "$wanted" = true ] && [ "$result" != success ]; then
+              echo "Requested rebuild of $label did not succeed (job result: $result)" >&2
+              exit 1
+            fi
+          }
+          check "${{ needs.resolve.outputs.want_search_cache }}" "${{ needs.rebuild-search-cache.result }}" "search-cache"
+          check "${{ needs.resolve.outputs.want_citation_graph }}" "${{ needs.rebuild-citation-graph.result }}" "citation-graph"
+          check "${{ needs.resolve.outputs.want_definitions }}" "${{ needs.rebuild-definitions.result }}" "definitions"
+          check "${{ needs.resolve.outputs.want_fulltext }}" "${{ needs.rebuild-fulltext.result }}" "fulltext"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --dir backend --no-frozen-lockfile
+          cd backend
+          pnpm rebuild better-sqlite3
+          node -e "const D = require('better-sqlite3'); new D(':memory:').close()"
+
+      - name: Assemble the complete candidate asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate
+
+          fetch_rederived() {
+            local job="$1" artifact_name="$2"
+            mkdir -p "from-$job"
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "$artifact_name" \
+              --dir "from-$job"
+          }
+
+          if [ "${{ needs.resolve.outputs.want_search_cache }}" = true ]; then
+            fetch_rederived search-cache "rederive-search-cache-${{ github.run_id }}"
+            cp from-search-cache/search-cache.json.gz candidate/search-cache.json.gz
+          else
+            gh release download "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+              --pattern search-cache.json.gz --dir candidate
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_citation_graph }}" = true ]; then
+            fetch_rederived citation-graph "rederive-citation-graph-${{ github.run_id }}"
+            cp from-citation-graph/citation-graph.json.gz candidate/citation-graph.json.gz
+          else
+            gh release download "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+              --pattern citation-graph.json.gz --dir candidate
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_definitions }}" = true ]; then
+            fetch_rederived definitions "rederive-definitions-${{ github.run_id }}"
+            cp from-definitions/definitions.json.gz candidate/definitions.json.gz
+          else
+            release_assets=$(gh release view "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+              --json assets --jq '.assets[].name')
+            if grep -Fxq definitions.json.gz <<< "$release_assets"; then
+              gh release download "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+                --pattern definitions.json.gz --dir candidate
+            else
+              echo "No definitions.json.gz in the current data release; carrying forward none." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          # case-law-cache.json.gz is never rebuilt by this workflow; always
+          # carried forward unchanged from the current data release.
+          gh release download "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+            --pattern case-law-cache.json.gz --dir candidate
+
+          if [ "${{ needs.resolve.outputs.want_fulltext }}" = true ]; then
+            fetch_rederived fulltext "rederive-fulltext-${{ github.run_id }}"
+            cp from-fulltext/fulltext.sqlite.gz candidate/fulltext.sqlite.gz
+            cp from-fulltext/fulltext.sqlite.manifest.json candidate/fulltext.sqlite.manifest.json
+          else
+            gh release download "${{ needs.resolve.outputs.fulltext_tag }}" --repo "${{ github.repository }}" \
+              --pattern fulltext.sqlite.gz \
+              --pattern fulltext.sqlite.manifest.json \
+              --dir candidate
+          fi
+
+          for asset in search-cache.json.gz citation-graph.json.gz case-law-cache.json.gz \
+            fulltext.sqlite.gz fulltext.sqlite.manifest.json; do
+            test -s "candidate/$asset" || { echo "Missing candidate asset: $asset" >&2; exit 1; }
+          done
+
+      - name: Gate rederived artifact failure and coverage stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Permit a handful of isolated corpus anomalies, but catch a terminal
+          # worker failure that turns a meaningful part of an asset into empty
+          # shards. Ten is deliberately small relative to this corpus-wide run.
+          max_failures=10
+
+          if [ "${{ needs.resolve.outputs.want_citation_graph }}" = true ]; then
+            citation_failures=$(node -e '
+              const { streamStats } = require("./backend/search/json-stream-stats");
+              const [file, field] = process.argv.slice(1);
+              (async () => {
+                const { topLevel } = await streamStats(file, { captureTopLevel: ["stats"], stopWhenCaptured: true });
+                const value = topLevel.stats?.[field];
+                if (!Number.isFinite(value)) throw new Error(`Missing numeric stats.${field}`);
+                process.stdout.write(String(value));
+              })().catch((error) => { console.error(error); process.exit(1); });
+            ' candidate/citation-graph.json.gz parseFailures)
+            test "$citation_failures" -le "$max_failures" || {
+              echo "Citation graph reports $citation_failures parse failures (maximum allowed: $max_failures)" >&2
+              exit 1
+            }
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_definitions }}" = true ]; then
+            definition_failures=$(node -e '
+              const { streamStats } = require("./backend/search/json-stream-stats");
+              const [file, field] = process.argv.slice(1);
+              (async () => {
+                const { topLevel } = await streamStats(file, { captureTopLevel: ["stats"], stopWhenCaptured: true });
+                const value = topLevel.stats?.[field];
+                if (!Number.isFinite(value)) throw new Error(`Missing numeric stats.${field}`);
+                process.stdout.write(String(value));
+              })().catch((error) => { console.error(error); process.exit(1); });
+            ' candidate/definitions.json.gz failures)
+            test "$definition_failures" -le "$max_failures" || {
+              echo "Definitions index reports $definition_failures failures (maximum allowed: $max_failures)" >&2
+              exit 1
+            }
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_fulltext }}" = true ]; then
+            mkdir -p published-fulltext
+            gh release download "${{ needs.resolve.outputs.fulltext_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern fulltext.sqlite.manifest.json \
+              --dir published-fulltext
+            fulltext_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
+            published_fulltext_acts=$(jq -er '.actCount | numbers' published-fulltext/fulltext.sqlite.manifest.json)
+            # The intuitive denominator (all search-cache records) is wrong:
+            # fulltext-index-build.js intersects that universe with corpus files
+            # actually present before indexing. The published fulltext manifest's
+            # actCount is the observed matched-corpus baseline; require strict
+            # non-regression so missing/empty rebuilt shards cannot pass.
+            test "$fulltext_acts" -ge "$published_fulltext_acts" || {
+              echo "Fulltext index has $fulltext_acts acts, below the published matched-corpus baseline of $published_fulltext_acts" >&2
+              exit 1
+            }
+          fi
+
+      - name: Assert parser freshness of the complete candidate set
+        # Deliberately blank, never inherited from the repository variable:
+        # the whole point of this workflow is a run that passes with no
+        # drift-allow escape hatch.
+        env:
+          ALLOW_PARSER_DRIFT: ""
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip -cd candidate/fulltext.sqlite.gz > candidate/fulltext.sqlite
+          definitions_arg=()
+          if [ -f candidate/definitions.json.gz ]; then
+            definitions_arg=(--definitions candidate/definitions.json.gz)
+          fi
+          node backend/search/assert-parser-freshness.js \
+            --search-cache candidate/search-cache.json.gz \
+            --citation-graph candidate/citation-graph.json.gz \
+            --fulltext-sqlite candidate/fulltext.sqlite \
+            "${definitions_arg[@]}"
+
+      - name: Rebuild and validate data.sqlite from the candidate set
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Definitions are genuinely optional: absent from the candidate set
+          # whenever this run neither rebuilt them nor found them on the base
+          # release. Passing a path that does not exist would fail the repack.
+          definitions_arg=()
+          if [ -f candidate/definitions.json.gz ]; then
+            definitions_arg=(--definitions candidate/definitions.json.gz)
+          fi
+          node backend/search/build-sqlite-data.js \
+            --search candidate/search-cache.json.gz \
+            --case-law candidate/case-law-cache.json.gz \
+            --citation-graph candidate/citation-graph.json.gz \
+            "${definitions_arg[@]}" \
+            --output candidate/data.sqlite \
+            --manifest candidate/data.sqlite.manifest.json \
+            | tee candidate/sqlite-build.log
+          test -s candidate/data.sqlite
+          test -s candidate/data.sqlite.manifest.json
+          jq -e '
+            .integrity.sqlite == "ok" and
+            .integrity.orphanLawMappings == 0 and
+            .integrity.orphanFtsMappings == 0 and
+            (.source.search.records | numbers) and
+            (.source.caseLaw.records | numbers)
+          ' candidate/data.sqlite.manifest.json >/dev/null
+
+      - name: Non-regression check against the currently published data.sqlite
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "${{ needs.resolve.outputs.data_tag }}" --repo "${{ github.repository }}" \
+            --pattern data.sqlite.manifest.json --dir published
+          published_search=$(jq -er '.source.search.records | numbers' published/data.sqlite.manifest.json)
+          published_case_law=$(jq -er '.source.caseLaw.records | numbers' published/data.sqlite.manifest.json)
+          candidate_search=$(jq -er '.source.search.records | numbers' candidate/data.sqlite.manifest.json)
+          candidate_case_law=$(jq -er '.source.caseLaw.records | numbers' candidate/data.sqlite.manifest.json)
+          test "$candidate_search" -ge "$published_search" || {
+            echo "Candidate search record count regressed ($published_search -> $candidate_search)" >&2
+            exit 1
+          }
+          test "$candidate_case_law" -ge "$published_case_law" || {
+            echo "Candidate case-law record count regressed ($published_case_law -> $candidate_case_law)" >&2
+            exit 1
+          }
+          candidate_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
+          echo "Candidate counts: search $published_search -> $candidate_search; case law $published_case_law -> $candidate_case_law; fulltext acts $candidate_acts." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compress data.sqlite and finish the candidate set
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip --best --stdout candidate/data.sqlite > candidate/data.sqlite.gz
+          gzip --test candidate/data.sqlite.gz
+          test -s candidate/data.sqlite.gz
+          rm candidate/data.sqlite candidate/fulltext.sqlite
+          jq -n \
+            --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson rebuiltSearchCache "${{ needs.resolve.outputs.want_search_cache }}" \
+            --argjson rebuiltCitationGraph "${{ needs.resolve.outputs.want_citation_graph }}" \
+            --argjson rebuiltDefinitions "${{ needs.resolve.outputs.want_definitions }}" \
+            --argjson rebuiltFulltext "${{ needs.resolve.outputs.want_fulltext }}" \
+            --arg baseDataTag "${{ needs.resolve.outputs.data_tag }}" \
+            --arg baseFulltextTag "${{ needs.resolve.outputs.fulltext_tag }}" \
+            --arg corpusTag "${{ needs.resolve.outputs.corpus_tag }}" \
+            '{generatedAt: $generatedAt, rebuilt: {searchCache: $rebuiltSearchCache, citationGraph: $rebuiltCitationGraph, definitions: $rebuiltDefinitions, fulltext: $rebuiltFulltext}, baseDataTag: $baseDataTag, baseFulltextTag: $baseFulltextTag, corpusTag: $corpusTag}' \
+            > candidate/rederive-summary.json
+
+      - name: Upload the complete validated candidate set
+        uses: actions/upload-artifact@v4
+        with:
+          name: rederive-release-assets-${{ github.run_id }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # Publish one complete data release, one fulltext release, and one PR
+  # bumping both Dockerfile pins together. Skipped entirely for a dry run.
+  # ---------------------------------------------------------------------
+  publish:
+    needs: [resolve, validate]
+    if: ${{ needs.validate.result == 'success' && github.event.inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: rederive-release-assets-${{ github.run_id }}
+          path: release-assets
+
+      - name: Resolve next data and fulltext release tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          data_resolved=$(.github/scripts/release-tags.sh resolve data)
+          data_tag=$(sed -n 's/^tag=//p' <<< "$data_resolved")
+          data_state=$(sed -n 's/^state=//p' <<< "$data_resolved")
+          fulltext_resolved=$(.github/scripts/release-tags.sh resolve fulltext)
+          fulltext_tag=$(sed -n 's/^tag=//p' <<< "$fulltext_resolved")
+          fulltext_state=$(sed -n 's/^state=//p' <<< "$fulltext_resolved")
+          {
+            echo "data_tag=$data_tag"
+            echo "data_state=$data_state"
+            echo "fulltext_tag=$fulltext_tag"
+            echo "fulltext_state=$fulltext_state"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing rederived assets as $data_tag and $fulltext_tag." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the candidate carries every asset the Dockerfile fetches
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_assets=$(sed -n 's/.*for asset in \(.*\); do.*/\1/p' backend/Dockerfile)
+          test -n "$docker_assets"
+          read -r -a docker_asset_list <<< "$docker_assets"
+          for asset in "${docker_asset_list[@]}"; do
+            test -s "release-assets/$asset" || { echo "Missing Docker build input: $asset" >&2; exit 1; }
+          done
+          for asset in data.sqlite.gz data.sqlite.manifest.json fulltext.sqlite.gz fulltext.sqlite.manifest.json; do
+            test -s "release-assets/$asset" || { echo "Missing candidate asset: $asset" >&2; exit 1; }
+          done
+
+      - name: Render release and pull-request notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_version=$(node -e 'require("./backend/search/parser-stamp").getCurrentParserVersion().then((v) => process.stdout.write(String(v)))')
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          summary=release-assets/rederive-summary.json
+          rebuilt_search_cache=$(jq -r '.rebuilt.searchCache' "$summary")
+          rebuilt_citation_graph=$(jq -r '.rebuilt.citationGraph' "$summary")
+          rebuilt_definitions=$(jq -r '.rebuilt.definitions' "$summary")
+          rebuilt_fulltext=$(jq -r '.rebuilt.fulltext' "$summary")
+          {
+            echo "One-off, offline, corpus-wide re-derive so every precomputed asset carries the current parser version ($current_version). See $run_url."
+            echo
+            echo "Rebuilt this run: search-cache=$rebuilt_search_cache citation-graph=$rebuilt_citation_graph definitions=$rebuilt_definitions fulltext=$rebuilt_fulltext."
+            echo "Anything not rebuilt this run was carried forward unchanged from ${{ needs.resolve.outputs.data_tag }} / ${{ needs.resolve.outputs.fulltext_tag }}."
+          } > release-notes.md
+          cp release-notes.md pr-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the complete data release from a draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          data_tag="${{ steps.tags.outputs.data_tag }}"
+          data_assets=(
+            release-assets/search-cache.json.gz
+            release-assets/case-law-cache.json.gz
+            release-assets/citation-graph.json.gz
+            release-assets/data.sqlite.gz
+            release-assets/data.sqlite.manifest.json
+          )
+          if [ -f release-assets/definitions.json.gz ]; then
+            data_assets+=(release-assets/definitions.json.gz)
+          fi
+          if [ "${{ steps.tags.outputs.data_state }}" = absent ]; then
+            gh release create "$data_tag" --repo "${{ github.repository }}" \
+              --draft --title "$data_tag" --notes-file release-notes.md
+          fi
+          gh release upload "$data_tag" "${data_assets[@]}" --repo "${{ github.repository }}" --clobber
+          test "$(gh release view "$data_tag" --repo "${{ github.repository }}" --json isDraft --jq '.isDraft')" = true
+          gh release edit "$data_tag" --repo "${{ github.repository }}" --notes-file release-notes.md --draft=false
+          echo "Published complete data release $data_tag." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the fulltext release from a draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          fulltext_tag="${{ steps.tags.outputs.fulltext_tag }}"
+          if [ "${{ steps.tags.outputs.fulltext_state }}" = absent ]; then
+            gh release create "$fulltext_tag" --repo "${{ github.repository }}" \
+              --draft --title "$fulltext_tag" --notes-file release-notes.md
+          fi
+          gh release upload "$fulltext_tag" \
+            release-assets/fulltext.sqlite.gz \
+            release-assets/fulltext.sqlite.manifest.json \
+            --repo "${{ github.repository }}" --clobber
+          test "$(gh release view "$fulltext_tag" --repo "${{ github.repository }}" --json isDraft --jq '.isDraft')" = true
+          gh release edit "$fulltext_tag" --repo "${{ github.repository }}" --notes-file release-notes.md --draft=false
+          echo "Published fulltext release $fulltext_tag." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the Docker tag-bump pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          data_tag="${{ steps.tags.outputs.data_tag }}"
+          fulltext_tag="${{ steps.tags.outputs.fulltext_tag }}"
+          branch="automation/rederive-$data_tag"
+          if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git fetch origin "$branch"
+            git switch --create "$branch" "origin/$branch"
+            test "$(git diff --name-only origin/${{ github.event.repository.default_branch }}...HEAD)" = "backend/Dockerfile"
+          else
+            git switch --create "$branch" "origin/${{ github.event.repository.default_branch }}"
+          fi
+          sed -i "s/^ARG DATA_RELEASE_TAG=.*/ARG DATA_RELEASE_TAG=$data_tag/" backend/Dockerfile
+          sed -i "s/^ARG FULLTEXT_RELEASE_TAG=.*/ARG FULLTEXT_RELEASE_TAG=$fulltext_tag/" backend/Dockerfile
+          test "$(sed -n 's/^ARG DATA_RELEASE_TAG=//p' backend/Dockerfile)" = "$data_tag"
+          test "$(sed -n 's/^ARG FULLTEXT_RELEASE_TAG=//p' backend/Dockerfile)" = "$fulltext_tag"
+          git add backend/Dockerfile
+          changed_files=$(git diff --cached --name-only)
+          test -z "$changed_files" || test "$changed_files" = "backend/Dockerfile" || {
+            echo "PR update would change files outside backend/Dockerfile" >&2
+            exit 1
+          }
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Deploy rederived parser assets: $data_tag, $fulltext_tag"
+          fi
+          if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git push origin "$branch"
+          else
+            git push --set-upstream origin "$branch"
+          fi
+          pr_number=$(gh pr list --repo "${{ github.repository }}" --head "$branch" --state open \
+            --json number --jq '.[0].number // empty')
+          title="Deploy rederived parser assets: $data_tag, $fulltext_tag"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --repo "${{ github.repository }}" --title "$title" --body-file pr-notes.md
+          else
+            gh pr create --repo "${{ github.repository }}" \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "$branch" \
+              --title "$title" \
+              --body-file pr-notes.md
+          fi
+
+      - name: Dispatch Docker validation for the tag-bump PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run backend-docker.yml \
+            --repo "${{ github.repository }}" \
+            --ref "automation/rederive-${{ steps.tags.outputs.data_tag }}"

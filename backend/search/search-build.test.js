@@ -11,8 +11,115 @@ const {
   extractTitleFromEurlexHtml,
   harvestPrimaryActs,
   normalizeYearQueryActTypes,
+  reEnrichCurrentCache,
   requestWithRetry,
 } = require("./search-build");
+const { writeCorpusXml } = require("./law-corpus-store");
+const { getCurrentParserVersion } = require("./parser-stamp");
+
+// Read from the parser rather than pinned to a literal: these tests assert the
+// merge/overwrite *rule*, not which version happens to be current, and a
+// routine PARSER_VERSION bump should not turn them red.
+
+const SAMPLE_FMX_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<ACT>
+  <BIB.INSTANCE><LG.DOC>EN</LG.DOC></BIB.INSTANCE>
+  <TITLE><TI><P>Regulation on Widget Automation</P></TI></TITLE>
+  <PREAMBLE>
+    <GR.CONSID>
+      <CONSID><NP><NO.P>(1)</NO.P><TXT>Automated decision-making systems require a harmonised legal framework.</TXT></NP></CONSID>
+    </GR.CONSID>
+  </PREAMBLE>
+  <ENACTING.TERMS>
+    <ARTICLE IDENTIFIER="001">
+      <TI.ART>Article 1</TI.ART>
+      <STI.ART>Subject matter</STI.ART>
+      <ALINEA><P>This Regulation lays down harmonised rules on automated decision-making systems.</P></ALINEA>
+    </ARTICLE>
+  </ENACTING.TERMS>
+</ACT>`;
+
+// A record whose title is already present and which is not a primary act (no
+// `eli`): under the default options (onlyMissingTitles / primaryActsOnly both
+// true) it is never eligible for re-enrichment, so these tests never touch
+// the network and only exercise the stamping decision itself.
+function skippedRecord(celex) {
+  return { celex, title: "The GDPR" };
+}
+
+test("reEnrichCurrentCache merges onto an existing stamp for a default (partial) run", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-reenrich-stamp-"));
+  const cachePath = path.join(dir, "search-cache.json");
+  fs.writeFileSync(cachePath, JSON.stringify({
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    parserVersion: 21,
+    records: [skippedRecord("32016R0679")],
+  }));
+
+  await reEnrichCurrentCache({ cachePath, eurovoc: false, inForce: false });
+  const written = fs.readFileSync(cachePath, "utf8");
+  // Default options only re-enrich records missing a title among primary
+  // acts, so this run touches nothing here — it must MERGE onto the
+  // existing "21" stamp, not overwrite it with a bare "22" that would
+  // falsely claim every record was re-derived by the current parser.
+  assert.deepEqual(JSON.parse(written).parserVersion, [21, await getCurrentParserVersion()]);
+  assert.ok(written.indexOf('"parserVersion"') < written.indexOf('"records"'));
+});
+
+test("reEnrichCurrentCache leaves a legacy unstamped payload unstamped after a partial run", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-reenrich-stamp-legacy-"));
+  const cachePath = path.join(dir, "search-cache.json");
+  fs.writeFileSync(cachePath, JSON.stringify({
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    records: [skippedRecord("32016R0679")],
+  }));
+
+  await reEnrichCurrentCache({ cachePath, eurovoc: false, inForce: false });
+  const written = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+  // mergeParserStamp deliberately preserves an absent stamp rather than
+  // turning it into a falsely-fresh singleton (see parser-stamp.js).
+  assert.equal(written.parserVersion, null);
+});
+
+test("reEnrichCurrentCache writes a bare current version only for a complete re-derive", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-reenrich-stamp-complete-"));
+  const corpusDir = path.join(dir, "corpus");
+  const cachePath = path.join(dir, "search-cache.json");
+  const celex = "32024R0001";
+  fs.writeFileSync(cachePath, JSON.stringify({
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    parserVersion: 21,
+    records: [{ celex, title: "Old Title" }],
+  }));
+  await writeCorpusXml(corpusDir, celex, SAMPLE_FMX_XML);
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network access is not allowed when the corpus is warm");
+  };
+  try {
+    // onlyMissingTitles: false and primaryActsOnly: false make every record
+    // eligible; no maxRecords cap; the corpus is warm so extraction succeeds
+    // for every record without falling back to its previous excerpt. Only
+    // under these conditions is the run a genuine complete re-derive that
+    // may claim the bare current version for the whole payload.
+    await reEnrichCurrentCache({
+      cachePath,
+      corpusDir,
+      onlyMissingTitles: false,
+      primaryActsOnly: false,
+      htmlFallback: false,
+      eurovoc: false,
+      inForce: false,
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  const written = fs.readFileSync(cachePath, "utf8");
+  assert.equal(JSON.parse(written).parserVersion, await getCurrentParserVersion());
+  assert.ok(written.indexOf('"parserVersion"') < written.indexOf('"records"'));
+});
 
 // EuroVoc runs as the last step of the build so a finished cache is complete
 // (a CELEX-keyed pass bolted on afterwards strands records silently). But

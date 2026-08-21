@@ -65,6 +65,16 @@ test("empty containers count zero members", async () => {
   assert.equal((await streamStats(writeJson("empty-object.json", {}), { mode: "topLevel" })).count, 0);
 });
 
+test("captures requested top-level scalar and array values without loading the document", async () => {
+  const file = writeJson("captured.json", {
+    parserVersion: [21, 22],
+    generatedAt: "now",
+    records: [{ parserVersion: 99 }],
+  });
+  const stats = await streamStats(file, { captureTopLevel: ["parserVersion", "generatedAt"] });
+  assert.deepEqual(stats.topLevel, { parserVersion: [21, 22], generatedAt: "now" });
+});
+
 test("a truncated document is rejected rather than silently miscounted", async () => {
   const file = writeJson("truncated.json", '{"records": [{"celex": "32016R0679"}');
   await assert.rejects(streamStats(file), /not a complete JSON document/);
@@ -72,4 +82,29 @@ test("a truncated document is rejected rather than silently miscounted", async (
 
 test("an unknown mode is rejected", async () => {
   await assert.rejects(streamStats(writeJson("mode.json", { records: [] }), { mode: "nope" }), /Unknown count mode/);
+});
+
+test("stopWhenCaptured resolves once every requested field is captured, without count or sha256", async () => {
+  const bigRecords = Array.from({ length: 2000 }, (_, index) => ({ celex: `${index}` }));
+  const file = writeJson("early-exit.json", { parserVersion: 22, records: bigRecords });
+  const stats = await streamStats(file, { captureTopLevel: ["parserVersion"], stopWhenCaptured: true });
+  assert.deepEqual(stats.topLevel, { parserVersion: 22 });
+  assert.equal("count" in stats, false);
+  assert.equal("sha256" in stats, false);
+});
+
+test("without stopWhenCaptured, the default full-stream path still returns a correct sha256 and count", async () => {
+  const payload = { parserVersion: 22, records: [{ celex: "32016R0679" }, { celex: "32024R1689" }] };
+  const file = writeJson("full-pass.json", payload);
+  const stats = await streamStats(file, { captureTopLevel: ["parserVersion"] });
+  assert.equal(stats.count, 2);
+  assert.deepEqual(stats.topLevel, { parserVersion: 22 });
+  assert.equal(stats.sha256, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
+});
+
+test("a string value that looks like a captured key name is not mistaken for that key", async () => {
+  const file = writeJson("false-key.json", { note: "parserVersion", parserVersion: 22, records: [1, 2, 3] });
+  const stats = await streamStats(file, { captureTopLevel: ["parserVersion"] });
+  assert.deepEqual(stats.topLevel, { parserVersion: 22 });
+  assert.equal(stats.count, 3);
 });

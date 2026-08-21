@@ -148,6 +148,112 @@ assets, then:
    open `automation/<tag>` for that release tag. That PR changes only
    `ARG FULLTEXT_RELEASE_TAG`; merging it is the deploy gate.
 
+## Parser-version freshness and offline re-derivation
+
+The derived-asset guard (`search/assert-parser-freshness.js`) runs immediately
+after the current inputs are restored. It checks the search cache, citation
+graph, optional definitions index, and full-text SQLite metadata against
+`PARSER_VERSION` in the Formex parser. An unstamped or older asset is a
+failure; an absent definitions asset is allowed. `ALLOW_PARSER_DRIFT=true` is
+a temporary repository-variable escape hatch while the published assets are
+known to lag. Remove it once a re-derive has published assets at the current
+parser version.
+
+### Why a re-derive is sometimes needed
+
+The monthly chain above only ever *adds* acts — Stage 2 backfills what's
+missing from the cache and reparses stale case-law entries, but it never
+re-runs the parser over an act it has already indexed. A `fmxParser.mjs` fix
+therefore reaches new acts immediately and everything else never, until
+someone re-derives the whole corpus against the current parser. GitHub issue
+#180 measured exactly this against the live releases as of 2026-08-21, when
+`PARSER_VERSION` was 22 (it has since moved on again — the point is the gap,
+not the specific numbers):
+
+| Asset | Stamped parser version |
+| --- | --- |
+| `citation-graph.json.gz` | v16 |
+| `definitions.json.gz` | v18 |
+| `search-cache.json.gz` | unstamped |
+| `fulltext.sqlite` | metadata claims v22, but all but one of its 28,049 acts were actually parsed at v21 |
+
+That is the drift the guard above now fails loudly on instead of serving
+silently. A full offline re-derive per asset is the fix.
+
+### Running the re-derive
+
+Also available as the `rederive-parser-assets.yml` workflow (see its own
+`workflow_dispatch` inputs for the automated path); this is the manual/local
+equivalent, useful for a one-off or for testing a parser fix before wiring it
+into that workflow. It is an offline corpus pass — parsing only the restored
+local `laws/`/`laws-html/` trees, no EUR-Lex or Cellar traffic — with two
+exceptions: the citation graph also reads the search cache (`SEARCH_CACHE_PATH`,
+as a resolver for external legislative references) and the case-law cache
+(`CASE_LAW_CACHE_PATH`, folded in as judgment-to-article edges), so "corpus
+only" undersells it for that one asset. Keep each asset in its own job so a
+timeout in one does not discard completed work in the others.
+
+Check each builder's own `parseCliArgs` before trusting flag names below —
+the definitions builder's checkpoint safety (previous section notwithstanding)
+and the fulltext builder's resume-by-database logic both make flag mistakes
+expensive to redo.
+
+```sh
+# From backend/; use a new output directory for every run.
+SEARCH_CACHE_PATH=search/data/search-cache.json.gz \
+node --max-old-space-size=6144 search/citation-graph-build.js \
+  --corpusDir search/data/laws --htmlDir search/data/laws-html \
+  --out /tmp/legalviz-rederive/citation-graph.json --workerHeapMb 4096
+
+node search/definition-index-build.js \
+  --corpusDir search/data/laws --htmlDir search/data/laws-html \
+  --out /tmp/legalviz-rederive/definitions.json --workerHeapMb 2048
+
+# No --htmlDir flag here: it auto-derives the laws-html sibling of --corpusDir.
+node --max-old-space-size=4096 search/fulltext-index-build.js \
+  --corpusDir search/data/laws \
+  --out /tmp/legalviz-rederive/fulltext.sqlite --workerHeapMb 1024
+
+# Search cache: build-cache-from-corpus.js's --rederive mode (new — check the
+# script's own CLI parsing for its current flags before running).
+node search/build-cache-from-corpus.js --rederive
+```
+
+**Always write to a fresh output path — never point a builder at the released
+asset.** For fulltext this is mandatory, not just tidy: its `doneCelex` resume
+check skips any CELEX already present in the target database, so building into
+the previous `fulltext.sqlite` silently preserves every stale, older-parser row
+instead of reparsing it — the manifest would report growth while most of the
+database stayed on the old version. For definitions, a stale checkpoint left at
+`<output>.checkpoint` from an older-parser run is now (previous section)
+rejected and discarded automatically rather than silently resumed into a mixed
+artifact — but a fresh output path avoids the discard-and-restart entirely.
+
+### Resumability and cost per asset
+
+- **Citation graph** — not resumable; it merges all shards in a single pass at
+  the end. It is the biggest RAM risk of the four (`--workerHeapMb` per worker,
+  plus `--max-old-space-size` for the final merge).
+- **Full text** — resumes at the database level via `doneCelex`. It is the
+  wall-clock risk: reparsing the full corpus into SQLite is the slowest of the
+  four passes.
+- **Definitions** — resumes per batch via `<output>.checkpoint`, now keyed to
+  the parser version that produced it (see above).
+- **Search cache** — resumes by CELEX through its stable work directory
+  (`CORPUS_BUILD_WORKDIR`, default a fixed `os.tmpdir()` path), so an
+  interrupted `--rederive` run picks back up without redoing completed batches.
+
+### Which release each asset belongs to
+
+`citation-graph.json.gz`, `definitions.json.gz`, and `search-cache.json.gz`
+all ship in the **data** release (`DATA_RELEASE_TAG`); `fulltext.sqlite.gz`
+ships in its own **fulltext** release (`FULLTEXT_RELEASE_TAG`). Both
+Dockerfile fetch loops pull every asset from one tag, so publishing a
+rebuilt-only-one-asset release still means re-uploading the other, unchanged
+assets from that train alongside it — a partial asset set 404s the Docker
+build. Bump the matching `*_RELEASE_TAG` constant in `backend/Dockerfile` in
+the same commit as the release, per the root `CLAUDE.md` cache table.
+
 ## Candidate inspection
 
 Inspect the stage artifact and generated PR checks. For a full-text
