@@ -41,9 +41,14 @@ on:
         description: Validate everything but publish no release and open no PR
         type: boolean
         default: false
+      allow_non_default_ref:
+        description: Allow a deliberate test run from a non-default parser ref
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: rederive-parser-assets
@@ -59,6 +64,7 @@ jobs:
       data_tag: ${{ steps.tags.outputs.data_tag }}
       fulltext_tag: ${{ steps.tags.outputs.fulltext_tag }}
       corpus_tag: ${{ steps.tags.outputs.corpus_tag }}
+      parser_version: ${{ steps.tags.outputs.parser_version }}
       want_search_cache: ${{ steps.wants.outputs.search_cache }}
       want_citation_graph: ${{ steps.wants.outputs.citation_graph }}
       want_definitions: ${{ steps.wants.outputs.definitions }}
@@ -66,6 +72,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Reject non-default dispatch refs unless explicitly overridden
+        if: ${{ github.ref_name != github.event.repository.default_branch && github.event.inputs.allow_non_default_ref != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::Ref '${{ github.ref_name }}' is not the repository default branch '${{ github.event.repository.default_branch }}'. Publishing parser-derived assets from this ref could stamp assets with a parser that is not running on the default branch; set allow_non_default_ref=true only for a deliberate test run after accepting that risk." >&2
+          exit 1
+
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
@@ -86,16 +100,19 @@ jobs:
           .github/scripts/release-tags.sh validate fulltext "$fulltext_tag"
 
           corpus_tag=$(.github/scripts/release-tags.sh latest corpus)
+          parser_version=$(node -e 'require("./backend/search/parser-stamp").getCurrentParserVersion().then((v) => process.stdout.write(String(v)))')
 
           {
             echo "data_tag=$data_tag"
             echo "fulltext_tag=$fulltext_tag"
             echo "corpus_tag=$corpus_tag"
+            echo "parser_version=$parser_version"
           } >> "$GITHUB_OUTPUT"
           {
             echo "Current data release: $data_tag"
             echo "Current fulltext release: $fulltext_tag"
             echo "Latest immutable corpus: $corpus_tag"
+            echo "Current parser version: $parser_version"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Determine which assets to rederive
@@ -327,11 +344,12 @@ jobs:
   # path gives a fresh checkpoint path for free; any checkpoint adopted from a
   # previous dispatch of this same job is still validated against the current
   # parser version before use and discarded otherwise, so a leftover
-  # stale-parser checkpoint can never contaminate this rebuild.
+  # stale-parser checkpoint can never contaminate this rebuild. The artifact
+  # name also binds it to both the parser version and corpus release.
   # ---------------------------------------------------------------------
   rebuild-definitions:
-    needs: resolve
-    if: ${{ needs.resolve.outputs.want_definitions == 'true' }}
+    needs: [resolve, rebuild-search-cache]
+    if: ${{ !cancelled() && needs.resolve.outputs.want_definitions == 'true' && (needs.rebuild-search-cache.result == 'success' || needs.rebuild-search-cache.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -371,6 +389,27 @@ jobs:
           test -d backend/search/data/laws
           test -d backend/search/data/laws-html
 
+      - name: Download search-cache resolver input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.resolve.outputs.want_search_cache }}" = true ] && [ "${{ needs.rebuild-search-cache.result }}" = success ]; then
+            echo "Using this run's rederived search cache." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p from-search-cache-job
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "rederive-search-cache-${{ github.run_id }}" \
+              --dir from-search-cache-job
+            cp from-search-cache-job/search-cache.json.gz rederive-inputs/search-cache.json.gz
+          else
+            echo "Using the currently published search cache (${{ needs.resolve.outputs.data_tag }})." >> "$GITHUB_STEP_SUMMARY"
+            gh release download "${{ needs.resolve.outputs.data_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern search-cache.json.gz \
+              --dir rederive-inputs
+          fi
+          test -s rederive-inputs/search-cache.json.gz
+
       # Resume from a checkpoint left by an earlier (timed-out) dispatch of
       # this same job -- but only if it was stamped by the current parser.
       # An absent or mismatched checkpoint is discarded explicitly here, on
@@ -383,7 +422,7 @@ jobs:
           set -euo pipefail
           mkdir -p ../rederive-output
           artifact=$(gh api \
-            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-definitions-checkpoint" \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-definitions-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No definitions checkpoint from a previous run." >> "$GITHUB_STEP_SUMMARY"
@@ -407,6 +446,8 @@ jobs:
       # Fresh output path: never the restored/published definitions.json.
       - name: Rederive definitions.json from the corpus
         working-directory: backend
+        env:
+          SEARCH_CACHE_PATH: ${{ github.workspace }}/rederive-inputs/search-cache.json.gz
         shell: bash
         run: |
           set -euo pipefail
@@ -439,7 +480,7 @@ jobs:
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: rederive-definitions-checkpoint
+          name: rederive-definitions-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
           path: rederive-output/definitions.json.checkpoint
           if-no-files-found: ignore
           overwrite: true
@@ -461,7 +502,10 @@ jobs:
   # checkpoint artifact across re-dispatches of this workflow, accepted
   # whenever it covers more than zero acts (a partial fresh build is
   # legitimately below the published baseline, unlike refresh-fulltext.yml's
-  # incremental case).
+  # incremental case). The checkpoint artifact name is bound to this parser
+  # version and corpus release. The interrupted database has no parser_version
+  # metadata until the pool drains and final metadata is written, so the name
+  # is the only binding available for this checkpoint.
   # ---------------------------------------------------------------------
   rebuild-fulltext:
     needs: [resolve, rebuild-search-cache]
@@ -538,7 +582,7 @@ jobs:
         run: |
           set -euo pipefail
           artifact=$(gh api \
-            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-fulltext-checkpoint" \
+            "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No fulltext checkpoint from a previous dispatch; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
@@ -666,7 +710,7 @@ jobs:
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: rederive-fulltext-checkpoint
+          name: rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}
           path: rederive-output/fulltext.sqlite
           if-no-files-found: ignore
           overwrite: true
@@ -795,6 +839,68 @@ jobs:
             fulltext.sqlite.gz fulltext.sqlite.manifest.json; do
             test -s "candidate/$asset" || { echo "Missing candidate asset: $asset" >&2; exit 1; }
           done
+
+      - name: Gate rederived artifact failure and coverage stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Permit a handful of isolated corpus anomalies, but catch a terminal
+          # worker failure that turns a meaningful part of an asset into empty
+          # shards. Ten is deliberately small relative to this corpus-wide run.
+          max_failures=10
+
+          if [ "${{ needs.resolve.outputs.want_citation_graph }}" = true ]; then
+            citation_failures=$(node -e '
+              const { streamStats } = require("./backend/search/json-stream-stats");
+              const [file, field] = process.argv.slice(1);
+              (async () => {
+                const { topLevel } = await streamStats(file, { captureTopLevel: ["stats"], stopWhenCaptured: true });
+                const value = topLevel.stats?.[field];
+                if (!Number.isFinite(value)) throw new Error(`Missing numeric stats.${field}`);
+                process.stdout.write(String(value));
+              })().catch((error) => { console.error(error); process.exit(1); });
+            ' candidate/citation-graph.json.gz parseFailures)
+            test "$citation_failures" -le "$max_failures" || {
+              echo "Citation graph reports $citation_failures parse failures (maximum allowed: $max_failures)" >&2
+              exit 1
+            }
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_definitions }}" = true ]; then
+            definition_failures=$(node -e '
+              const { streamStats } = require("./backend/search/json-stream-stats");
+              const [file, field] = process.argv.slice(1);
+              (async () => {
+                const { topLevel } = await streamStats(file, { captureTopLevel: ["stats"], stopWhenCaptured: true });
+                const value = topLevel.stats?.[field];
+                if (!Number.isFinite(value)) throw new Error(`Missing numeric stats.${field}`);
+                process.stdout.write(String(value));
+              })().catch((error) => { console.error(error); process.exit(1); });
+            ' candidate/definitions.json.gz failures)
+            test "$definition_failures" -le "$max_failures" || {
+              echo "Definitions index reports $definition_failures failures (maximum allowed: $max_failures)" >&2
+              exit 1
+            }
+          fi
+
+          if [ "${{ needs.resolve.outputs.want_fulltext }}" = true ]; then
+            mkdir -p published-fulltext
+            gh release download "${{ needs.resolve.outputs.fulltext_tag }}" \
+              --repo "${{ github.repository }}" \
+              --pattern fulltext.sqlite.manifest.json \
+              --dir published-fulltext
+            fulltext_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
+            published_fulltext_acts=$(jq -er '.actCount | numbers' published-fulltext/fulltext.sqlite.manifest.json)
+            # The intuitive denominator (all search-cache records) is wrong:
+            # fulltext-index-build.js intersects that universe with corpus files
+            # actually present before indexing. The published fulltext manifest's
+            # actCount is the observed matched-corpus baseline; require strict
+            # non-regression so missing/empty rebuilt shards cannot pass.
+            test "$fulltext_acts" -ge "$published_fulltext_acts" || {
+              echo "Fulltext index has $fulltext_acts acts, below the published matched-corpus baseline of $published_fulltext_acts" >&2
+              exit 1
+            }
+          fi
 
       - name: Assert parser freshness of the complete candidate set
         # Deliberately blank, never inherited from the repository variable:

@@ -83,6 +83,7 @@ test("mergeRederivedRecords: fresh title/excerpt win, every other field is prese
   assert.equal(stats.rederived, 1);
   assert.equal(stats.failed, 0);
   assert.equal(stats.noCorpusFile, 0);
+  assert.equal(stats.missed, 0);
   assert.equal(stats.excerptChanged, 1);
 });
 
@@ -116,6 +117,7 @@ test("mergeRederivedRecords: a record with no corpus file is preserved untouched
   assert.equal(stats.rederived, 0);
   assert.equal(stats.failed, 0);
   assert.equal(stats.noCorpusFile, 1);
+  assert.equal(stats.missed, 0);
 });
 
 test("mergeRederivedRecords: a failed parse preserves the existing record and counts as failed", () => {
@@ -134,6 +136,7 @@ test("mergeRederivedRecords: a failed parse preserves the existing record and co
   assert.equal(stats.rederived, 0);
   assert.equal(stats.failed, 1);
   assert.equal(stats.noCorpusFile, 0);
+  assert.equal(stats.missed, 0);
 });
 
 test("mergeRederivedRecords: the record count never regresses across a mixed batch", () => {
@@ -161,6 +164,27 @@ test("mergeRederivedRecords: the record count never regresses across a mixed bat
   );
 });
 
+test("mergeRederivedRecords: a corpus-covered record missing from worker output is counted as missed", async () => {
+  const current = await getCurrentParserVersion();
+  const previous = current - 1;
+  const existing = existingRecord({ celex: "32020R0001" });
+  const { stats } = mergeRederivedRecords({
+    existingRecords: [existing],
+    rawRecords: [],
+    corpusCoveredKeys: new Set([existing.celex]),
+    enrichSearchRecord,
+  });
+
+  assert.equal(stats.rederived, 0);
+  assert.equal(stats.failed, 0);
+  assert.equal(stats.missed, 1);
+  assert.deepEqual(computeRederiveParserStamp({
+    existingParserVersion: previous,
+    currentParserVersion: current,
+    stats,
+  }), [previous, current]);
+});
+
 test("mergeRederivedRecords: a raw record for a celex not in the existing cache is ignored (never adds new acts)", () => {
   const existing = existingRecord({ celex: "32020R0001" });
   const raw = { celex: "39999R9999", title: "Should not appear", excerpt: "", enrichError: null };
@@ -181,7 +205,7 @@ test("computeRederiveParserStamp: bare current version only when every record wa
   const complete = computeRederiveParserStamp({
     existingParserVersion: 21,
     currentParserVersion: current,
-    stats: { rederived: 5, failed: 0, noCorpusFile: 0, staleUncovered: 0, excerptChanged: 5 },
+    stats: { rederived: 5, failed: 0, noCorpusFile: 0, staleUncovered: 0, missed: 0, excerptChanged: 5 },
   });
   assert.equal(complete, current);
 });
@@ -195,7 +219,7 @@ test("computeRederiveParserStamp: uncovered records without an excerpt are not a
   const stamp = computeRederiveParserStamp({
     existingParserVersion: 21,
     currentParserVersion: current,
-    stats: { rederived: 5, failed: 0, noCorpusFile: 40000, staleUncovered: 0, excerptChanged: 5 },
+    stats: { rederived: 5, failed: 0, noCorpusFile: 40000, staleUncovered: 0, missed: 0, excerptChanged: 5 },
   });
   assert.equal(stamp, current);
 });
@@ -205,7 +229,7 @@ test("computeRederiveParserStamp: merges onto the existing stamp when anything w
   const partialFailed = computeRederiveParserStamp({
     existingParserVersion: 21,
     currentParserVersion: current,
-    stats: { rederived: 4, failed: 1, noCorpusFile: 0, staleUncovered: 0, excerptChanged: 4 },
+    stats: { rederived: 4, failed: 1, noCorpusFile: 0, staleUncovered: 0, missed: 0, excerptChanged: 4 },
   });
   assert.deepEqual(partialFailed, [21, current]);
 
@@ -214,7 +238,7 @@ test("computeRederiveParserStamp: merges onto the existing stamp when anything w
   const partialStale = computeRederiveParserStamp({
     existingParserVersion: 21,
     currentParserVersion: current,
-    stats: { rederived: 4, failed: 0, noCorpusFile: 1, staleUncovered: 1, excerptChanged: 4 },
+    stats: { rederived: 4, failed: 0, noCorpusFile: 1, staleUncovered: 1, missed: 0, excerptChanged: 4 },
   });
   assert.deepEqual(partialStale, [21, current]);
 });
@@ -223,7 +247,7 @@ test("computeRederiveParserStamp: a legacy unstamped payload stays unstamped aft
   const stamp = computeRederiveParserStamp({
     existingParserVersion: undefined,
     currentParserVersion: await getCurrentParserVersion(),
-    stats: { rederived: 0, failed: 0, noCorpusFile: 3, staleUncovered: 3, excerptChanged: 0 },
+    stats: { rederived: 0, failed: 0, noCorpusFile: 3, staleUncovered: 3, missed: 0, excerptChanged: 0 },
   });
   assert.equal(stamp, null);
 });

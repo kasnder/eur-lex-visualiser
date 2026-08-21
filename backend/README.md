@@ -671,6 +671,16 @@ than discarding a multi-hour harvest. Opt out with `--no-eurovoc` /
 network-free build (the enrichment runs in the driver; the parse workers keep
 their hard `fetch` block either way).
 
+`build-cache-from-corpus.js --rederive` inverts the normal merge for one
+purpose: refreshing `title` and `excerpt` on records the cache already holds,
+after a parser fix that the additive monthly refresh would never reach (issue
+#180). It applies no year floor, adds no acts, and skips EuroVoc/in-force
+entirely — those fields, plus `date` and the alias fields, are preserved from
+the existing record — so it is offline in the driver as well as in the workers.
+It stamps `parserVersion` bare only when nothing stale was left behind; see
+[docs/legislation-data-refresh.md](docs/legislation-data-refresh.md) for when to
+run it and what the other three assets need.
+
 If a cache is fine but its topics or status aren't — a build ran `--no-eurovoc`,
 EuroVoc changed upstream, or acts have since fallen out of force — backfill
 without a rebuild:

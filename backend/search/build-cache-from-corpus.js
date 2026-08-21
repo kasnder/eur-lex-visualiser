@@ -226,13 +226,13 @@ function buildPrimaryEli(celex) {
 // never adds new acts, only refreshes ones already present.
 //
 // `corpusCoveredKeys` is the set of existing CELEX keys that have *any* corpus
-// file (FMX or HTML) — used only to report how many existing records had no
-// corpus file to rederive from at all (they're preserved untouched too, same
-// as a failed parse, just for a different reason).
+// file (FMX or HTML) — used to report both records with no corpus file and
+// corpus-covered records whose worker output never came back.
 function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys, enrichSearchRecord }) {
   const existingByCelex = new Map(existingRecords.map((rec) => [normCelex(rec.celex), rec]));
 
   const rederived = [];
+  const returnedKeys = new Set();
   let rederivedCount = 0;
   let failedCount = 0;
   let excerptChangedCount = 0;
@@ -241,6 +241,7 @@ function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys,
     const key = normCelex(raw.celex);
     const existing = existingByCelex.get(key);
     if (!existing) continue; // not part of the existing cache; out of scope
+    returnedKeys.add(key);
 
     if (raw.enrichError) {
       failedCount += 1;
@@ -296,8 +297,14 @@ function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys,
   // what keeps the payload from honestly claiming a single current version.
   let noCorpusFileCount = 0;
   let staleUncoveredCount = 0;
+  let missedCount = 0;
   for (const [key, rec] of existingByCelex) {
-    if (corpusCoveredKeys.has(key)) continue;
+    if (corpusCoveredKeys.has(key)) {
+      // A failed worker batch leaves no raw record at all. Count that gap here
+      // so it cannot disappear from the parser-stamp decision.
+      if (!returnedKeys.has(key)) missedCount += 1;
+      continue;
+    }
     noCorpusFileCount += 1;
     if (rec.excerpt) staleUncoveredCount += 1;
   }
@@ -309,6 +316,7 @@ function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys,
       failed: failedCount,
       noCorpusFile: noCorpusFileCount,
       staleUncovered: staleUncoveredCount,
+      missed: missedCount,
       excerptChanged: excerptChangedCount,
       unkeyable,
     },
@@ -317,17 +325,19 @@ function mergeRederivedRecords({ existingRecords, rawRecords, corpusCoveredKeys,
 
 // A bare current-version stamp claims every *parser-derived* field in the
 // payload came from that version, so it is only honest when this run left no
-// stale parse behind: no failed parse, and no record still carrying an excerpt
-// from an earlier version that no corpus file could refresh. Records with no
-// corpus file and no excerpt are not a gap — they never held parser output in
-// the first place, and the cache holds tens of thousands of them (SPARQL-only
-// acts outside the harvested corpus), so counting them would make a bare stamp
-// unreachable forever. Any real gap means some records still reflect whatever
-// parser produced the existing payload, so the stamp must MERGE with whatever
-// the payload already carried (mirrors the same bare-vs-merge decision in
-// search-build.js's reEnrichCurrentCache).
+// stale parse behind: no failed parse, no corpus-covered record missed by this
+// run, and no record still carrying an excerpt from an earlier version that no
+// corpus file could refresh. Records with no corpus file and no excerpt are not
+// a gap — they never held parser output in the first place, and the cache holds
+// tens of thousands of them (SPARQL-only acts outside the harvested corpus), so
+// counting them would make a bare stamp unreachable forever. Any real gap means
+// some records still reflect whatever parser produced the existing payload, so
+// the stamp must MERGE with whatever the payload already carried (mirrors the
+// same bare-vs-merge decision in search-build.js's reEnrichCurrentCache).
 function computeRederiveParserStamp({ existingParserVersion, currentParserVersion, stats }) {
-  const isCompleteRederive = stats.failed === 0 && (stats.staleUncovered || 0) === 0;
+  const isCompleteRederive = stats.failed === 0
+    && (stats.staleUncovered || 0) === 0
+    && (stats.missed || 0) === 0;
   return isCompleteRederive
     ? currentParserVersion
     : mergeParserStamp(existingParserVersion, currentParserVersion);
@@ -529,6 +539,7 @@ async function driver({ noEurovoc = false, noInForce = false, rederive = false }
     console.log(`  unchanged (no corpus file): ${result.stats.noCorpusFile}`);
     console.log(`    of those, with an excerpt: ${result.stats.staleUncovered}`);
     console.log(`  failed:                     ${result.stats.failed}`);
+    console.log(`  missed (corpus-covered):    ${result.stats.missed}`);
     console.log(`  excerpt changed:            ${result.stats.excerptChanged}`);
     console.log(`  parserVersion stamp:        ${JSON.stringify(parserVersion)}`);
   } else {
