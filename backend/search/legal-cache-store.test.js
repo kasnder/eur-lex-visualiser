@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
 
 const {
   JsonLegalCacheStore,
@@ -77,6 +78,60 @@ test("legal cache store loads fixture successfully", () => {
   assert.equal(store.load(), true);
   assert.equal(store.getStatus().ready, true);
   assert.equal(store.getStatus().count, 18);
+});
+
+// The offline re-derive builders are pointed at whichever of the two forms an
+// earlier workflow step left on disk, and citation-graph-build.js resolves its
+// reference index through this store. Handed a .gz path it used to find the
+// file, skip the gunzip branch, and JSON.parse the compressed bytes -- failing
+// with "Unexpected token '\u001f'" on a perfectly readable artifact.
+test("legal cache store reads a cache path that is itself gzipped", () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-gz-"));
+  try {
+    const gzPath = path.join(work, "search-cache.json.gz");
+    fs.writeFileSync(gzPath, zlib.gzipSync(fs.readFileSync(fixturePath)));
+    assert.equal(fs.existsSync(path.join(work, "search-cache.json")), false);
+
+    const store = new JsonLegalCacheStore(gzPath, { preferJson: true });
+    assert.equal(store.load(), true);
+    assert.equal(store.getStatus().ready, true);
+    assert.equal(store.getStatus().count, 18);
+    assert.ok(store.exportReferenceIndex());
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("a missing gzipped cache path reports that path, not a doubled suffix", () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-gz-"));
+  try {
+    const gzPath = path.join(work, "search-cache.json.gz");
+    const store = new JsonLegalCacheStore(gzPath, { preferJson: true });
+    assert.equal(store.load(), false);
+    assert.match(store.getStatus().error, /search-cache\.json\.gz$/);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("a plain cache path still prefers the raw file over its .gz sibling", () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-gz-"));
+  try {
+    const jsonPath = path.join(work, "search-cache.json");
+    const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+    fs.writeFileSync(jsonPath, JSON.stringify(fixture));
+    // A .gz sibling holding only a single record: if it were preferred, the
+    // record count below would not match the raw file's.
+    fs.writeFileSync(`${jsonPath}.gz`, zlib.gzipSync(JSON.stringify({
+      ...fixture, records: fixture.records.slice(0, 1),
+    })));
+
+    const store = new JsonLegalCacheStore(jsonPath, { preferJson: true });
+    assert.equal(store.load(), true);
+    assert.equal(store.getStatus().count, 18);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 });
 
 test("legal cache store loads SQLite records without retaining excerpts", () => {

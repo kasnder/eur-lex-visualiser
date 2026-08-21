@@ -981,15 +981,28 @@ class JsonLegalCacheStore {
       // fetches search-cache.json.gz as a GitHub Release asset at build time
       // (see backend/Dockerfile). Prefer the raw file when present (a local
       // rebuild writes it), else fall back to the gzipped artifact.
-      const gzPath = `${this.cachePath}.gz`;
-      const useGz = !fs.existsSync(this.cachePath) && fs.existsSync(gzPath);
-      if (!useGz && !fs.existsSync(this.cachePath)) {
-        return this.failLoad(`Search cache not found at ${this.cachePath} (or ${gzPath})`);
+      // A caller may hand us the gzipped release asset directly rather than the
+      // uncompressed cache -- the offline builders are pointed at whichever of
+      // the two an earlier step happened to leave on disk. Without this, such a
+      // path hit the raw-file branch below and JSON.parse choked on the gzip
+      // magic bytes ("Unexpected token '\u001f'"), which is a confusing way to
+      // report a readable file. Callers passing the plain path keep the
+      // historical behaviour: prefer the raw file a local rebuild wrote, else
+      // fall back to its .gz sibling.
+      const pathIsGz = this.cachePath.endsWith(".gz");
+      const gzPath = pathIsGz ? this.cachePath : `${this.cachePath}.gz`;
+      const rawPath = pathIsGz ? null : this.cachePath;
+      const hasRaw = Boolean(rawPath) && fs.existsSync(rawPath);
+      const useGz = !hasRaw && fs.existsSync(gzPath);
+      if (!useGz && !hasRaw) {
+        return this.failLoad(pathIsGz
+          ? `Search cache not found at ${gzPath}`
+          : `Search cache not found at ${this.cachePath} (or ${gzPath})`);
       }
 
       const raw = useGz
         ? zlib.gunzipSync(fs.readFileSync(gzPath)).toString("utf8")
-        : fs.readFileSync(this.cachePath, "utf8");
+        : fs.readFileSync(rawPath, "utf8");
       const parsed = JSON.parse(raw);
       const records = Array.isArray(parsed.records)
         ? mergeSupplementalRecords(parsed.records)
