@@ -36,6 +36,7 @@ const {
 const { enrichRecordsWithEurovoc } = require("./eurovoc-enrich");
 const { enrichRecordsWithInForce } = require("./in-force-enrich");
 const { enrichSearchRecord } = require("./search-ranking");
+const { getCurrentParserVersion, mergeParserStamp } = require("./parser-stamp");
 
 function log(message) {
   console.log(`[backfill] ${message}`);
@@ -165,6 +166,8 @@ async function backfillCache(options = {}) {
 
   payload.count = payload.records.length;
   payload.patchedAt = new Date().toISOString();
+  const parserVersion = await getCurrentParserVersion();
+  payload.parserVersion = mergeParserStamp(payload.parserVersion, parserVersion);
 
   if (options["dry-run"]) {
     log(`dry run — would write ${payload.count} records (added=${added} replaced=${replaced})`);

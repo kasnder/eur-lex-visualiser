@@ -360,6 +360,7 @@ function buildSqliteData({
       insertMetadata.run("search_record_count", String(records.length));
       insertMetadata.run("case_law_count", String(caseLawEntries.length));
       insertMetadata.run("definitions_available", definitionsAsset ? "1" : "0");
+      insertMetadata.run("search_parser_version", JSON.stringify(searchPayload.parserVersion ?? null));
 
       records.forEach((record, ordinal) => {
         const excerpt = typeof record?.excerpt === "string" ? record.excerpt : "";
@@ -400,6 +401,12 @@ function buildSqliteData({
         insertMetadata.run("citation_graph_generated_at", String(header.generatedAt || ""));
         insertMetadata.run("citation_graph_coverage", JSON.stringify(header.coverage ?? null));
         insertMetadata.run("citation_graph_stats", JSON.stringify(header.stats ?? null));
+      }
+      if (definitionsAsset) {
+        insertMetadata.run(
+          "definitions_parser_version",
+          JSON.stringify(definitionsAsset.payload?.parserVersion ?? null)
+        );
       }
       const citationSourceTitles = new Map();
       for (const edge of citationEdges) {
@@ -522,6 +529,7 @@ function buildSqliteData({
           sha256: searchAsset.sha256,
           records: records.length,
           generatedAt: searchPayload.generatedAt || null,
+          parserVersion: searchPayload.parserVersion ?? null,
         },
         caseLaw: {
           file: path.basename(caseLawAsset.path),
@@ -538,6 +546,7 @@ function buildSqliteData({
           edges: expectedCitationCount,
           skippedEdges: skippedCitationEdges,
           graphVersion: citationAsset.payload?.graphVersion ?? null,
+          parserVersion: citationAsset.payload?.parserVersion ?? null,
           generatedAt: citationAsset.payload?.generatedAt || null,
         } : null,
         definitions: definitionsAsset ? {
@@ -547,6 +556,7 @@ function buildSqliteData({
           terms: definitionTerms.length,
           occurrences: definitionOccurrences.length,
           usageEdges: definitionUsageEdges.length,
+          parserVersion: definitionsAsset.payload?.parserVersion ?? null,
           generatedAt: definitionsAsset.payload?.generatedAt || null,
         } : null,
       },

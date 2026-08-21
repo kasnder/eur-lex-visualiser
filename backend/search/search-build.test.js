@@ -11,8 +11,23 @@ const {
   extractTitleFromEurlexHtml,
   harvestPrimaryActs,
   normalizeYearQueryActTypes,
+  reEnrichCurrentCache,
   requestWithRetry,
 } = require("./search-build");
+
+test("reEnrichCurrentCache stamps the current parser version", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "search-reenrich-stamp-"));
+  const cachePath = path.join(dir, "search-cache.json");
+  fs.writeFileSync(cachePath, JSON.stringify({
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    records: [{ celex: "32016R0679", title: "The GDPR" }],
+  }));
+
+  await reEnrichCurrentCache({ cachePath, eurovoc: false, inForce: false });
+  const written = fs.readFileSync(cachePath, "utf8");
+  assert.equal(JSON.parse(written).parserVersion, 22);
+  assert.ok(written.indexOf('"parserVersion"') < written.indexOf('"records"'));
+});
 
 // EuroVoc runs as the last step of the build so a finished cache is complete
 // (a CELEX-keyed pass bolted on afterwards strands records silently). But

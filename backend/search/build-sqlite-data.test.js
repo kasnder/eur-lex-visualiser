@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const Database = require("better-sqlite3");
 
 const { buildSqliteData, SQLITE_SCHEMA_VERSION } = require("./build-sqlite-data");
 
@@ -19,6 +20,7 @@ test("buildSqliteData emits a verified manifest with source and table counts", (
   const manifestPath = path.join(tempDir, "manifest.json");
   fs.writeFileSync(searchPath, JSON.stringify({
     generatedAt: "2026-07-15T00:00:00.000Z",
+    parserVersion: 22,
     records: [
       {
         celex: "32024R9001",
@@ -72,8 +74,12 @@ test("buildSqliteData emits a verified manifest with source and table counts", (
     orphanFtsMappings: 0,
   });
   assert.equal(manifest.source.search.sha256, sha256(searchPath));
+  assert.equal(manifest.source.search.parserVersion, 22);
   assert.equal(manifest.source.caseLaw.sha256, sha256(caseLawPath));
   assert.equal(manifest.artifact.sha256, sha256(outputPath));
+  const database = new Database(outputPath, { readonly: true });
+  assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'search_parser_version'").get().value, "22");
+  database.close();
 });
 
 test("buildSqliteData optionally folds definitions into searchable tables", () => {
@@ -87,6 +93,7 @@ test("buildSqliteData optionally folds definitions into searchable tables", () =
   fs.writeFileSync(caseLawPath, "{}", "utf8");
   fs.writeFileSync(definitionsPath, JSON.stringify({
     generatedAt: "2026-07-16T00:00:00.000Z",
+    parserVersion: [21, 22],
     occurrences: [
       { term: "risk", definition: "the potential for loss", celex: "32022L2555", sourceArticle: "Article 6", definitionHash: "same" },
       { term: "Risk", definition: "the potential for loss", celex: "32022L2557", article: "3", wordingHash: "same" },
@@ -104,9 +111,16 @@ test("buildSqliteData optionally folds definitions into searchable tables", () =
   assert.equal(result.definitionUsageEdges, 0);
   assert.equal(manifest.source.definitions.terms, 1);
   assert.equal(manifest.source.definitions.occurrences, 2);
+  assert.deepEqual(manifest.source.definitions.parserVersion, [21, 22]);
   assert.equal(manifest.tables.definitionTerms, 1);
   assert.equal(manifest.tables.definitionOccurrences, 2);
   assert.equal(manifest.tables.definitionUsageEdges, 0);
+  const database = new Database(outputPath, { readonly: true });
+  assert.equal(
+    database.prepare("SELECT value FROM metadata WHERE key = 'definitions_parser_version'").get().value,
+    "[21,22]"
+  );
+  database.close();
 });
 
 test("buildSqliteData folds the citation graph into indexed tables and dedups source titles", () => {
@@ -119,7 +133,7 @@ test("buildSqliteData folds the citation graph into indexed tables and dedups so
   fs.writeFileSync(searchPath, JSON.stringify({ generatedAt: "2026-07-15T00:00:00.000Z", records: [] }), "utf8");
   fs.writeFileSync(caseLawPath, JSON.stringify({}), "utf8");
   fs.writeFileSync(graphPath, JSON.stringify({
-    graphVersion: 2, parserVersion: 15, generatedAt: "2026-07-15T19:22:07.710Z",
+    graphVersion: 2, parserVersion: 22, generatedAt: "2026-07-15T19:22:07.710Z",
     coverage: { legislation: { htmlLaws: 2 } }, stats: { edges: 3 },
     edges: [
       // two edges from one source: the title must be stored once
@@ -140,4 +154,11 @@ test("buildSqliteData folds the citation graph into indexed tables and dedups so
   assert.equal(manifest.source.citationGraph.edges, 3);
   assert.equal(manifest.source.citationGraph.skippedEdges, 1);
   assert.equal(manifest.source.citationGraph.graphVersion, 2);
+  assert.equal(manifest.source.citationGraph.parserVersion, 22);
+  const database = new Database(outputPath, { readonly: true });
+  assert.equal(
+    database.prepare("SELECT value FROM metadata WHERE key = 'citation_graph_parser_version'").get().value,
+    "22"
+  );
+  database.close();
 });

@@ -232,6 +232,10 @@ test("buildFulltextIndex resumes across two real invocations sharing a celex, wi
   assert.equal(firstSummary.actCount, 1);
   assert.equal(firstSummary.newlyParsed, 1);
 
+  const stampDb = openFulltextDatabase(outputPath);
+  stampDb.prepare("UPDATE fulltext_metadata SET value = '21' WHERE key = 'parser_version'").run();
+  stampDb.close();
+
   // Re-run over the superset [first, second]: first is already indexed and
   // must be skipped (row count for its celex stays the same, and the worker
   // pool never sees it as "newly parsed"), while second is newly ingested.
@@ -245,6 +249,7 @@ test("buildFulltextIndex resumes across two real invocations sharing a celex, wi
   });
   assert.equal(secondSummary.newlyParsed, 1, "the already-indexed act must not be re-parsed");
   assert.equal(secondSummary.actCount, 2);
+  assert.equal(secondSummary.parserVersion, "21,22");
 
   const db = openFulltextDatabase(outputPath);
   try {

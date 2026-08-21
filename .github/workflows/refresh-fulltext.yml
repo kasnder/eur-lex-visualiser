@@ -192,6 +192,15 @@ jobs:
           console.log(`Current fulltext has ${fulltextCelex.size} acts.`);
           NODE
 
+      - name: Assert parser freshness of restored fulltext index
+        env:
+          ALLOW_PARSER_DRIFT: ${{ vars.ALLOW_PARSER_DRIFT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node backend/search/assert-parser-freshness.js \
+            --fulltext-sqlite refresh-output/fulltext.sqlite
+
       - name: Capture baseline fulltext count
         id: baseline
         shell: bash

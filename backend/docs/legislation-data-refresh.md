@@ -148,6 +148,48 @@ assets, then:
    open `automation/<tag>` for that release tag. That PR changes only
    `ARG FULLTEXT_RELEASE_TAG`; merging it is the deploy gate.
 
+## Parser-version freshness and offline re-derivation
+
+The derived-asset guard runs immediately after the current inputs are restored.
+It checks the search cache, citation graph, optional definitions index, and
+full-text SQLite metadata against `PARSER_VERSION` in the Formex parser. An
+unstamped or older asset is a failure; an absent definitions asset is allowed.
+`ALLOW_PARSER_DRIFT=true` is a temporary repository-variable escape hatch for
+the v21-to-v22 migration. Remove it after the v22 assets are published.
+
+The one-off re-derivation is an offline corpus pass: restore the complete
+`laws/`, `laws-html/`, and (for citation edges) case-law corpus first, and write
+every result to a fresh output path. Never point an incremental builder at the
+released input: full text skips existing CELEXes, and a definitions checkpoint
+is derived from its output path. Keep each asset in its own job so a timeout
+does not discard completed work in the others.
+
+The current builder commands are:
+
+```sh
+# From backend/; use a new directory for every run.
+node --max-old-space-size=6144 search/citation-graph-build.js \
+  --corpusDir search/data/laws --htmlDir search/data/laws-html \
+  --out /tmp/legalviz-v22/citation-graph.json --workerHeapMb 4096
+
+node search/definition-index-build.js \
+  --corpusDir search/data/laws --htmlDir search/data/laws-html \
+  --out /tmp/legalviz-v22/definitions.json --workerHeapMb 2048
+
+node --max-old-space-size=4096 search/fulltext-index-build.js \
+  --corpusDir search/data/fulltext-corpus \
+  --out /tmp/legalviz-v22/fulltext.sqlite --workerHeapMb 1024
+```
+
+The search-cache offline re-derive command belongs to the separate re-derive
+workflow because the existing `search-build.js` path performs network harvests;
+do not use it to repair a released cache. The citation graph has no resumable
+checkpoint and may need several gigabytes of heap. Definitions checkpoint each
+batch under `<output>.checkpoint`; delete stale checkpoints or use a new output
+path. Full text resumes at the SQLite database level, so its fresh output path
+is mandatory. These commands parse only the restored local corpus; they do not
+fetch EUR-Lex or mutate a published release.
+
 ## Candidate inspection
 
 Inspect the stage artifact and generated PR checks. For a full-text

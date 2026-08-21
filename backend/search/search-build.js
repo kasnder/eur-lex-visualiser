@@ -12,6 +12,7 @@ const { readCorpusXml, writeCorpusXml } = require("./law-corpus-store");
 const { mergeCorpusDates } = require("./law-corpus-dates");
 const { enrichRecordsWithEurovoc } = require("./eurovoc-enrich");
 const { enrichRecordsWithInForce } = require("./in-force-enrich");
+const { getCurrentParserVersion } = require("./parser-stamp");
 
 const execFileAsync = promisify(execFile);
 const SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql";
@@ -926,11 +927,19 @@ async function reEnrichCurrentCache(options = {}) {
     }
   });
 
+  const parserVersion = await getCurrentParserVersion();
+  const generatedAt = new Date().toISOString();
   const nextPayload = {
+    generatedAt,
+    parserVersion,
+    records: enrichResult.records,
     ...payload,
-    generatedAt: new Date().toISOString(),
-    records: enrichResult.records
   };
+  // Keep the header order stable even when the input was a legacy unstamped
+  // payload (or carried an older stamp): parserVersion must precede records.
+  nextPayload.generatedAt = generatedAt;
+  nextPayload.parserVersion = parserVersion;
+  nextPayload.records = enrichResult.records;
   nextPayload.count = nextPayload.records.length;
 
   await attachEurovocTopics(nextPayload.records, options, logProgress);
@@ -1089,10 +1098,12 @@ async function buildSearchCache(options = {}) {
     },
   });
 
+  const parserVersion = await getCurrentParserVersion();
   const payload = {
     generatedAt: new Date().toISOString(),
     fromYear,
     toYear,
+    parserVersion,
     records: enrichResult.records
       .filter((record) => record.isPrimaryAct)
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))

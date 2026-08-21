@@ -30,6 +30,7 @@ const { dedupeCorpusFiles } = require("./definition-index-build");
 const { readJsonAsset, sha256File } = require("./build-sqlite-data");
 const { DEFAULT_SEARCH_CACHE_PATH } = require("./search-index");
 const { stripXmlTags, wrapForParsing } = require("./search-build");
+const { normalizeParserStamp } = require("./parser-stamp");
 
 const gunzip = promisify(zlib.gunzip);
 
@@ -303,7 +304,14 @@ async function buildFulltextIndex(options = {}) {
     });
 
     const allFailures = [];
-    const parserVersions = new Set();
+    const existingParserVersion = db.prepare(
+      "SELECT value FROM fulltext_metadata WHERE key = 'parser_version'"
+    ).get()?.value;
+    // Units have no parser-version column, and doneCelex intentionally skips
+    // existing acts. Preserve the metadata stamp for those rows before adding
+    // versions from newly parsed shards; otherwise an incremental build lies
+    // about the parser versions represented in the database.
+    const parserVersions = new Set(normalizeParserStamp(existingParserVersion));
     const totals = await runPool(batches, (shard) => {
       insertMany(shard.units || []);
       for (const failure of shard.failures || []) allFailures.push(failure);

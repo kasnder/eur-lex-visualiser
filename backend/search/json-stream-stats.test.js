@@ -65,6 +65,16 @@ test("empty containers count zero members", async () => {
   assert.equal((await streamStats(writeJson("empty-object.json", {}), { mode: "topLevel" })).count, 0);
 });
 
+test("captures requested top-level scalar and array values without loading the document", async () => {
+  const file = writeJson("captured.json", {
+    parserVersion: [21, 22],
+    generatedAt: "now",
+    records: [{ parserVersion: 99 }],
+  });
+  const stats = await streamStats(file, { captureTopLevel: ["parserVersion", "generatedAt"] });
+  assert.deepEqual(stats.topLevel, { parserVersion: [21, 22], generatedAt: "now" });
+});
+
 test("a truncated document is rejected rather than silently miscounted", async () => {
   const file = writeJson("truncated.json", '{"records": [{"celex": "32016R0679"}');
   await assert.rejects(streamStats(file), /not a complete JSON document/);

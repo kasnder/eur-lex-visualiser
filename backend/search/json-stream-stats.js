@@ -21,9 +21,10 @@ const zlib = require("zlib");
 //   topLevel   -> members of the top-level object/array (case-law cache)
 const MODES = new Set(["records", "topLevel"]);
 
-function createScanner(mode) {
+function createScanner(mode, { captureTopLevel = [] } = {}) {
   if (!MODES.has(mode)) throw new Error(`Unknown count mode: ${mode}`);
 
+  const captureNames = new Set(captureTopLevel);
   let depth = 0; // nesting depth, 0 = outside the root container
   let inString = false;
   let escaped = false;
@@ -33,17 +34,71 @@ function createScanner(mode) {
   let sawMember = false; // a member started at countingDepth
   let keyBuffer = ""; // current string literal, when it may be a key
   let pendingRecordsKey = false;
+  let pendingTopLevelKey = null;
+  let pendingCaptureKey = null;
+  let capture = null;
+  const topLevel = {};
+
+  function finishCapture() {
+    if (!capture) return;
+    const raw = capture.raw.join("").trim();
+    try {
+      topLevel[capture.key] = JSON.parse(raw);
+    } catch {
+      // The scanner still validates document completeness. A malformed value is
+      // treated as an absent stamp by callers rather than making the large-file
+      // probe retain the whole document just to produce a second parse error.
+    }
+    capture = null;
+  }
+
+  function captureChar(char) {
+    capture.raw.push(char);
+    if (capture.inString) {
+      if (capture.escaped) capture.escaped = false;
+      else if (char === "\\") capture.escaped = true;
+      else if (char === '"') {
+        capture.inString = false;
+        if (capture.nesting === 0) finishCapture();
+      }
+      return;
+    }
+    if (capture.raw.length === 1) {
+      if (char === '"') capture.inString = true;
+      else if (char === "[" || char === "{") capture.nesting = 1;
+      return;
+    }
+    if (char === '"') capture.inString = true;
+    else if (char === "[" || char === "{") capture.nesting += 1;
+    else if (char === "]" || char === "}") {
+      capture.nesting -= 1;
+      if (capture.nesting === 0) finishCapture();
+    }
+  }
 
   function write(chunk) {
     for (let i = 0; i < chunk.length; i += 1) {
       const char = String.fromCharCode(chunk[i]);
+
+      if (!capture && pendingCaptureKey && depth === 1 && !/[\s]/.test(char)) {
+        capture = { key: pendingCaptureKey, raw: [], inString: false, escaped: false, nesting: 0 };
+        pendingCaptureKey = null;
+      }
+      if (capture) {
+        if (capture.nesting === 0 && !capture.inString && (char === "," || char === "}")) finishCapture();
+        else captureChar(char);
+      }
+
       if (inString) {
         if (escaped) escaped = false;
         else if (char === "\\") escaped = true;
         else if (char === '"') {
           inString = false;
-          if (mode === "records" && !counting && depth === 1) pendingRecordsKey = keyBuffer === "records";
-        } else if (mode === "records" && !counting && depth === 1) keyBuffer += char;
+          if (depth === 1) {
+            pendingTopLevelKey = keyBuffer;
+            if (mode === "records" && !counting) pendingRecordsKey = keyBuffer === "records";
+          }
+        } else if (depth === 1) keyBuffer += char;
         continue;
       }
 
@@ -85,6 +140,10 @@ function createScanner(mode) {
         case "\n":
         case "\r":
         case ":":
+          if (depth === 1 && pendingTopLevelKey) {
+            if (captureNames.has(pendingTopLevelKey)) pendingCaptureKey = pendingTopLevelKey;
+            pendingTopLevelKey = null;
+          }
           break;
         default:
           if (depth === countingDepth) sawMember = true;
@@ -95,16 +154,16 @@ function createScanner(mode) {
 
   return {
     write,
-    result: () => ({ count, complete: depth === 0 }),
+    result: () => ({ count, complete: depth === 0, topLevel }),
   };
 }
 
-function streamStats(inputPath, { mode = "records", gunzip = null } = {}) {
+function streamStats(inputPath, { mode = "records", gunzip = null, captureTopLevel = [] } = {}) {
   const isGzip = gunzip === null ? inputPath.toLowerCase().endsWith(".gz") : gunzip;
 
   return new Promise((resolve, reject) => {
     // Inside the executor so a bad mode rejects like any other input error.
-    const scanner = createScanner(mode);
+    const scanner = createScanner(mode, { captureTopLevel });
     const hash = crypto.createHash("sha256");
     const source = inputPath === "-" ? process.stdin : fs.createReadStream(inputPath);
     // The digest covers the decompressed bytes so a gzipped baseline and a
@@ -117,12 +176,14 @@ function streamStats(inputPath, { mode = "records", gunzip = null } = {}) {
     plain.on("error", reject);
     source.on("error", reject);
     plain.on("end", () => {
-      const { count, complete } = scanner.result();
+      const { count, complete, topLevel } = scanner.result();
       if (!complete) {
         reject(new Error(`${inputPath} is not a complete JSON document`));
         return;
       }
-      resolve({ count, sha256: hash.digest("hex") });
+      const result = { count, sha256: hash.digest("hex") };
+      if (captureTopLevel.length) result.topLevel = topLevel;
+      resolve(result);
     });
   });
 }
