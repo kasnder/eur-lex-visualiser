@@ -681,19 +681,23 @@ and re-queries Cellar (issue #167). It runs automatically as a step of
 node --max-old-space-size=8192 search/in-force-recheck.js
 ```
 
-It re-checks everything **not already known to be out of force**. `inForce:
-false` is effectively terminal — an act that has fallen out of force does not
-come back — and that is 50,393 of the 80,469 acts in `data-v11`, so skipping
-them cuts the sweep to ~30k records (19,588 in force, 10,488 whose status
-Cellar has never answered and may yet). At 100 CELEX ids per SPARQL batch and
-200–400 ms per batch that is ~301 requests, about two minutes: there is
-deliberately no slicing, batch budget or turnover cycle, because at that cost a
-partial re-check would only buy staleness back.
+It re-checks **every** act in the cache. Skipping the ~63% already reading
+`inForce: false` (50,397 of 80,535 in `data-v12`) looks like free money and is
+not: `false` is not terminal. An act is harvested when it is published, which is
+normally *before* it enters into force, so Cellar answers `0` and the cache
+records it — then the act enters into force and the answer becomes `1`. Measured
+on `data-v12`, 13 acts had already made that transition unnoticed, 12 of them
+2026 acts with entry-into-force dates in July 2026, plus one 2023 decision whose
+validity was extended (`32023D2440`). Skipping `false` would strand exactly the
+newest legislation permanently mislabelled. At 100 CELEX ids per SPARQL batch
+and 200–400 ms per batch, the full sweep is ~806 requests: there is deliberately
+no slicing, batch budget or turnover cycle, because at that cost a partial
+re-check would only buy staleness back.
 
 It also runs with `useJournal: false`, so `data/in-force.json` is neither read
 nor written. The run is all-or-nothing — the cache is written once, at the end —
-so there is nothing to resume from, and journalling would only rewrite a
-30k-entry file every few batches. The builders keep the journal; an interrupted
+so there is nothing to resume from, and journalling would only rewrite an
+80k-entry file every few batches. The builders keep the journal; an interrupted
 multi-hour harvest genuinely needs it.
 
 Both this and `fetch-in-force.js` query Cellar **unaggregated**, collapsing
@@ -718,10 +722,9 @@ Two properties matter to the pipeline it runs in:
   is answering but degraded, and publishing would erode the status coverage
   `backend-docker.yml` asserts (>80%, currently 87%). The run fails instead.
 
-Flags: `--all` re-checks out-of-force acts too, for the rare case (annulment,
-corrigendum) where one is restored; `--limit N` caps the run for a smoke test;
-`--no-gz` skips the `.gz` sidecar when the caller gzips the JSON itself, as the
-workflow does.
+Flags: `--limit N` caps the run for a smoke test; `--no-gz` skips the `.gz`
+sidecar when the caller gzips the JSON itself, as the workflow does;
+`--max-null-ratio R` adjusts the degradation guard.
 
 If whole acts are missing rather than a field — a transient Cellar failure during
 the sweep, or an act Cellar had not indexed yet when it ran — add them by CELEX

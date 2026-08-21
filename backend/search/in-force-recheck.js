@@ -7,32 +7,35 @@
 // carries it, so no act's status is ever re-asked after its first harvest — a
 // repealed act keeps reading `inForce: true` forever.
 //
-// This tool clears the field and asks Cellar again. It re-checks everything NOT
-// already known to be out of force: `inForce: false` is effectively terminal —
-// an act that has fallen out of force does not come back — and that is 50,393
-// of the 80,469 acts in data-v11. What is left is small enough to sweep whole
-// on every run:
+// This tool clears the field and asks Cellar again, for every act in the cache.
 //
-//   inForce: true    19,588   can be repealed or expire     -> swept
-//   inForce: null    10,488   Cellar had no status yet      -> swept (may gain one)
-//   inForce: false   50,393   terminal                      -> skipped (--all to include)
+// It deliberately does NOT skip acts already reading `inForce: false`, however
+// tempting that is: they are ~63% of the corpus (50,397 of 80,535 in data-v12),
+// and skipping them looks like it makes the run three times cheaper for nothing.
+// It does not. `false` is not terminal. An act is harvested as soon as it is
+// published, which is normally *before* it enters into force, so Cellar answers
+// "0" and the cache records it — then the act enters into force and the answer
+// becomes "1". Measured on data-v12: 13 acts had already made that transition
+// unnoticed, 12 of them 2026 acts with entry-into-force dates in July 2026, one
+// a 2023 decision whose validity was later extended (32023D2440, end-of-validity
+// 2024-12-31 -> 2026-12-31). Skipping `false` would strand exactly the newest
+// legislation — the part most likely to be read — permanently mislabelled.
 //
-// ~30k records is ~301 SPARQL batches at 100 ids each, measured at 200-400ms per
-// batch against Cellar: about two minutes, most of it spent parsing and
-// re-serialising the cache rather than on the network. There is deliberately no
-// slicing, batch budget or turnover cycle — at this cost, a partial re-check
+// So the sweep is the whole cache, ~80.5k records: ~806 SPARQL batches at 100
+// ids each, measured at 200-400ms per batch against Cellar. There is no
+// slicing, batch budget or turnover cycle; at this cost, a partial re-check
 // would only buy staleness back.
 //
 // Nor is there a resume journal. The run is all-or-nothing: it writes the cache
 // once, at the end, only if a status actually moved, so a run that fails
 // partway leaves nothing behind to resume from and is simply re-run. Passing
-// `useJournal: false` also spares ~60 rewrites of a 30k-entry file per run.
+// `useJournal: false` also spares ~160 rewrites of an 80k-entry file per run.
 // (The builders that call the same enrichment keep the journal — an interrupted
 // multi-hour harvest genuinely needs to resume.)
 //
 // Usage:
 //   node --max-old-space-size=8192 search/in-force-recheck.js
-//     [--cache-path path] [--all] [--limit N] [--max-null-ratio R] [--no-gz]
+//     [--cache-path path] [--limit N] [--max-null-ratio R] [--no-gz]
 
 const fs = require("fs");
 const zlib = require("zlib");
@@ -48,12 +51,6 @@ const LABEL = "in-force-recheck";
 // write past this fraction rather than let a bad afternoon at Cellar erase the
 // status coverage the Docker guard checks for (>80%, currently 87%).
 const DEFAULT_MAX_NULL_RATIO = 0.05;
-
-// `false` is terminal; everything else (true, null, or a record that predates
-// the field entirely) is a status that can still move.
-function isRecheckable(record) {
-  return record.inForce !== false;
-}
 
 function classifyFlip(before, after) {
   if (before.inForce === true && after.inForce === false) return "toRepealed";
@@ -85,9 +82,9 @@ function lostStatus(before, after) {
 // leave it with no `inForce` key at all, which is exactly what the Docker guard
 // fails the build over.
 async function runRecheck(records, options = {}) {
-  const { all = false, limit = 0, log = () => {}, runQueryFn } = options;
+  const { limit = 0, log = () => {}, runQueryFn } = options;
 
-  const eligible = records.filter((record) => record.celex && (all || isRecheckable(record)));
+  const eligible = records.filter((record) => record.celex);
   const targets = limit > 0 ? eligible.slice(0, limit) : eligible;
 
   const before = new Map(
@@ -98,7 +95,7 @@ async function runRecheck(records, options = {}) {
     delete record.inForce;
     delete record.endOfValidity;
   }
-  log(`re-checking ${targets.length} records (all=${all})`);
+  log(`re-checking ${targets.length} records`);
 
   const enrichStats = await enrichRecordsWithInForce(targets, {
     useJournal: false,
@@ -151,7 +148,6 @@ function assertStatusNotDegraded(result, maxNullRatio = DEFAULT_MAX_NULL_RATIO) 
 function parseArgs(argv) {
   const options = {
     cachePath: undefined,
-    all: false,
     limit: 0,
     maxNullRatio: DEFAULT_MAX_NULL_RATIO,
     gz: true,
@@ -165,8 +161,6 @@ function parseArgs(argv) {
     } else if (token === "--max-null-ratio" && argv[index + 1]) {
       const parsed = Number.parseFloat(argv[++index]);
       if (Number.isFinite(parsed)) options.maxNullRatio = parsed;
-    } else if (token === "--all") {
-      options.all = true;
     } else if (token === "--no-gz") {
       options.gz = false;
     }
@@ -230,12 +224,11 @@ async function main() {
   const outOfForce = records.filter((r) => r.inForce === false).length;
   console.log(`[${LABEL}] loaded ${records.length} records from ${store.cachePath}`);
   console.log(
-    `[${LABEL}] ${outOfForce} records are already out of force`
-    + `${options.all ? " (re-checked anyway: --all)" : " and are not re-checked"}`,
+    `[${LABEL}] ${outOfForce} of them currently read as out of force, and are re-checked too`
+    + " (an act published before it enters into force starts out false)",
   );
 
   const result = await runRecheck(records, {
-    all: options.all,
     limit: options.limit,
     log: (message) => console.log(`[${LABEL}] ${message}`),
   });
@@ -280,6 +273,5 @@ module.exports = {
   assertStatusNotDegraded,
   classifyFlip,
   hasChanged,
-  isRecheckable,
   runRecheck,
 };

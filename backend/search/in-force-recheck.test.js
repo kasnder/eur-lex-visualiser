@@ -5,20 +5,12 @@ const {
   assertStatusNotDegraded,
   classifyFlip,
   hasChanged,
-  isRecheckable,
   runRecheck,
 } = require("./in-force-recheck");
 
 function bindings(rows) {
   return { results: { bindings: rows } };
 }
-
-test("isRecheckable treats out-of-force as terminal and everything else as open", () => {
-  assert.equal(isRecheckable({ inForce: true }), true);
-  assert.equal(isRecheckable({ inForce: null }), true);
-  assert.equal(isRecheckable({}), true); // predates the field
-  assert.equal(isRecheckable({ inForce: false }), false);
-});
 
 test("classifyFlip only reports true in-force <-> repealed transitions", () => {
   assert.equal(classifyFlip({ inForce: true }, { inForce: false }), "toRepealed");
@@ -37,39 +29,29 @@ test("hasChanged catches null transitions and end-of-validity corrections a flip
   ), true);
 });
 
-test("runRecheck re-checks everything not already out of force, and leaves the rest untouched", async () => {
-  const stale = { celex: "STALE", inForce: true, endOfValidity: "2020-01-01" };
-  const unknown = { celex: "UNKNOWN", inForce: null, endOfValidity: null };
-  const terminal = { celex: "TERMINAL", inForce: false, endOfValidity: "2018-05-24" };
+// An act is harvested when published, normally before it enters into force, so
+// Cellar answers "0" and the cache records it. Skipping `inForce: false` would
+// strand exactly the newest legislation permanently mislabelled — 13 acts in
+// data-v12 had already made that transition unnoticed.
+test("runRecheck re-checks out-of-force acts too, so one entering into force is caught", async () => {
+  const notYetInForce = { celex: "NEW", inForce: false, endOfValidity: null };
+  const inForce = { celex: "OLD", inForce: true, endOfValidity: null };
 
   const asked = [];
-  const result = await runRecheck([stale, unknown, terminal], {
+  const result = await runRecheck([notYetInForce, inForce], {
     runQueryFn: async (query) => {
       asked.push(query);
-      return bindings([{ celex: { value: "STALE" }, inForceValue: { value: "0" } }]);
+      return bindings([
+        { celex: { value: "NEW" }, inForceValue: { value: "1" } },
+        { celex: { value: "OLD" }, inForceValue: { value: "1" } },
+      ]);
     },
   });
 
   assert.equal(result.rechecked, 2);
-  assert.equal(stale.inForce, false);
-  assert.equal(unknown.inForce, null);
-  // The terminal record is neither cleared nor re-queried.
-  assert.equal(terminal.inForce, false);
-  assert.equal(terminal.endOfValidity, "2018-05-24");
-  assert.doesNotMatch(asked.join(""), /TERMINAL/);
-});
-
-test("runRecheck --all re-checks the out-of-force records too", async () => {
-  const terminal = { celex: "TERMINAL", inForce: false, endOfValidity: "2018-05-24" };
-
-  const result = await runRecheck([terminal], {
-    all: true,
-    runQueryFn: async () => bindings([{ celex: { value: "TERMINAL" }, inForceValue: { value: "1" } }]),
-  });
-
-  assert.equal(result.rechecked, 1);
+  assert.match(asked.join(""), /NEW/);
+  assert.equal(notYetInForce.inForce, true);
   assert.equal(result.flippedToInForce, 1);
-  assert.equal(terminal.inForce, true);
 });
 
 test("runRecheck counts actual flips and changes, not the number re-queried", async () => {
