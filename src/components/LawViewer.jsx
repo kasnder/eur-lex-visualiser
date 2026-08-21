@@ -47,6 +47,7 @@ import { DefinitionTooltip } from "./law-viewer/DefinitionTooltip.jsx";
 import { LawViewerReadingFooter } from "./law-viewer/LawViewerReadingFooter.jsx";
 import { LawViewerContextRail } from "./law-viewer/LawViewerContextRail.jsx";
 import { LawOverviewPage } from "./law-viewer/LawOverviewPage.jsx";
+import { ConsolidatedFallbackNotice } from "./law-viewer/ConsolidatedFallbackNotice.jsx";
 import { DefinitionComparisonSheet } from "./law-viewer/DefinitionComparisonSheet.jsx";
 import { ConsolidationNotice } from "./ConsolidationNotice.jsx";
 
@@ -412,6 +413,12 @@ export function LawViewer() {
                     currentLang={displayedFormexLang}
                     locale={locale}
                     variant="inline"
+                    source={primaryDocument.data.source}
+                  />
+
+                  <ConsolidatedFallbackNotice
+                    source={primaryDocument.data.source}
+                    consolidatedVersion={derived.consolidatedVersion}
                   />
 
                   {interactions.isResolvingExternalLaw ? (
