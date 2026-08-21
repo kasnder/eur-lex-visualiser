@@ -67,6 +67,12 @@ export function useConsolidationStatus(celex) {
       consolidated: current,
       hasUpcomingConsolidation: upcoming.length > 0,
       consolidatedStatusUnknown,
+      // Still in flight. Distinct from `consolidatedStatusUnknown` (the fetch
+      // failed) and from a genuine empty result: `versions` starts null, and
+      // without this the caller cannot tell "not loaded yet" from "none
+      // exists" and flashes "EUR-Lex has not published a consolidated
+      // version" on first paint for acts that plainly have one.
+      consolidatedStatusPending: versions === null,
     };
   }, [amendments, amendmentsTruncated, versions, consolidatedStatusUnknown]);
 }

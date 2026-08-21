@@ -101,6 +101,33 @@ describe("ConsolidationNotice", () => {
     expect(container.querySelector("a")).toBe(null);
   });
 
+  it("does not claim no consolidated version exists while the query is still in flight", async () => {
+    // The amendment history resolves first (it is the faster of the two
+    // queries), so without a pending state the notice renders its summary
+    // beside "EUR-Lex has not published a consolidated version" — a claim it
+    // has no basis for yet, and one that is wrong for most amended acts. It
+    // then flips to a toggle a moment later.
+    fetchAmendments.mockResolvedValue({
+      amendments: [{ celex: "32020R0001", date: "2020-01-01", type: "amendment" }],
+    });
+    let resolveVersions;
+    fetchConsolidatedVersions.mockReturnValue(
+      new Promise((resolve) => { resolveVersions = resolve; })
+    );
+
+    await render({ onToggleVersion: vi.fn() });
+
+    expect(container.textContent).toContain("amended once");
+    expect(container.textContent).not.toContain("has not published a consolidated version");
+
+    await act(async () => {
+      resolveVersions({ versions: [{ celex: "02013R0575-20200101", date: "2020-01-01" }] });
+    });
+
+    expect(container.textContent).not.toContain("has not published a consolidated version");
+    expect(container.textContent).toContain("Read this law as amended");
+  });
+
   it("stays silent when the amendment history cannot be fetched", async () => {
     fetchAmendments.mockRejectedValue(new Error("cellar down"));
     fetchConsolidatedVersions.mockRejectedValue(new Error("cellar down"));

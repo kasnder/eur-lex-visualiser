@@ -172,12 +172,18 @@ export function ConsolidationNotice({
     </button>
   ) : null;
 
-  // No link means either: no consolidated version has ever been published
-  // (say so), only future-dated ones exist (say that instead, honestly), or
-  // the /consolidated fetch itself failed (say nothing — we don't know).
+  // No link means either: the query has not answered yet (say nothing), no
+  // consolidated version has ever been published (say so), only future-dated
+  // ones exist (say that instead, honestly), or the /consolidated fetch
+  // itself failed (say nothing — we don't know).
   let noVersionMessage = null;
   if (!link) {
-    if (status.consolidatedStatusUnknown) {
+    if (status.consolidatedStatusPending) {
+      // The query is still in flight — claiming either way would be a guess,
+      // and the wrong guess flashes on every amended act before the toggle
+      // appears.
+      noVersionMessage = null;
+    } else if (status.consolidatedStatusUnknown) {
       noVersionMessage = null;
     } else if (status.hasUpcomingConsolidation) {
       noVersionMessage = t("consolidation.consolidatedVersionPending");
