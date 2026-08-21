@@ -19,3 +19,33 @@ test("determineMatchReason treats Law Enforcement Directive aliases as exact mat
     assert.equal(determineMatchReason(law, parsed), "alias_exact", `Expected alias_exact for ${query}`);
   }
 });
+
+test("parseStructuredQuery extracts slash and whitespace year/number references", () => {
+  for (const query of ["2021/2115", "2021 2115"]) {
+    const parsed = parseStructuredQuery(query);
+    assert.equal(parsed.year, "2021", `Expected year for ${query}`);
+    assert.equal(parsed.number, "2115", `Expected number for ${query}`);
+    assert.equal(parsed.type, null, `Expected no act type for ${query}`);
+  }
+});
+
+test("parseStructuredQuery does not infer references from numbers in prose", () => {
+  for (const query of ["emissions 2020 2030 targets", "chapter 3 2016 679"]) {
+    const parsed = parseStructuredQuery(query);
+    assert.equal(parsed.year, null, `Expected no year for ${query}`);
+    assert.equal(parsed.number, null, `Expected no number for ${query}`);
+  }
+});
+
+test("determineMatchReason reports untyped year/number references as exact", () => {
+  const law = enrichSearchRecord({
+    celex: "32021R2115",
+    title: "Common agricultural policy rules",
+    type: "regulation",
+    eli: "http://data.europa.eu/eli/reg/2021/2115/oj",
+  });
+
+  for (const query of ["2021/2115", "2021 2115"]) {
+    assert.equal(determineMatchReason(law, parseStructuredQuery(query)), "reference_exact");
+  }
+});

@@ -151,6 +151,7 @@ function parseStructuredQuery(query, options = {}) {
   const celexMatch = celexCompact.match(/^3\d{4}[RLD]\d{1,4}(?:\(\d+\))?$/);
 
   const slashMatch = raw.match(/\b(\d{4})\s*\/\s*(\d{1,4})\b/);
+  const spacedReferenceMatch = normalized.match(/^(\d{4})\s+(\d{1,4})$/);
   const typePrefixMatch = raw.match(/\b(regulation|directive|decision)\b/);
   const leadingTypeYearNumberMatch = raw.match(
     /\b(regulation|directive|decision)\b[^0-9]*(\d{4})\s*\/\s*(\d{1,4})\b/
@@ -167,10 +168,12 @@ function parseStructuredQuery(query, options = {}) {
       .filter((term) => term.length >= 2)
       .filter((term) => !LOW_SIGNAL_TERMS.has(term)),
     celex: celexMatch ? celexMatch[0] : null,
-    year: leadingTypeYearNumberMatch?.[2] || slashMatch?.[1] || null,
+    year: leadingTypeYearNumberMatch?.[2] || slashMatch?.[1] || spacedReferenceMatch?.[1] || null,
     number: leadingTypeYearNumberMatch?.[3]
       ? String(Number.parseInt(leadingTypeYearNumberMatch[3], 10))
-      : (slashMatch?.[2] ? String(Number.parseInt(slashMatch[2], 10)) : null),
+      : (slashMatch?.[2]
+        ? String(Number.parseInt(slashMatch[2], 10))
+        : (spacedReferenceMatch?.[2] ? String(Number.parseInt(spacedReferenceMatch[2], 10)) : null)),
     type: normalizeTypeToken(leadingTypeYearNumberMatch?.[1] || typePrefixMatch?.[1] || "")
   };
 }
@@ -281,10 +284,10 @@ function determineMatchReason(law, parsed) {
   if (normalizedTitle === parsed.normalized || compactText(law.title) === parsed.compact) {
     return "alias_exact";
   }
-  if (parsed.type && parsed.year && parsed.number &&
-      parsed.type === law.type &&
+  if (parsed.year && parsed.number &&
       parsed.year === law.celexYear &&
-      parsed.number === law.celexNumber) {
+      parsed.number === law.celexNumber &&
+      (!parsed.type || parsed.type === law.type)) {
     return "reference_exact";
   }
   if (normalizedTitle.includes(parsed.normalized) || compactText(law.title).includes(parsed.compact)) {
