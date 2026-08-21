@@ -183,6 +183,68 @@ test("legal cache store resolves exact official reference", () => {
   assert.equal(match?.celex, "32015L2366");
 });
 
+test("legal cache store resolves untyped official references before title matches", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "legal-cache-store-untyped-reference-"));
+  const tempPath = path.join(tempDir, "search.json");
+  fs.writeFileSync(tempPath, JSON.stringify({ records: [
+    {
+      celex: "32021R2115",
+      title: "Common agricultural policy rules",
+      type: "regulation",
+      eli: "http://data.europa.eu/eli/reg/2021/2115/oj",
+    },
+    {
+      celex: "32024R0123",
+      title: "Regulation amending Regulation (EU) 2021/2115",
+      type: "regulation",
+      eli: "http://data.europa.eu/eli/reg/2024/123/oj",
+    },
+    {
+      celex: "32014R2115",
+      title: "Regulation 2014 reference",
+      type: "regulation",
+      eli: "http://data.europa.eu/eli/reg/2014/2115/oj",
+    },
+    {
+      celex: "32014L2115",
+      title: "Directive 2014 reference",
+      type: "directive",
+      eli: "http://data.europa.eu/eli/dir/2014/2115/oj",
+    },
+    {
+      celex: "32014D2115",
+      title: "Decision 2014 reference",
+      type: "decision",
+      eli: "http://data.europa.eu/eli/dec/2014/2115/oj",
+    },
+  ] }), "utf8");
+
+  const store = new JsonLegalCacheStore(tempPath, { preferJson: true });
+  try {
+    assert.equal(store.load(), true);
+
+    for (const query of ["2021/2115", "2021 2115"]) {
+      const results = store.searchLaws(query, { limit: 2 });
+      assert.deepEqual(results.map((result) => result.celex), ["32021R2115", "32024R0123"]);
+      assert.equal(results[0].matchReason, "reference_exact");
+      assert.equal(results[1].matchReason, "title_phrase");
+    }
+
+    const overlappingReferences = store.searchLaws("2014/2115", { limit: 3 });
+    assert.deepEqual(
+      overlappingReferences.map((result) => result.celex),
+      ["32014R2115", "32014L2115", "32014D2115"]
+    );
+    assert.deepEqual(
+      overlappingReferences.map((result) => result.matchReason),
+      ["reference_exact", "reference_exact", "reference_exact"]
+    );
+  } finally {
+    store.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("legal cache store supplements the ePrivacy Directive when missing from cache", () => {
   const store = new JsonLegalCacheStore(fixturePath);
   store.load();

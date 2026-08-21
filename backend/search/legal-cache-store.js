@@ -1333,6 +1333,13 @@ class JsonLegalCacheStore {
     if (parsed.type && parsed.year && parsed.number) {
       const referenceKey = `${parsed.type}|${parsed.year}|${parsed.number}`;
       addMatch(getDeterministicMatch(this.byOfficialReference, referenceKey));
+    } else if (parsed.year && parsed.number) {
+      // A bare year/number is still an official reference; pre-2015 sequences
+      // can overlap across act types, so probe each type in deterministic order.
+      for (const type of ["regulation", "directive", "decision"]) {
+        const referenceKey = `${type}|${parsed.year}|${parsed.number}`;
+        addMatch(getDeterministicMatch(this.byOfficialReference, referenceKey));
+      }
     }
 
     for (const key of [parsed.normalized, parsed.compact]) {
