@@ -163,6 +163,7 @@ async function generateArticleDigest(input, {
       digest: { summary: '', themes: [], noCaseLaw: true },
       model,
       usage: null,
+      billed: false,
     };
   }
 
@@ -183,6 +184,7 @@ async function generateArticleDigest(input, {
     digest: parseArticleDigestJson(response.text, input),
     model: response.model || model,
     usage: response.usage || null,
+    billed: true,
   };
 }
 
@@ -222,6 +224,7 @@ async function ensureArticleDigest({
         generatedAt: cached.generatedAt || null,
         caseLawCacheVersion: cached.caseLawCacheVersion,
         cached: true,
+        billed: false,
       };
     }
 
@@ -248,6 +251,10 @@ async function ensureArticleDigest({
       generatedAt: entry?.generatedAt || null,
       caseLawCacheVersion: CASE_LAW_CACHE_VERSION,
       cached: false,
+      // Whether a real (billed) model call happened — distinct from `cached`:
+      // the zero-case short-circuit above also returns `cached: false` (there
+      // is no cache entry validated) but never calls the model.
+      billed: generated.billed === true,
     };
   });
 }

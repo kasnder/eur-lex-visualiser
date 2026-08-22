@@ -34,6 +34,33 @@ function withTimeout(signal, timeoutMs) {
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
+// Rejects as soon as `signal` aborts, so a caller-initiated abort takes
+// effect even while the request is still queued for a semaphore slot (the
+// fetch itself isn't running yet, so it has nothing to abort). Once the slot
+// is acquired, the in-flight fetch is aborted normally via its own signal.
+//
+// Returns a `cancel` alongside the promise because the listener outlives the
+// race when the request wins it: a caller that reuses one long-lived signal
+// across many calls would otherwise accumulate a listener per call. Passing
+// an AbortSignal to addEventListener is the documented way to detach it.
+function abortRejection(signal) {
+  if (signal.aborted) {
+    return {
+      promise: Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
+      cancel: () => {},
+    };
+  }
+  const detach = new AbortController();
+  const promise = new Promise((_, reject) => {
+    signal.addEventListener(
+      'abort',
+      () => reject(new DOMException('The operation was aborted.', 'AbortError')),
+      { once: true, signal: detach.signal }
+    );
+  });
+  return { promise, cancel: () => detach.abort() };
+}
+
 class ChatProviderError extends Error {
   constructor(message, { status = 500, code = null, details = null } = {}) {
     super(message);
@@ -88,7 +115,11 @@ async function chatComplete({
   if (!apiKey) {
     throw new ChatProviderError('OPENROUTER_API_KEY is required', { status: 503, code: 'missing_api_key' });
   }
-  signal = withTimeout(signal, timeoutMs);
+  // Keep the caller's own signal (if any) separate from the per-call timeout:
+  // the timeout must only start once the request actually begins sending (see
+  // below), but an explicit caller abort has to take effect immediately, even
+  // while the request is still queued on the semaphore.
+  const callerSignal = signal;
   const url = `${String(baseUrl).replace(/\/+$/, '')}/chat/completions`;
   const body = { model, messages, temperature, max_tokens: maxTokens };
   if (responseFormat) {
@@ -103,10 +134,15 @@ async function chatComplete({
   try {
     // The slot is held until the response body has been read, so `limit` is
     // really the number of generations this process can be paying for at once.
-    data = await chatSemaphore.run(async () => {
+    const runPromise = chatSemaphore.run(async () => {
+      // Arm the timeout here, immediately before the fetch, not before the
+      // semaphore admits this call — otherwise time spent waiting in the
+      // queue is charged against the request's own timeout budget, and a
+      // queued request can time out having never been sent.
+      const requestSignal = withTimeout(callerSignal, timeoutMs);
       const res = await fetch(url, {
         method: 'POST',
-        signal,
+        signal: requestSignal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
@@ -124,6 +160,24 @@ async function chatComplete({
       }
       return res.json();
     });
+    // Prevent an unhandled-rejection warning if the abort race below wins
+    // first and nothing else ever observes runPromise's eventual rejection.
+    runPromise.catch(() => {});
+
+    if (callerSignal) {
+      const abort = abortRejection(callerSignal);
+      // Swallow the loser's rejection either way: whichever promise the race
+      // discards still settles, and an unobserved rejection would surface as
+      // an unhandled-rejection warning.
+      abort.promise.catch(() => {});
+      try {
+        data = await Promise.race([runPromise, abort.promise]);
+      } finally {
+        abort.cancel();
+      }
+    } else {
+      data = await runPromise;
+    }
   } catch (err) {
     if (err instanceof CapacityError) {
       throw new ChatProviderError('Too many AI generations in progress; please retry shortly', {
@@ -150,6 +204,15 @@ async function chatComplete({
  *   { type: 'delta', text }         for each content chunk
  *   { type: 'done', usage, model }  once at the end
  * Throws ChatProviderError on upstream failure (incl. 402 insufficient credits).
+ *
+ * INTENTIONALLY UNGUARDED: unlike chatComplete, this does not go through
+ * chatSemaphore — it is currently unused (referenced only by module.exports),
+ * so there is no established concurrency contract for it yet. Wrapping an
+ * async generator in chatSemaphore.run() the same way chatComplete does would
+ * hold a slot open for the whole lifetime of the stream (which chatComplete
+ * never does — it holds a slot only until the response body is read), a very
+ * different capacity cost. Before this is ever wired up to a real caller, it
+ * must acquire a slot itself with a strategy suited to a long-lived stream.
  */
 async function* chatStream({
   model,

@@ -163,4 +163,50 @@ test('ensureArticleDigest caches no-case-law results without calling the model',
 
   assert.equal(result.digest.noCaseLaw, true);
   assert.equal(calls, 0);
+  // The route charges the caller's generation budget on `billed`, not on
+  // `cached` — this zero-case short-circuit is `cached: false` (there is
+  // nothing to validate against a cache entry) but must not be billed.
+  assert.equal(result.cached, false);
+  assert.equal(result.billed, false);
+});
+
+test('ensureArticleDigest reports billed:true only when the model was actually called', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'article-digest-service-'));
+  let calls = 0;
+  const args = {
+    celex: '32016R0679',
+    articleNumber: '6',
+    lang: 'ENG',
+    parsedLaw: sampleParsedLaw(),
+    caseLawPayload: sampleCases(),
+    cacheDir,
+    apiKey: 'test-key',
+    model: 'test-model',
+    chatComplete: async () => {
+      calls++;
+      return {
+        model: 'test-model',
+        usage: { total_tokens: 42 },
+        text: JSON.stringify({
+          summary: 'The Court links Article 6 to a valid legal basis.',
+          noCaseLaw: false,
+          themes: [{
+            name: 'Legal basis',
+            description: 'Processing must rest on a valid legal basis.',
+            cites: [{ ecli: 'ECLI:EU:C:2020:559', declarationNumber: '1' }],
+          }],
+        }),
+      };
+    },
+  };
+
+  const first = await ensureArticleDigest(args);
+  assert.equal(first.cached, false);
+  assert.equal(first.billed, true);
+  assert.equal(calls, 1);
+
+  const second = await ensureArticleDigest(args);
+  assert.equal(second.cached, true);
+  assert.equal(second.billed, false);
+  assert.equal(calls, 1);
 });
