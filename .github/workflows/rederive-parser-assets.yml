@@ -672,43 +672,70 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          artifact=$(gh api \
+          # Candidates largest first. Size orders these correctly because a
+          # checkpoint only ever grows within a corpus/parser pair, and trying
+          # them in turn matters because the largest is not always usable: a
+          # dispatch killed outright (a cancel rather than the timeout's SIGINT)
+          # never reaches its wal_checkpoint(TRUNCATE), and the upload ships the
+          # main database without its -wal, so a kill landing inside a
+          # checkpoint leaves a torn file that opens SQLITE_CORRUPT.
+          # Command substitution first so a failing API call fails the step
+          # under set -e; mapfile alone would swallow it and cold-build.
+          listing=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | last // empty')
-          if [ -z "$artifact" ]; then
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | reverse | .[] | "\(.id) \(.size_in_bytes)"')
+          mapfile -t candidates <<< "$listing"
+          # A single empty line is what mapfile makes of no artifacts at all.
+          [ "${#candidates[@]}" -eq 1 ] && [ -z "${candidates[0]}" ] && candidates=()
+          if [ "${#candidates[@]}" -eq 0 ]; then
             echo "No fulltext checkpoint from a previous dispatch; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          artifact_id=$(jq -er '.id' <<< "$artifact")
-          artifact_size=$(jq -er '.size_in_bytes' <<< "$artifact")
-          # Echoed to stdout as well as the summary: this line sits directly
-          # above the builder's own "resuming:" line in the job log, so a
-          # dispatch that failed to adopt a checkpoint is visible in the same
-          # place you read the build's progress.
-          echo "Fulltext checkpoint: artifact $artifact_id, $artifact_size bytes"
-          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip
-          rm -rf checkpoint && mkdir checkpoint
-          unzip -q checkpoint.zip -d checkpoint
-          # A checkpoint that exists but cannot be used is a hard failure, not a
-          # cold build. Silently restarting discards every act the previous
-          # dispatches indexed -- 44,400 of them the one time this fired -- and
-          # costs a five-hour dispatch to rediscover. Failing here keeps the
-          # artifact intact for the next attempt.
-          test -s checkpoint/fulltext.sqlite || { echo "::error::Checkpoint artifact $artifact_id has no fulltext.sqlite"; exit 1; }
-          checkpoint_act_count=$(node -e '
-            const Database = require("better-sqlite3");
-            const db = new Database("checkpoint/fulltext.sqlite", { readonly: true });
-            process.stdout.write(String(db.prepare("SELECT COUNT(DISTINCT celex) n FROM units").get().n));
-            db.close();
-          ') || { echo "::error::Checkpoint artifact $artifact_id is unreadable"; exit 1; }
-          if [ "$checkpoint_act_count" -le 0 ]; then
-            echo "::error::Checkpoint artifact $artifact_id has no acts"
-            exit 1
-          fi
-          mkdir -p rederive-output
-          mv checkpoint/fulltext.sqlite rederive-output/fulltext.sqlite
-          rm -f rederive-output/fulltext.sqlite-wal rederive-output/fulltext.sqlite-shm
-          echo "Resumed from this job's own checkpoint: $checkpoint_act_count acts already indexed." >> "$GITHUB_STEP_SUMMARY"
+          rejected=0
+          for candidate in "${candidates[@]}"; do
+            artifact_id=${candidate%% *}
+            artifact_size=${candidate##* }
+            # Echoed to stdout as well as the summary: this line sits directly
+            # above the builder's own "resuming:" line in the job log, so a
+            # dispatch that failed to adopt a checkpoint is visible in the same
+            # place you read the build's progress.
+            echo "Fulltext checkpoint: trying artifact $artifact_id, $artifact_size bytes"
+            rm -rf checkpoint checkpoint.zip && mkdir checkpoint
+            if ! gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip \
+              || ! unzip -q checkpoint.zip -d checkpoint \
+              || [ ! -s checkpoint/fulltext.sqlite ]; then
+              echo "::warning::Checkpoint artifact $artifact_id did not yield a fulltext.sqlite; trying the next one"
+              rejected=$((rejected + 1))
+              continue
+            fi
+            # integrity_check rather than a bare open: a torn database can
+            # answer some queries and fail others, and adopting one that only
+            # breaks later costs a whole dispatch to discover.
+            checkpoint_act_count=$(node -e '
+              const Database = require("better-sqlite3");
+              const db = new Database("checkpoint/fulltext.sqlite", { readonly: true });
+              const check = db.pragma("integrity_check", { simple: true });
+              if (check !== "ok") throw new Error(`integrity_check: ${check}`);
+              process.stdout.write(String(db.prepare("SELECT COUNT(DISTINCT celex) n FROM units").get().n));
+              db.close();
+            ') || checkpoint_act_count=""
+            if [ -z "$checkpoint_act_count" ] || [ "$checkpoint_act_count" -le 0 ]; then
+              echo "::warning::Checkpoint artifact $artifact_id is unreadable or empty; trying the next one"
+              rejected=$((rejected + 1))
+              continue
+            fi
+            mkdir -p rederive-output
+            mv checkpoint/fulltext.sqlite rederive-output/fulltext.sqlite
+            rm -f rederive-output/fulltext.sqlite-wal rederive-output/fulltext.sqlite-shm
+            echo "Resumed from this job's own checkpoint: artifact $artifact_id, $checkpoint_act_count acts already indexed ($rejected larger candidate(s) rejected)." >> "$GITHUB_STEP_SUMMARY"
+            echo "[fulltext] adopted checkpoint artifact $artifact_id with $checkpoint_act_count acts; rejected $rejected larger candidate(s)"
+            exit 0
+          done
+          # Every candidate was unusable. Starting cold here would silently
+          # discard tens of thousands of indexed acts and spend a five-hour
+          # dispatch rediscovering them, so fail and leave the artifacts intact.
+          echo "::error::All ${#candidates[@]} fulltext checkpoint candidates were unusable"
+          exit 1
 
       # Fresh output path: this is a cold build, never the restored/published
       # fulltext.sqlite, so doneCelex-based resume can never preserve stale
