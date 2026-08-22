@@ -357,7 +357,7 @@ test("writeManifest writes sha256 + counts alongside the sqlite file", async () 
 // is likewise invisible in RSS. Both are per-dispatch state that a restart
 // clears. So the progress line carries the worker's own isolate heap against
 // its cap, and the WAL size beside it -- one dispatch then distinguishes them.
-test("progress line reports the worker's isolate heap against its cap and the WAL size", async () => {
+test("progress line reports the worker's isolate heap against its cap, the WAL size, and the parse/insert split", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-heaplog-"));
   const outputPath = path.join(dir, "fulltext.sqlite");
   const file = await seedCorpusFile(dir, "fmx-v4-2009-32009L0004.xml.gz", "32009L0004", "xml");
@@ -388,6 +388,18 @@ test("progress line reports the worker's isolate heap against its cap and the WA
     assert.equal(cap, 256, "cap should echo the configured workerHeapMb");
     assert.ok(peak >= heapUsed, "peak should be at least the latest sample");
     assert.ok(Number.isInteger(wal) && wal >= 0, "WAL size should be a non-negative integer");
+
+    // The parse/insert split is the whole point of the line: without it a
+    // decaying build cannot be attributed to the parallel half or to the
+    // parent's serialized insert.
+    const timing = /parse ([\d.]+)s insert ([\d.]+)s \(last (\d+)\/(\d+) ms\)/.exec(progress.at(-1));
+    assert.ok(timing, `progress line lacks the parse/insert split: ${progress.at(-1)}`);
+    const [, parseS, insertS, lastParse, lastInsert] = timing.map(Number);
+    // Parsing a real corpus file is never instantaneous, so a zero here means
+    // the worker stopped reporting parseMs rather than that it was fast.
+    assert.ok(parseS > 0, "cumulative parse time should be non-zero");
+    assert.ok(lastParse > 0, "last-batch parse time should be non-zero");
+    assert.ok(insertS >= 0 && lastInsert >= 0, "insert timings should be non-negative");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

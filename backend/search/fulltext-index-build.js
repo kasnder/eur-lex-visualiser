@@ -227,6 +227,15 @@ function runPool(initialBatches, onResult, options = {}) {
       // seen across the run. A build that decays as it runs shows up here as
       // a climb toward workerHeapMb; a flat trace rules the workers out.
       workerHeapMb: 0, peakWorkerHeapMb: 0,
+      // Where the wall clock goes. parseMs is summed across workers so it
+      // exceeds elapsed time by roughly the pool size; insertMs is the
+      // parent's own, and is strictly serialized — runPool hands a worker its
+      // next batch only after onResult returns, so every worker idles through
+      // it. insertMs approaching elapsed time therefore means the build is
+      // bounded by the single-threaded insert, not by parsing. The lastParseMs
+      // / lastInsertMs pair gives the instantaneous cost of one batch, which
+      // is what shows a trend; the cumulative totals hide it.
+      parseMs: 0, insertMs: 0, lastParseMs: 0, lastInsertMs: 0,
     };
     let resolved = false;
     const inflight = new Map(); // worker -> batch
@@ -248,7 +257,14 @@ function runPool(initialBatches, onResult, options = {}) {
     function attach(worker) {
       worker.on("message", (shard) => {
         inflight.delete(worker);
+        const insertStartedAt = process.hrtime.bigint();
         onResult(shard);
+        totals.lastInsertMs = Number((process.hrtime.bigint() - insertStartedAt) / 1000000n);
+        totals.insertMs += totals.lastInsertMs;
+        if (shard.parseMs != null) {
+          totals.lastParseMs = shard.parseMs;
+          totals.parseMs += shard.parseMs;
+        }
         for (const key of ["parsed", "htmlLaws", "oversized", "files"]) totals[key] += shard.stats?.[key] || 0;
         totals.failures += shard.failures?.length || 0;
         totals.filesDone += shard.stats?.files || 0;
@@ -369,6 +385,8 @@ async function buildFulltextIndex(options = {}) {
         `[fulltext] ${running.filesDone}/${pending.length} acts, ${running.parsed} parsed, ${running.failures} failures`
         + `, worker heap ${running.workerHeapMb}/${workerHeapMb} MB (peak ${running.peakWorkerHeapMb})`
         + `, wal ${walSizeMb(outputPath)} MB`
+        + `, parse ${(running.parseMs / 1000).toFixed(1)}s insert ${(running.insertMs / 1000).toFixed(1)}s`
+        + ` (last ${running.lastParseMs}/${running.lastInsertMs} ms)`
       ) : undefined,
     });
 

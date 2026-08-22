@@ -16,8 +16,15 @@ const { buildFulltextShard } = require("./fulltext-index-build");
 // individually and a worker approaching its cap starts full-GCing on every
 // batch. Whole-machine sampling cannot see that: the RSS stays flat at the
 // ceiling while throughput collapses.
+// parseMs is this batch's share of the parallel half of the build. The
+// parent times the serialized half (its own insert) against it, which is the
+// one split the progress line cannot infer: both workers sit idle across the
+// parent's insert, because runPool only reassigns a worker after onResult
+// returns.
 parentPort.on("message", async (files) => {
+  const startedAt = process.hrtime.bigint();
   const shard = await buildFulltextShard({ files });
+  shard.parseMs = Number((process.hrtime.bigint() - startedAt) / 1000000n);
   shard.heapUsedMb = Math.round(process.memoryUsage().heapUsed / (1024 * 1024));
   parentPort.postMessage(shard);
 });
