@@ -1006,10 +1006,35 @@ jobs:
             fulltext_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
             matched_corpus_files=$(jq -er '.matchedCorpusFiles | numbers' candidate/fulltext.sqlite.manifest.json)
             uncovered=$(( matched_corpus_files - fulltext_acts ))
-            test "$uncovered" -le "$max_failures" || {
-              echo "Fulltext index has $fulltext_acts acts of the $matched_corpus_files corpus files it matched ($uncovered uncovered, maximum allowed: $max_failures)" >&2
+
+            # Some acts parse cleanly and still carry no article and no recital:
+            # corrigenda, whose whole body is free text ("On page 13, Article
+            # 1 (2) (c) should read as follows: ..."), and the occasional act
+            # EUR-Lex publishes as an empty <TXT_TE></TXT_TE> stub. They emit no
+            # rows, and buildFulltextShard does not count them as failures
+            # either, so they land in `uncovered` above -- indistinguishable
+            # here from an act that was genuinely lost.
+            #
+            # They were vanishingly rare while only the Formex corpus was ever
+            # indexed, so an absolute limit of 10 held. The HTML corpus (52.5k
+            # mostly pre-2000 acts, first reaching this builder after the
+            # --corpusDir discovery fix) carries them at roughly 0.15%
+            # (3 of a 2000-act sample: 31989R2045, 31989R3242, 32000R0343), so
+            # the flat limit now fails a complete, correct index.
+            #
+            # Scale the allowance with the corpus instead, keeping the flat 10
+            # as the floor for small runs. A real regression stalls or strands
+            # acts in the thousands and still trips this comfortably.
+            max_uncovered=$(( matched_corpus_files / 200 ))
+            if [ "$max_uncovered" -lt "$max_failures" ]; then
+              max_uncovered=$max_failures
+            fi
+            test "$uncovered" -le "$max_uncovered" || {
+              echo "Fulltext index has $fulltext_acts acts of the $matched_corpus_files corpus files it matched ($uncovered uncovered, maximum allowed: $max_uncovered)" >&2
               exit 1
             }
+            echo "Fulltext coverage: $uncovered of $matched_corpus_files matched acts produced no units (maximum allowed: $max_uncovered)." \
+              >> "$GITHUB_STEP_SUMMARY"
 
             # The published count stays in the summary as context -- a large
             # drop is worth a human look even when this run covered its corpus.
