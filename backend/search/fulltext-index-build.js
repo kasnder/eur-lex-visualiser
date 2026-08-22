@@ -44,6 +44,16 @@ const FULLTEXT_SCHEMA_VERSION = 1;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_POOL_SIZE = 2;
 const DEFAULT_WORKER_HEAP_MB = 640;
+// Batches a pool worker handles before it is retired and replaced. Parse
+// throughput per input byte falls 3-5x over a few hundred acts while the acts
+// themselves stay the same size (18-21 KB), under both the Formex and the HTML
+// parser, with heap nowhere near its cap -- so the cost tracks a worker's own
+// uptime rather than the corpus, the index, or memory pressure. Retiring
+// workers periodically sidesteps whatever accumulates without having to name
+// it, and is self-verifying: if throughput stops decaying, per-worker state
+// was the cause. A fresh worker costs a module load, amortised here over 500
+// acts. 0 disables recycling.
+const DEFAULT_RECYCLE_BATCHES = 25;
 // Same ceiling as the definition/citation-graph builders: definitions and
 // citations live in the operative text, and full-text units are extracted
 // from the very same parsed document, so oversized inputs need the same
@@ -232,6 +242,7 @@ function spawnWorker(workerHeapMb) {
 function runPool(initialBatches, onResult, options = {}) {
   const poolSize = options.poolSize || DEFAULT_POOL_SIZE;
   const workerHeapMb = options.workerHeapMb || DEFAULT_WORKER_HEAP_MB;
+  const recycleAfter = options.recycleBatches ?? DEFAULT_RECYCLE_BATCHES;
   const onProgress = options.onProgress || (() => {});
   return new Promise((resolve) => {
     const queue = initialBatches.slice();
@@ -240,7 +251,7 @@ function runPool(initialBatches, onResult, options = {}) {
       // Heap of the worker that returned the most recent shard, and the peak
       // seen across the run. A build that decays as it runs shows up here as
       // a climb toward workerHeapMb; a flat trace rules the workers out.
-      workerHeapMb: 0, peakWorkerHeapMb: 0,
+      workerHeapMb: 0, peakWorkerHeapMb: 0, recycles: 0,
       // Where the wall clock goes. parseMs is summed across workers so it
       // exceeds elapsed time by roughly the pool size; insertMs is the
       // parent's own, and is strictly serialized — runPool hands a worker its
@@ -253,6 +264,7 @@ function runPool(initialBatches, onResult, options = {}) {
     };
     let resolved = false;
     const inflight = new Map(); // worker -> batch
+    const batchesByWorker = new Map(); // worker -> batches completed since it spawned
 
     function maybeDone() {
       if (!resolved && queue.length === 0 && inflight.size === 0) { resolved = true; resolve(totals); }
@@ -260,8 +272,22 @@ function runPool(initialBatches, onResult, options = {}) {
     function assign(worker) {
       if (queue.length === 0) {
         inflight.delete(worker);
+        batchesByWorker.delete(worker);
         worker.terminate().catch(() => {});
           maybeDone();
+        return;
+      }
+      // Retire before taking work, never mid-batch, so recycling can never
+      // lose a shard. The replacement starts at zero batches, so the recursive
+      // assign() below hands it the batch instead of retiring it again.
+      if (recycleAfter > 0 && (batchesByWorker.get(worker) || 0) >= recycleAfter) {
+        batchesByWorker.delete(worker);
+        inflight.delete(worker);
+        worker.terminate().catch(() => {});
+        totals.recycles += 1;
+        const replacement = spawnWorker(workerHeapMb);
+        attach(replacement);
+        assign(replacement);
         return;
       }
       const batch = queue.shift();
@@ -280,6 +306,7 @@ function runPool(initialBatches, onResult, options = {}) {
           totals.parseMs += shard.parseMs;
         }
         totals.lastBytes = shard.stats?.bytes || 0;
+        batchesByWorker.set(worker, (batchesByWorker.get(worker) || 0) + 1);
         for (const key of ["parsed", "htmlLaws", "oversized", "files", "bytes"]) totals[key] += shard.stats?.[key] || 0;
         totals.failures += shard.failures?.length || 0;
         totals.filesDone += shard.stats?.files || 0;
@@ -352,6 +379,7 @@ async function buildFulltextIndex(options = {}) {
   const batchSize = options.batchSize || DEFAULT_BATCH_SIZE;
   const poolSize = options.pool || DEFAULT_POOL_SIZE;
   const workerHeapMb = options.workerHeapMb || DEFAULT_WORKER_HEAP_MB;
+  const recycleBatches = options.recycleBatches;
   const log = options.progress ? (options.log || console.log) : null;
 
   const universe = options.universe || loadUniverseCelex(searchCachePath);
@@ -396,9 +424,10 @@ async function buildFulltextIndex(options = {}) {
     }, {
       poolSize,
       workerHeapMb,
+      recycleBatches,
       onProgress: log ? (running) => log(
         `[fulltext] ${running.filesDone}/${pending.length} acts, ${running.parsed} parsed, ${running.failures} failures`
-        + `, worker heap ${running.workerHeapMb}/${workerHeapMb} MB (peak ${running.peakWorkerHeapMb})`
+        + `, worker heap ${running.workerHeapMb}/${workerHeapMb} MB (peak ${running.peakWorkerHeapMb}, ${running.recycles} recycled)`
         + `, wal ${walSizeMb(outputPath)} MB`
         + `, parse ${(running.parseMs / 1000).toFixed(1)}s insert ${(running.insertMs / 1000).toFixed(1)}s`
         + ` (last ${running.lastParseMs}/${running.lastInsertMs} ms)`
@@ -473,7 +502,7 @@ async function run(options = {}) {
 
 function parseCliArgs(argv) {
   const options = {};
-  const valueFlags = new Set(["--corpusDir", "--out", "--limit", "--fromYear", "--toYear", "--batchSize", "--pool", "--workerHeapMb"]);
+  const valueFlags = new Set(["--corpusDir", "--out", "--limit", "--fromYear", "--toYear", "--batchSize", "--pool", "--workerHeapMb", "--recycleBatches"]);
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!valueFlags.has(flag)) throw new Error(`Unknown argument: ${flag}`);
@@ -485,7 +514,7 @@ function parseCliArgs(argv) {
     if (!Number.isInteger(number) || number < 0 || (["--limit", "--batchSize", "--pool", "--workerHeapMb"].includes(flag) && number === 0)) {
       throw new Error(`Invalid value for ${flag}: ${value}`);
     }
-    options[{ "--limit": "limit", "--fromYear": "fromYear", "--toYear": "toYear", "--batchSize": "batchSize", "--pool": "pool", "--workerHeapMb": "workerHeapMb" }[flag]] = number;
+    options[{ "--limit": "limit", "--fromYear": "fromYear", "--toYear": "toYear", "--batchSize": "batchSize", "--pool": "pool", "--workerHeapMb": "workerHeapMb", "--recycleBatches": "recycleBatches" }[flag]] = number;
   }
   return options;
 }
