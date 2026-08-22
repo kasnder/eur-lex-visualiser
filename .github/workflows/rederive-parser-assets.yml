@@ -757,6 +757,20 @@ jobs:
           db.close();
           if (counts.actCount <= 0) throw new Error("rederived fulltext index has no acts");
 
+          // What this run was actually able to cover: the builder intersects the
+          // search-cache universe with the corpus files present, and logs the
+          // result before it applies any resume. That is the only honest floor
+          // for a cold rebuild -- see the coverage gate in `validate`. Printed
+          // every dispatch, resumed or not, so a missing line means the builder's
+          // output changed and the gate can no longer be trusted: fail loudly
+          // rather than quietly skipping the check.
+          const buildLog = fs.readFileSync("rederive-output/fulltext-build.log", "utf8");
+          const matched = /^\[fulltext\] universe=\d+ acts; (\d+) corpus files matched/m.exec(buildLog);
+          if (!matched) {
+            throw new Error("fulltext build log has no 'corpus files matched' line; cannot establish coverage");
+          }
+          counts.matchedCorpusFiles = Number(matched[1]);
+
           const hashFile = (file) => {
             const hash = crypto.createHash("sha256");
             const fd = fs.openSync(file, "r");
@@ -979,22 +993,37 @@ jobs:
           fi
 
           if [ "${{ needs.resolve.outputs.want_fulltext }}" = true ]; then
+            # Measure coverage against what THIS corpus offered, not against the
+            # previously published actCount. refresh-fulltext.yml builds
+            # incrementally and never drops rows, so the published index
+            # accumulates acts whose corpus files have since gone: on
+            # 2026-08-21 it carried 40 acts (2010-2014 Decisions plus
+            # 32014R0833) that corpus-2026-08-21.01 now has only as HTML, and
+            # the fulltext index is Formex-only. A cold rebuild therefore could
+            # never reach that number, and the gate failed a complete index.
+            #
+            # matchedCorpusFiles is the builder's own count of corpus files
+            # intersected with the search-cache universe -- exactly the set this
+            # run should have indexed -- so the shortfall below is the acts that
+            # matched but produced no units.
+            fulltext_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
+            matched_corpus_files=$(jq -er '.matchedCorpusFiles | numbers' candidate/fulltext.sqlite.manifest.json)
+            uncovered=$(( matched_corpus_files - fulltext_acts ))
+            test "$uncovered" -le "$max_failures" || {
+              echo "Fulltext index has $fulltext_acts acts of the $matched_corpus_files corpus files it matched ($uncovered uncovered, maximum allowed: $max_failures)" >&2
+              exit 1
+            }
+
+            # The published count stays in the summary as context -- a large
+            # drop is worth a human look even when this run covered its corpus.
             mkdir -p published-fulltext
             gh release download "${{ needs.resolve.outputs.fulltext_tag }}" \
               --repo "${{ github.repository }}" \
               --pattern fulltext.sqlite.manifest.json \
               --dir published-fulltext
-            fulltext_acts=$(jq -er '.actCount | numbers' candidate/fulltext.sqlite.manifest.json)
             published_fulltext_acts=$(jq -er '.actCount | numbers' published-fulltext/fulltext.sqlite.manifest.json)
-            # The intuitive denominator (all search-cache records) is wrong:
-            # fulltext-index-build.js intersects that universe with corpus files
-            # actually present before indexing. The published fulltext manifest's
-            # actCount is the observed matched-corpus baseline; require strict
-            # non-regression so missing/empty rebuilt shards cannot pass.
-            test "$fulltext_acts" -ge "$published_fulltext_acts" || {
-              echo "Fulltext index has $fulltext_acts acts, below the published matched-corpus baseline of $published_fulltext_acts" >&2
-              exit 1
-            }
+            echo "Fulltext: $fulltext_acts acts of $matched_corpus_files matched corpus files (previously published: $published_fulltext_acts)." \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Assert parser freshness of the complete candidate set
