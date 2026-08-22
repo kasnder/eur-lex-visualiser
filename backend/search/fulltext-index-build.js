@@ -77,7 +77,11 @@ async function buildFulltextShard(options = {}) {
   const readFile = options.readFile || ((file) => readGzip(file, fsApi));
   const maxXmlBytes = options.maxXmlBytes ?? DEFAULT_MAX_XML_BYTES;
   const maxHtmlBytes = options.maxHtmlBytes ?? DEFAULT_MAX_HTML_BYTES;
-  const stats = { corpusFiles: files.length, parsed: 0, htmlLaws: 0, oversized: 0, files: files.length };
+  // bytes is the decompressed input this shard actually fed to a parser.
+  // Divided into parseMs it gives MB/s, which separates the two ways a build
+  // can slow down: acts that are simply larger hold MB/s flat while ms/batch
+  // climbs, whereas a process degrading over its own uptime drags MB/s down.
+  const stats = { corpusFiles: files.length, parsed: 0, htmlLaws: 0, oversized: 0, files: files.length, bytes: 0 };
   const failures = [];
   const units = [];
   const parserVersions = new Set();
@@ -87,6 +91,7 @@ async function buildFulltextShard(options = {}) {
     try {
       let source = await readFile(file);
       const bytes = Buffer.byteLength(source, "utf8");
+      stats.bytes += bytes;
       let parsed;
       if (isHtmlCorpusFile(file)) {
         if (bytes > maxHtmlBytes) throw Object.assign(new Error(`Decompressed HTML exceeds ${maxHtmlBytes} bytes`), { oversized: true });
@@ -195,6 +200,15 @@ function openFulltextDatabase(outputPath) {
 // artifact), so an unbounded WAL is the other way this build could decay
 // within a dispatch and recover across one. Reported beside the worker heap
 // so a single run distinguishes the two.
+// Parse throughput for one batch, in KB/s. A batch is around a megabyte, so
+// MB/s would round to one significant figure and hide exactly the trend this
+// exists to show. Zero elapsed time reports 0 rather than Infinity so the
+// progress line stays parseable.
+function kbPerSecond(bytes, ms) {
+  if (!ms) return 0;
+  return Math.round((bytes / 1024) / (ms / 1000));
+}
+
 function walSizeMb(outputPath) {
   try {
     return Math.round(fs.statSync(`${outputPath}-wal`).size / (1024 * 1024));
@@ -235,7 +249,7 @@ function runPool(initialBatches, onResult, options = {}) {
       // bounded by the single-threaded insert, not by parsing. The lastParseMs
       // / lastInsertMs pair gives the instantaneous cost of one batch, which
       // is what shows a trend; the cumulative totals hide it.
-      parseMs: 0, insertMs: 0, lastParseMs: 0, lastInsertMs: 0,
+      parseMs: 0, insertMs: 0, lastParseMs: 0, lastInsertMs: 0, bytes: 0, lastBytes: 0,
     };
     let resolved = false;
     const inflight = new Map(); // worker -> batch
@@ -265,7 +279,8 @@ function runPool(initialBatches, onResult, options = {}) {
           totals.lastParseMs = shard.parseMs;
           totals.parseMs += shard.parseMs;
         }
-        for (const key of ["parsed", "htmlLaws", "oversized", "files"]) totals[key] += shard.stats?.[key] || 0;
+        totals.lastBytes = shard.stats?.bytes || 0;
+        for (const key of ["parsed", "htmlLaws", "oversized", "files", "bytes"]) totals[key] += shard.stats?.[key] || 0;
         totals.failures += shard.failures?.length || 0;
         totals.filesDone += shard.stats?.files || 0;
         totals.batchesDone += 1;
@@ -387,6 +402,7 @@ async function buildFulltextIndex(options = {}) {
         + `, wal ${walSizeMb(outputPath)} MB`
         + `, parse ${(running.parseMs / 1000).toFixed(1)}s insert ${(running.insertMs / 1000).toFixed(1)}s`
         + ` (last ${running.lastParseMs}/${running.lastInsertMs} ms)`
+        + `, ${(running.bytes / 1048576).toFixed(0)} MB at ${kbPerSecond(running.lastBytes, running.lastParseMs)} KB/s`
       ) : undefined,
     });
 

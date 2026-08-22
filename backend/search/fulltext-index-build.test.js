@@ -400,6 +400,14 @@ test("progress line reports the worker's isolate heap against its cap, the WAL s
     assert.ok(parseS > 0, "cumulative parse time should be non-zero");
     assert.ok(lastParse > 0, "last-batch parse time should be non-zero");
     assert.ok(insertS >= 0 && lastInsert >= 0, "insert timings should be non-negative");
+
+    // MB/s is what separates "the acts got bigger" from "the process got
+    // slower"; a zero here means the byte counter stopped being fed.
+    const throughput = /(\d+) MB at (\d+) KB\/s/.exec(progress.at(-1));
+    assert.ok(throughput, `progress line lacks parse throughput: ${progress.at(-1)}`);
+    const [, totalMb, kbps] = throughput.map(Number);
+    assert.ok(Number.isInteger(totalMb) && totalMb >= 0, "cumulative MB should be a non-negative integer");
+    assert.ok(kbps > 0, "parse throughput should be positive");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
