@@ -9,12 +9,11 @@ vi.mock("./formexApi.js", () => ({
 }));
 
 let loadCaseLaw;
-let peekCaseLaw;
 
 beforeEach(async () => {
   vi.resetModules();
   mockFetchCaseLaw.mockReset();
-  ({ loadCaseLaw, peekCaseLaw } = await import("./caseLawCache.js"));
+  ({ loadCaseLaw } = await import("./caseLawCache.js"));
 });
 
 describe("caseLawCache", () => {
@@ -30,7 +29,6 @@ describe("caseLawCache", () => {
     expect(mockFetchCaseLaw).toHaveBeenCalledTimes(1);
     expect(mockFetchCaseLaw).toHaveBeenCalledWith("32016R0679");
     expect(second).toBe(first);
-    expect(peekCaseLaw("32016R0679")).toBe(first);
   });
 
   it("does not cache a failed fetch, so a later retry refetches", async () => {
@@ -39,7 +37,6 @@ describe("caseLawCache", () => {
       .mockResolvedValueOnce({ cases: [{ caseId: "C-2" }] });
 
     await expect(loadCaseLaw("32002L0058")).rejects.toThrow("case law cellar down");
-    expect(peekCaseLaw("32002L0058")).toBeNull();
 
     await expect(loadCaseLaw("32002L0058")).resolves.toEqual({ cases: [{ caseId: "C-2" }] });
     expect(mockFetchCaseLaw).toHaveBeenCalledTimes(2);
