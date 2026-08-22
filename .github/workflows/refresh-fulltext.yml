@@ -264,7 +264,7 @@ jobs:
             node --max-old-space-size=3072 search/fulltext-index-build.js \
               --corpusDir search/data/laws \
               --pool 2 \
-              --workerHeapMb 512 \
+              --workerHeapMb 2048 \
               --out ../refresh-output/fulltext.sqlite \
             | tee ../refresh-output/fulltext-build.log
           build_status=${PIPESTATUS[0]}

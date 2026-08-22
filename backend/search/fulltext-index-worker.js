@@ -9,7 +9,15 @@
 const { parentPort } = require("worker_threads");
 const { buildFulltextShard } = require("./fulltext-index-build");
 
+// The shard carries this worker's isolate heap back to the parent. Each
+// worker_threads worker gets its own V8 isolate, so process.memoryUsage()
+// here reports this worker's heap rather than the whole process — which is
+// exactly the number that matters, since resourceLimits caps each worker
+// individually and a worker approaching its cap starts full-GCing on every
+// batch. Whole-machine sampling cannot see that: the RSS stays flat at the
+// ceiling while throughput collapses.
 parentPort.on("message", async (files) => {
   const shard = await buildFulltextShard({ files });
+  shard.heapUsedMb = Math.round(process.memoryUsage().heapUsed / (1024 * 1024));
   parentPort.postMessage(shard);
 });

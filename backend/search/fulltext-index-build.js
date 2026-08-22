@@ -190,6 +190,19 @@ function openFulltextDatabase(outputPath) {
   return db;
 }
 
+// Size of the write-ahead log beside the index, in MB. The build never
+// checkpoints the WAL itself (the workflow does, once, before uploading the
+// artifact), so an unbounded WAL is the other way this build could decay
+// within a dispatch and recover across one. Reported beside the worker heap
+// so a single run distinguishes the two.
+function walSizeMb(outputPath) {
+  try {
+    return Math.round(fs.statSync(`${outputPath}-wal`).size / (1024 * 1024));
+  } catch {
+    return 0;
+  }
+}
+
 function spawnWorker(workerHeapMb) {
   return new Worker(path.join(__dirname, "fulltext-index-worker.js"), {
     resourceLimits: { maxOldGenerationSizeMb: workerHeapMb },
@@ -208,7 +221,13 @@ function runPool(initialBatches, onResult, options = {}) {
   const onProgress = options.onProgress || (() => {});
   return new Promise((resolve) => {
     const queue = initialBatches.slice();
-    const totals = { parsed: 0, htmlLaws: 0, oversized: 0, files: 0, failures: 0, filesDone: 0, batchesDone: 0 };
+    const totals = {
+      parsed: 0, htmlLaws: 0, oversized: 0, files: 0, failures: 0, filesDone: 0, batchesDone: 0,
+      // Heap of the worker that returned the most recent shard, and the peak
+      // seen across the run. A build that decays as it runs shows up here as
+      // a climb toward workerHeapMb; a flat trace rules the workers out.
+      workerHeapMb: 0, peakWorkerHeapMb: 0,
+    };
     let resolved = false;
     const inflight = new Map(); // worker -> batch
 
@@ -234,6 +253,10 @@ function runPool(initialBatches, onResult, options = {}) {
         totals.failures += shard.failures?.length || 0;
         totals.filesDone += shard.stats?.files || 0;
         totals.batchesDone += 1;
+        if (shard.heapUsedMb != null) {
+          totals.workerHeapMb = shard.heapUsedMb;
+          totals.peakWorkerHeapMb = Math.max(totals.peakWorkerHeapMb, shard.heapUsedMb);
+        }
         onProgress(totals);
         assign(worker);
       });
@@ -342,7 +365,11 @@ async function buildFulltextIndex(options = {}) {
     }, {
       poolSize,
       workerHeapMb,
-      onProgress: log ? (running) => log(`[fulltext] ${running.filesDone}/${pending.length} acts, ${running.parsed} parsed, ${running.failures} failures`) : undefined,
+      onProgress: log ? (running) => log(
+        `[fulltext] ${running.filesDone}/${pending.length} acts, ${running.parsed} parsed, ${running.failures} failures`
+        + `, worker heap ${running.workerHeapMb}/${workerHeapMb} MB (peak ${running.peakWorkerHeapMb})`
+        + `, wal ${walSizeMb(outputPath)} MB`
+      ) : undefined,
     });
 
     const unitCount = db.prepare("SELECT COUNT(*) n FROM units").get().n;

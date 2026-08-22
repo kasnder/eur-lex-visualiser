@@ -348,3 +348,47 @@ test("writeManifest writes sha256 + counts alongside the sqlite file", async () 
 
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+// The build decays badly within a dispatch and recovers across one (2,400 ->
+// 32 acts/min over five hours, reset by a restart, on acts that got *smaller*
+// -- run 32574996152). Whole-machine memory sampling cannot tell the two
+// leading causes apart: a worker approaching its resourceLimits cap full-GCs
+// on every batch while its RSS sits flat at the ceiling, and an unbounded WAL
+// is likewise invisible in RSS. Both are per-dispatch state that a restart
+// clears. So the progress line carries the worker's own isolate heap against
+// its cap, and the WAL size beside it -- one dispatch then distinguishes them.
+test("progress line reports the worker's isolate heap against its cap and the WAL size", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-heaplog-"));
+  const outputPath = path.join(dir, "fulltext.sqlite");
+  const file = await seedCorpusFile(dir, "fmx-v4-2009-32009L0004.xml.gz", "32009L0004", "xml");
+  const lines = [];
+
+  try {
+    await buildFulltextIndex({
+      outputPath,
+      files: [file],
+      universe: new Set(["32009L0004"]),
+      batchSize: 10,
+      pool: 1,
+      workerHeapMb: 256,
+      progress: true,
+      log: (line) => lines.push(String(line)),
+    });
+
+    const progress = lines.filter((line) => /\d+\/\d+ acts/.test(line));
+    assert.ok(progress.length > 0, "expected at least one progress line");
+
+    const match = /worker heap (\d+)\/(\d+) MB \(peak (\d+)\), wal (\d+) MB/.exec(progress.at(-1));
+    assert.ok(match, `progress line lacks heap/wal figures: ${progress.at(-1)}`);
+
+    const [, heapUsed, cap, peak, wal] = match.map(Number);
+    // A real isolate always reports a non-zero heap; 0 would mean the worker
+    // stopped sending the figure and the trace is silently useless.
+    assert.ok(heapUsed > 0, "worker heap should be reported as non-zero");
+    assert.equal(cap, 256, "cap should echo the configured workerHeapMb");
+    assert.ok(peak >= heapUsed, "peak should be at least the latest sample");
+    assert.ok(Number.isInteger(wal) && wal >= 0, "WAL size should be a non-negative integer");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
