@@ -365,7 +365,11 @@ COMMANDS.resolve = {
   async run(args) {
     const flags = parseFlags(args, ['text']);
     const svc = bootServices();
-    const lang = svc.validateLang(flags.lang || 'ENG') || 'ENG';
+    let lang = 'ENG';
+    if (flags.lang) {
+      lang = svc.validateLang(flags.lang);
+      if (!lang) die(`Invalid language code: ${flags.lang}`);
+    }
 
     let reference;
     if (flags.actType || flags.year || flags.number) {
@@ -400,7 +404,11 @@ COMMANDS['resolve-url'] = {
     const flags = parseFlags(args, ['url']);
     if (!flags.url) die('URL required.  Usage: eurlex resolve-url <url>');
     const svc = bootServices();
-    const lang = svc.validateLang(flags.lang || 'ENG') || 'ENG';
+    let lang = 'ENG';
+    if (flags.lang) {
+      lang = svc.validateLang(flags.lang);
+      if (!lang) die(`Invalid language code: ${flags.lang}`);
+    }
 
     const payload = await svc.resolveEurlexUrl(flags.url, lang);
     jsonOut(payload, flags.o || flags.output);

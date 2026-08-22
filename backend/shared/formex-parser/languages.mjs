@@ -696,7 +696,7 @@ export function detectLanguage(doc) {
  * Falls back to EN for unsupported languages.
  */
 export function getLangConfig(code) {
-  return LANGUAGES[code] || LANGUAGES.EN;
+  return Object.hasOwn(LANGUAGES, code) ? LANGUAGES[code] : LANGUAGES.EN;
 }
 
 /**

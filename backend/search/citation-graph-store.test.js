@@ -5,7 +5,7 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const test = require("node:test");
 
-const { CitationGraphStore, GRAPH_VERSION } = require("./citation-graph-store");
+const { CitationGraphStore, GRAPH_VERSION, SQLITE_SCHEMA_VERSION } = require("./citation-graph-store");
 
 function writeGraph(payload) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citation-store-"));
@@ -215,4 +215,30 @@ test("sqlite-backed store returns results identical to the JSON store", (t) => {
   assert.equal(status.parserVersion, 15);
   assert.equal(status.edges, 4);
   assert.deepEqual(status.coverage, { legislation: { htmlLaws: 2 } });
+});
+
+// A file that passes the PRAGMA user_version check but has no `metadata`
+// table (e.g. a corrupt/partial write) throws only after the connection is
+// already open. loadFromSqlite must still close that handle on the way out
+// instead of leaking it — regression test for the outer catch in
+// loadFromSqlite silently dropping an opened-but-unassigned `database`.
+test("loadFromSqlite closes the database handle when opened but the schema is incomplete", () => {
+  const Database = require("better-sqlite3");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citation-store-partial-"));
+  const sqlitePath = path.join(dir, "data.sqlite");
+
+  const db = new Database(sqlitePath);
+  db.pragma(`user_version = ${SQLITE_SCHEMA_VERSION}`);
+  // Deliberately no `metadata` table, so the SELECT inside loadFromSqlite throws.
+  db.close();
+
+  const store = new CitationGraphStore(path.join(dir, "citation-graph.json"), { sqlitePath });
+  assert.equal(store.load(), false);
+  assert.match(store.getStatus().error, /no such table: metadata/);
+  assert.equal(store.database, null);
+
+  // If the earlier failure had leaked the handle, this exclusive re-open
+  // (no `readonly`) would fail while the leaked connection still held the file.
+  const reopened = new Database(sqlitePath);
+  reopened.close();
 });
