@@ -217,7 +217,7 @@ jobs:
           mkdir -p "$workdir"
           artifact=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-search-cache-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No search-cache checkpoint from a previous dispatch; starting a cold pass." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -516,7 +516,7 @@ jobs:
           mkdir -p ../rederive-output
           artifact=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-definitions-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No definitions checkpoint from a previous run." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -674,25 +674,36 @@ jobs:
           set -euo pipefail
           artifact=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=rederive-fulltext-checkpoint-parser-v${{ needs.resolve.outputs.parser_version }}-corpus-${{ needs.resolve.outputs.corpus_tag }}" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No fulltext checkpoint from a previous dispatch; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           artifact_id=$(jq -er '.id' <<< "$artifact")
+          artifact_size=$(jq -er '.size_in_bytes' <<< "$artifact")
+          # Echoed to stdout as well as the summary: this line sits directly
+          # above the builder's own "resuming:" line in the job log, so a
+          # dispatch that failed to adopt a checkpoint is visible in the same
+          # place you read the build's progress.
+          echo "Fulltext checkpoint: artifact $artifact_id, $artifact_size bytes"
           gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > checkpoint.zip
           rm -rf checkpoint && mkdir checkpoint
           unzip -q checkpoint.zip -d checkpoint
-          test -s checkpoint/fulltext.sqlite || { echo "Checkpoint artifact has no fulltext.sqlite; ignoring it." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          # A checkpoint that exists but cannot be used is a hard failure, not a
+          # cold build. Silently restarting discards every act the previous
+          # dispatches indexed -- 44,400 of them the one time this fired -- and
+          # costs a five-hour dispatch to rediscover. Failing here keeps the
+          # artifact intact for the next attempt.
+          test -s checkpoint/fulltext.sqlite || { echo "::error::Checkpoint artifact $artifact_id has no fulltext.sqlite"; exit 1; }
           checkpoint_act_count=$(node -e '
             const Database = require("better-sqlite3");
             const db = new Database("checkpoint/fulltext.sqlite", { readonly: true });
             process.stdout.write(String(db.prepare("SELECT COUNT(DISTINCT celex) n FROM units").get().n));
             db.close();
-          ') || { echo "Checkpoint is unreadable; starting a cold build." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          ') || { echo "::error::Checkpoint artifact $artifact_id is unreadable"; exit 1; }
           if [ "$checkpoint_act_count" -le 0 ]; then
-            echo "Checkpoint has no acts; starting a cold build." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "::error::Checkpoint artifact $artifact_id has no acts"
+            exit 1
           fi
           mkdir -p rederive-output
           mv checkpoint/fulltext.sqlite rederive-output/fulltext.sqlite

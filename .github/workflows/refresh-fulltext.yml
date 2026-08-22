@@ -217,7 +217,7 @@ jobs:
           set -euo pipefail
           artifact=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=fulltext-checkpoint" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last // empty')
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.size_in_bytes, .created_at) | last // empty')
           if [ -z "$artifact" ]; then
             echo "No checkpoint from a previous run; starting from the published index." >> "$GITHUB_STEP_SUMMARY"
             exit 0
