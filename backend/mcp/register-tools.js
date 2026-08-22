@@ -4,18 +4,8 @@ const { JSDOM } = require('jsdom');
 const { ClientError, requireCitationGraph, validateLang } = require('../shared/api-utils');
 const { validateCelex, parseReferenceText } = require('../shared/reference-utils');
 const { fetchCaseLaw, fetchAmendments, fetchImplementing } = require('../shared/law-queries');
-const { ensureRecitalTitles, getCachedRecitalTitles } = require('../shared/recital-title-service');
+const { getCachedRecitalTitles } = require('../shared/recital-title-service');
 const { validateFulltextQuery } = require('../search/legal-cache-store');
-
-const DEFAULT_RECITAL_TITLE_MODEL =
-  process.env.RECITAL_TITLE_MODEL
-  || process.env.ARTICLE_QA_PLANNER_MODEL
-  || process.env.ARTICLE_QA_MODEL
-  || 'google/gemini-3.5-flash-lite';
-
-function getRecitalTitleApiKey() {
-  return process.env.RECITAL_TITLE_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-}
 
 const BLOCK_TAGS = new Set([
   'P', 'DIV', 'LI', 'TR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
@@ -94,16 +84,23 @@ function jsonResult(obj) {
   return { content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] };
 }
 
-/** Wrap a tool handler so any error becomes a model-readable isError result. */
+/**
+ * Wrap a tool handler so any error becomes a model-readable isError result.
+ * Mirrors safeErrorResponse (shared/api-utils.js): ClientError messages are
+ * safe to surface verbatim, but any other error's message can leak
+ * filesystem paths or upstream URLs, so it's logged server-side and replaced
+ * with a generic message instead.
+ */
 function makeHandler(fn) {
   return async (args) => {
     try {
       return await fn(args || {});
     } catch (err) {
-      const message = err instanceof ClientError
-        ? err.message
-        : (err?.message || 'Unexpected error handling the request');
-      return { isError: true, content: [{ type: 'text', text: message }] };
+      if (err instanceof ClientError) {
+        return { isError: true, content: [{ type: 'text', text: err.message }] };
+      }
+      console.error('[MCP] Unexpected error handling the request:', err.message);
+      return { isError: true, content: [{ type: 'text', text: 'Internal server error' }] };
     }
   };
 }
@@ -379,24 +376,14 @@ function registerTools(server, deps) {
           const available = (law.recitals || []).map((r) => r.recital_number).join(', ');
           throw new ClientError(`Recital ${number} not found in ${celex}. Available recital numbers: ${available}`, 404, 'recital_not_found');
         }
-        let title = null;
+        // Cached-only: unlike the REST recital-title route, /mcp carries no
+        // generation budget (req.chargeGeneration()) or origin allowlist, so
+        // it must never trigger a billed OpenRouter call on a cache miss.
+        // A miss here just returns title: null.
         const cached = getCachedRecitalTitles({
           celex, lang: language, recitals: law.recitals || [], cacheDir: FMX_DIR,
         });
-        title = cached.titles[String(rec.recital_number)] || null;
-
-        const apiKey = getRecitalTitleApiKey();
-        if (!title && apiKey) {
-          try {
-            const result = await ensureRecitalTitles({
-              celex, lang: language, recitals: law.recitals || [],
-              cacheDir: FMX_DIR, apiKey, model: DEFAULT_RECITAL_TITLE_MODEL,
-            });
-            title = result.titles[String(rec.recital_number)] || null;
-          } catch {
-            // Soft-fail: the recital text is still returned without a generated title.
-          }
-        }
+        const title = cached.titles[String(rec.recital_number)] || null;
 
         return jsonResult({
           ...base,

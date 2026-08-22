@@ -432,6 +432,22 @@ test('get_law_part recital returns text and soft-fails to no title without a key
   }
 });
 
+test('get_law_part recital stays cached-only even when an OpenRouter key is configured', async () => {
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key-should-be-ignored';
+  try {
+    await withClient(makeDeps(), async (client) => {
+      const body = parseResult(await client.callTool({ name: 'get_law_part', arguments: { celex: '32016R0679', part: 'recital', number: '1' } }));
+      assert.equal(body.recital_number, '1');
+      assert.equal(body.title, null, 'the MCP path must never fall back to a live generation call on a cache miss');
+      assert.match(body.text, /protection of natural persons/);
+    });
+  } finally {
+    if (prevKey !== undefined) process.env.OPENROUTER_API_KEY = prevKey;
+    else delete process.env.OPENROUTER_API_KEY;
+  }
+});
+
 test('get_law_part structure surfaces cached recital titles', async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-recital-cache-'));
   // Reproduce the service's contentHash so the cache entry is accepted.
@@ -487,6 +503,27 @@ test('records analytics for each tool invocation', async () => {
   });
   assert.deepEqual(calls[0], { tool: 'search_eu_law', meta: { query: 'gdpr' } });
   assert.deepEqual(calls[1], { tool: 'get_case_law', meta: { celex: '32016R0679' } });
+});
+
+test('non-ClientError failures are sanitised before reaching the client', async () => {
+  const originalConsoleError = console.error;
+  const loggedCalls = [];
+  console.error = (...args) => loggedCalls.push(args);
+  try {
+    const deps = makeDeps({
+      resolveParsedLaw: async () => { throw new Error('ENOENT: /var/data/law-cache/secret/32016R0679.json'); },
+    });
+    await withClient(deps, async (client) => {
+      const res = await client.callTool({ name: 'get_law_part', arguments: { celex: '32016R0679', part: 'structure' } });
+      assert.equal(res.isError, true);
+      assert.doesNotMatch(res.content[0].text, /ENOENT|\/var\/data/);
+      assert.match(res.content[0].text, /internal server error/i);
+    });
+    assert.equal(loggedCalls.length, 1);
+    assert.match(loggedCalls[0].join(' '), /ENOENT/);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test('htmlToText strips markup and keeps block breaks', () => {
