@@ -25,6 +25,52 @@ test('parseReferenceText extracts act type and year/number', () => {
   assert.equal(parsed.number, '679');
 });
 
+test('parseReferenceText resolves pre-2015 "No <number>/<year>" numbering', () => {
+  const parsed = parseReferenceText('Regulation (EC) No 1924/2006');
+  assert.equal(parsed.year, '2006');
+  assert.equal(parsed.number, '1924');
+});
+
+test('parseReferenceText tolerates an abbreviating period after "No"', () => {
+  // Older OJ renderings write "No." rather than the EU house style "No"; both
+  // must land on the pre-2015 branch, or the digits come back inverted.
+  const parsed = parseReferenceText('Regulation (EC) No. 1924/2006');
+  assert.equal(parsed.year, '2006');
+  assert.equal(parsed.number, '1924');
+});
+
+test('parseReferenceText resolves "No <number>/<year>" without a bracketed act code', () => {
+  const parsed = parseReferenceText('Council Regulation No 1/2003');
+  assert.equal(parsed.year, '2003');
+  assert.equal(parsed.number, '1');
+});
+
+test('parseReferenceText resolves "No <number>/<year>" for implementing/delegated acts', () => {
+  const parsed = parseReferenceText('Commission Implementing Regulation (EU) No 28/2014');
+  assert.equal(parsed.year, '2014');
+  assert.equal(parsed.number, '28');
+});
+
+test('parseReferenceText keeps post-2015 precedence when both numbering eras appear', () => {
+  // The year-first pattern must still win for the leading post-2015 reference
+  // even though a pre-2015 "No <number>/<year>" reference follows it in the
+  // same text -- the negative lookbehind only suppresses the "No " match, it
+  // does not reorder which pattern is tried first.
+  const parsed = parseReferenceText('Regulation (EU) 2016/679 amending Regulation No 45/2001');
+  assert.equal(parsed.year, '2016');
+  assert.equal(parsed.number, '679');
+});
+
+test('parseReferenceText does not resolve a 2-digit-year "<year>/<number>/<suffix>" form (pre-existing gap)', () => {
+  // Neither numberPatterns entry matches this shape today (2-digit year, and
+  // a trailing "/EC" suffix rather than a bare year/number pair). This is a
+  // pre-existing gap, not something this fix addresses -- assert the current
+  // (null/null) behaviour so a future change to it is a deliberate decision.
+  const parsed = parseReferenceText('Directive 95/46/EC');
+  assert.equal(parsed.year, null);
+  assert.equal(parsed.number, null);
+});
+
 test('parseStructuredReference normalizes structured fields', () => {
   const parsed = parseStructuredReference({
     actType: 'Directive',
