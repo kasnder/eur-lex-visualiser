@@ -165,6 +165,27 @@ function openFulltextDatabase(outputPath) {
       );
       CREATE TABLE fulltext_metadata (key TEXT PRIMARY KEY, value TEXT);
     `);
+  } else {
+    // An existing file is only ever resumed onto, never re-created — so its
+    // schema must match what this build is about to write. `user_version` is
+    // 0 until the very last step of a successful build stamps it (see the
+    // comment above that pragma write below), so 0 means "an interrupted
+    // build of whatever schema is current" and is safe to resume. Anything
+    // else that isn't FULLTEXT_SCHEMA_VERSION is a completed build from a
+    // schema that has since changed shape; resuming onto it would insert
+    // current-shape rows alongside old ones and then stamp the whole file as
+    // current, same failure mode definition-index-build.js's readCheckpoint
+    // guards against for its JSON checkpoint. Unlike that checkpoint, this is
+    // the artifact itself with no separate "discard and start clean" path, so
+    // this throws rather than silently deleting or ignoring an on-disk file.
+    const existingVersion = db.pragma("user_version", { simple: true });
+    if (existingVersion !== 0 && existingVersion !== FULLTEXT_SCHEMA_VERSION) {
+      db.close();
+      throw new Error(
+        `${outputPath} has schema version ${existingVersion}, but this build writes version ${FULLTEXT_SCHEMA_VERSION}. `
+        + "Resuming would stamp stale rows as current. Delete the file and rebuild from scratch."
+      );
+    }
   }
   return db;
 }

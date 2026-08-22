@@ -82,7 +82,10 @@ async function listTreeFiles(rootDir, suffix, fsApi = fs) {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) await visit(fullPath);
-      else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(fullPath);
+      // Skip AppleDouble sidecars (`._<CELEX>.xml.gz`) and other dotfiles — the
+      // corpus carries one per real file (see search/corpus-files.js's header
+      // comment); they are not gzip streams and must never be read as acts.
+      else if (entry.isFile() && !entry.name.startsWith(".") && entry.name.endsWith(suffix)) files.push(fullPath);
     }
   }
   try { await visit(rootDir); } catch (error) { if (error.code !== "ENOENT") throw error; }

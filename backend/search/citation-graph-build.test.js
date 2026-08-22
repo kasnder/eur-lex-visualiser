@@ -44,6 +44,18 @@ test("listCorpusFiles walks shards deterministically and ignores non-FMX files",
   assert.deepEqual(files.map((file) => path.basename(file)), ["32019L0001.xml.gz", "32020R0002.xml.gz"]);
 });
 
+test("listCorpusFiles skips AppleDouble sidecars and other dotfiles", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "citation-corpus-dotfiles-"));
+  await fsp.mkdir(path.join(dir, "2020"));
+  await fsp.writeFile(path.join(dir, "2020", "32020R0002.xml.gz"), "");
+  // AppleDouble sidecar: not a gzip stream, must never be treated as an act
+  // (see search/corpus-files.js's header comment for the incident history).
+  await fsp.writeFile(path.join(dir, "2020", "._32020R0002.xml.gz"), "");
+  await fsp.writeFile(path.join(dir, "2020", ".DS_Store"), "");
+  const files = await listCorpusFiles(dir);
+  assert.deepEqual(files.map((file) => path.basename(file)), ["32020R0002.xml.gz"]);
+});
+
 async function writeBothCorpora() {
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "citation-coverage-"));
   const laws = path.join(dataDir, "laws", "2020");

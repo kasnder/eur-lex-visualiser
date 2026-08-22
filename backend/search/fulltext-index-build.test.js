@@ -172,6 +172,35 @@ test("openFulltextDatabase creates the units/units_fts/fulltext_metadata schema"
   }
 });
 
+test("openFulltextDatabase refuses to resume onto a file stamped with a different schema version", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-db-stale-"));
+  const outputPath = path.join(dir, "fulltext.sqlite");
+  const first = openFulltextDatabase(outputPath);
+  first.pragma(`user_version = ${FULLTEXT_SCHEMA_VERSION + 1}`);
+  first.close();
+
+  try {
+    assert.throws(() => openFulltextDatabase(outputPath), /schema version/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("openFulltextDatabase resumes onto a file whose user_version is still 0 (interrupted pre-stamp build)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-db-interrupted-"));
+  const outputPath = path.join(dir, "fulltext.sqlite");
+  const first = openFulltextDatabase(outputPath);
+  first.close();
+
+  const db = openFulltextDatabase(outputPath);
+  try {
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 0);
+  } finally {
+    db.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("buildFulltextIndex (real fixture, real worker pool) populates units + units_fts and stamps metadata/user_version on completion", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-build-"));
   const outputPath = path.join(dir, "fulltext.sqlite");
