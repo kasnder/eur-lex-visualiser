@@ -181,6 +181,7 @@ async function generateCaseLawDigest(input, {
       digest: { summary: '', themes: [], noCaseLaw: true },
       model,
       usage: null,
+      billed: false,
     };
   }
 
@@ -201,6 +202,7 @@ async function generateCaseLawDigest(input, {
     digest: parseCaseLawDigestJson(response.text, input),
     model: response.model || model,
     usage: response.usage || null,
+    billed: true,
   };
 }
 
@@ -236,6 +238,7 @@ async function ensureCaseLawDigest({
         generatedAt: cached.generatedAt || null,
         caseLawCacheVersion: cached.caseLawCacheVersion,
         cached: true,
+        billed: false,
       };
     }
 
@@ -262,6 +265,10 @@ async function ensureCaseLawDigest({
       generatedAt: entry?.generatedAt || null,
       caseLawCacheVersion: CASE_LAW_CACHE_VERSION,
       cached: false,
+      // Whether a real (billed) model call happened — distinct from `cached`:
+      // the zero-case short-circuit above also returns `cached: false` but
+      // never calls the model.
+      billed: generated.billed === true,
     };
   });
 }

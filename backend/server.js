@@ -316,6 +316,40 @@ registerMcpEndpoint(app, {
   FMX_DIR: CACHE_DIR,
 });
 
+// Express error-handling middleware — must be registered after all routes,
+// and must take four arguments to be recognized as an error handler.
+// Without this, a malformed request body thrown by express.json() (or any
+// other synchronous middleware/route error) falls through to Express's
+// default handler, which returns an HTML page (with a stack trace outside
+// production). For /mcp specifically, callers are JSON-RPC clients and
+// expect a JSON-RPC error envelope, not HTML.
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  const isJsonParseError = err instanceof SyntaxError && 'body' in err;
+  const status = isJsonParseError ? 400 : (err.statusCode || 500);
+
+  if (req.path === '/mcp') {
+    return res.status(status).json({
+      jsonrpc: '2.0',
+      error: {
+        code: isJsonParseError ? -32700 : -32603,
+        message: isJsonParseError ? 'Parse error' : 'Internal server error',
+      },
+      id: null,
+    });
+  }
+
+  if (isJsonParseError) {
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+
+  console.error('[API] Unhandled error:', err.message);
+  return res.status(500).json({ error: 'Internal server error' });
+});
+
 const server = app.listen(PORT, () => {
   console.log(`EUR-Lex FMX API running on port ${PORT}`);
   console.log(`MCP endpoint: POST /mcp (Streamable HTTP)`);

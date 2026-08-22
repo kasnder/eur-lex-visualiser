@@ -136,7 +136,10 @@ test('ensureCaseLawDigest caches results without re-calling the model', async ()
 
   assert.equal(first.digest.noCaseLaw, false);
   assert.equal(first.digest.themes.length, 1);
+  assert.equal(first.cached, false);
+  assert.equal(first.billed, true);
   assert.equal(second.cached, true);
+  assert.equal(second.billed, false);
   assert.equal(calls, 1);
 });
 
@@ -159,4 +162,9 @@ test('ensureCaseLawDigest caches no-case-law results without calling the model',
 
   assert.equal(result.digest.noCaseLaw, true);
   assert.equal(calls, 0);
+  // The route charges the caller's generation budget on `billed`, not on
+  // `cached` — this zero-case short-circuit is `cached: false` but must not
+  // be billed.
+  assert.equal(result.cached, false);
+  assert.equal(result.billed, false);
 });

@@ -105,7 +105,7 @@ function parseTitleJson(text, validNumbers) {
 async function generateRecitalTitles({ celex, lang, recitals, apiKey, model }) {
   const validRecitals = (recitals || [])
     .filter((r) => String(r.recital_number || '').trim());
-  if (validRecitals.length === 0) return {};
+  if (validRecitals.length === 0) return { titles: {}, billed: false };
 
   const titles = {};
   for (let index = 0; index < validRecitals.length; index += RECITAL_TITLE_BATCH_SIZE) {
@@ -132,7 +132,7 @@ async function generateRecitalTitles({ celex, lang, recitals, apiKey, model }) {
     Object.assign(titles, batchTitles);
   }
 
-  return titles;
+  return { titles, billed: true };
 }
 
 const withSingleFlight = makeSingleFlight();
@@ -157,10 +157,11 @@ async function ensureRecitalTitles({ celex, lang, recitals, cacheDir, apiKey, mo
         titles: cached.titles,
         model: cached.model || null,
         cached: true,
+        billed: false,
       };
     }
 
-    const titles = await generateRecitalTitles({ celex, lang, recitals, apiKey, model });
+    const { titles, billed } = await generateRecitalTitles({ celex, lang, recitals, apiKey, model });
 
     if (cacheDir) {
       try {
@@ -179,7 +180,10 @@ async function ensureRecitalTitles({ celex, lang, recitals, cacheDir, apiKey, mo
       }
     }
 
-    return { titles, model, cached: false };
+    // `billed` reflects whether a real model call happened — distinct from
+    // `cached: false`, which is also returned for the zero-recitals
+    // short-circuit above (there's nothing to cache, and nothing was billed).
+    return { titles, model, cached: false, billed };
   });
 }
 

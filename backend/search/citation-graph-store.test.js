@@ -5,7 +5,7 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const test = require("node:test");
 
-const { CitationGraphStore, GRAPH_VERSION } = require("./citation-graph-store");
+const { CitationGraphStore, GRAPH_VERSION, SQLITE_SCHEMA_VERSION } = require("./citation-graph-store");
 
 function writeGraph(payload) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citation-store-"));
@@ -215,4 +215,49 @@ test("sqlite-backed store returns results identical to the JSON store", (t) => {
   assert.equal(status.parserVersion, 15);
   assert.equal(status.edges, 4);
   assert.deepEqual(status.coverage, { legislation: { htmlLaws: 2 } });
+});
+
+// A file that passes the PRAGMA user_version check but has no `metadata`
+// table (e.g. a corrupt/partial write) throws only after the connection is
+// already open. loadFromSqlite must still close that handle on the way out
+// instead of leaking it -- regression test for the outer catch in
+// loadFromSqlite dropping an opened-but-unassigned `database`.
+//
+// The leak is not observable from the store (the dropped handle is simply
+// unreachable) and SQLite happily grants a second connection to the same
+// file, so re-opening it proves nothing. Instead this swaps the cached
+// better-sqlite3 export for a subclass that records every instance, then
+// asserts each one was closed. loadFromSqlite requires the module at call
+// time, so the swap is picked up.
+test("loadFromSqlite closes the database handle when opened but the schema is incomplete", () => {
+  const Database = require("better-sqlite3");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citation-store-partial-"));
+  const sqlitePath = path.join(dir, "data.sqlite");
+
+  const seed = new Database(sqlitePath);
+  seed.pragma(`user_version = ${SQLITE_SCHEMA_VERSION}`);
+  // Deliberately no `metadata` table, so the SELECT inside loadFromSqlite throws.
+  seed.close();
+
+  const modulePath = require.resolve("better-sqlite3");
+  const opened = [];
+  class TrackingDatabase extends Database {
+    constructor(...args) {
+      super(...args);
+      opened.push(this);
+    }
+  }
+
+  const store = new CitationGraphStore(path.join(dir, "citation-graph.json"), { sqlitePath });
+  require.cache[modulePath].exports = TrackingDatabase;
+  try {
+    assert.equal(store.load(), false);
+  } finally {
+    require.cache[modulePath].exports = Database;
+  }
+
+  assert.match(store.getStatus().error, /no such table: metadata/);
+  assert.equal(store.database, null);
+  assert.equal(opened.length, 1, "expected loadFromSqlite to open exactly one connection");
+  assert.equal(opened[0].open, false, "loadFromSqlite leaked an open database handle");
 });

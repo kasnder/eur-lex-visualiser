@@ -136,9 +136,10 @@ class CitationGraphStore {
   }
 
   loadFromSqlite() {
+    let database = null;
     try {
       const Database = require("better-sqlite3");
-      const database = new Database(this.sqlitePath, { readonly: true, fileMustExist: true });
+      database = new Database(this.sqlitePath, { readonly: true, fileMustExist: true });
       const schemaVersion = database.prepare("PRAGMA user_version").get().user_version;
       if (schemaVersion !== SQLITE_SCHEMA_VERSION) {
         database.close();
@@ -174,6 +175,9 @@ class CitationGraphStore {
       this.loadError = null;
       return true;
     } catch (error) {
+      if (database) {
+        try { database.close(); } catch { /* already closed */ }
+      }
       this.payload = null;
       this.database = null;
       this.loadedAt = null;

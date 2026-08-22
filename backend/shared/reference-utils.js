@@ -9,9 +9,19 @@ function parseReferenceText(text = '') {
   const typeMatch = lower.match(/\b(regulation|directive|decision)\b/);
   const actType = typeMatch ? typeMatch[1] : null;
 
+  // EU numbering has two eras: post-2015 acts are "year/number" (e.g. "(EU)
+  // 2016/679"), pre-2015 acts are "No number/year" (e.g. "(EC) No 1924/2006").
+  // Both shapes look like "\d+/\d+", so the year-first pattern below would
+  // otherwise match a pre-2015 reference too and invert year/number. We keep
+  // this pattern first (not reordered after the "No " pattern) because text
+  // can contain both forms and the first pattern must keep winning for the
+  // post-2015 act (see the "mixed text" regression test) -- instead the
+  // negative lookbehind refuses the match when the digit run is immediately
+  // preceded by "No " (or "No." -- older OJ renderings abbreviate with a
+  // period), leaving that text for the second pattern to catch.
   const numberPatterns = [
-    /\b(?:\((?:eu|ec|eec|euratom)\)\s*)?(\d{4})\/(\d{1,4})\b/i,
-    /\bno\s+(\d{1,4})\/(\d{4})\b/i,
+    /\b(?:\((?:eu|ec|eec|euratom)\)\s*)?(?<!\bno\.?\s)(\d{4})\/(\d{1,4})\b/i,
+    /\bno\.?\s+(\d{1,4})\/(\d{4})\b/i,
   ];
 
   let year = null;

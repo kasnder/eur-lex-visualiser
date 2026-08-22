@@ -72,3 +72,27 @@ test("eurlex resolve-url uses the legal cache before network fetches", async () 
   assert.equal(payload.resolved?.celex, "32015L2366");
   assert.equal(payload.resolved?.source, "search-cache");
 });
+
+test("eurlex resolve rejects an invalid --lang instead of silently defaulting to ENG", async () => {
+  await assert.rejects(
+    runCli(["resolve", "Directive 2015/2366", "--lang", "XX"], {
+      SEARCH_CACHE_PATH: fixturePath,
+    }),
+    (error) => {
+      assert.match(error.stderr, /Invalid language code: XX/);
+      return true;
+    }
+  );
+});
+
+test("eurlex resolve-url rejects an invalid --lang instead of silently defaulting to ENG", async () => {
+  await assert.rejects(
+    runCli(["resolve-url", "https://eur-lex.europa.eu/eli/dir/2015/2366/oj", "--lang", "XX"], {
+      SEARCH_CACHE_PATH: fixturePath,
+    }),
+    (error) => {
+      assert.match(error.stderr, /Invalid language code: XX/);
+      return true;
+    }
+  );
+});

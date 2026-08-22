@@ -234,6 +234,16 @@ function registerApiRoutes(app, deps) {
         });
       }
 
+      if (!validateCelex(resolution.resolved.celex)) {
+        // Defense in depth: the resolver is not currently able to produce a
+        // malformed CELEX, but nothing upstream guarantees that forever, and
+        // every other route here validates before touching the filesystem.
+        return res.status(502).json({
+          error: 'Resolved reference produced an invalid CELEX identifier',
+          code: 'invalid_celex',
+        });
+      }
+
       try {
         const { servePath } = await prepareLawPayload(resolution.resolved.celex, lang);
         res.setHeader('X-Resolved-CELEX', resolution.resolved.celex);
@@ -492,9 +502,10 @@ function registerApiRoutes(app, deps) {
         model: DEFAULT_RECITAL_TITLE_MODEL,
       });
 
-      // Only a real generation costs money; a cache hit must not consume
+      // Only a real (billed) model call costs money; neither a cache hit nor
+      // the zero-recitals short-circuit (both `cached: false`) may consume
       // the caller's generation budget.
-      if (!result.cached) req.chargeGeneration?.();
+      if (result.billed) req.chargeGeneration?.();
 
       res.json({
         celex,
@@ -627,9 +638,10 @@ function registerApiRoutes(app, deps) {
         model: DEFAULT_ARTICLE_DIGEST_MODEL,
       });
 
-      // Only a real generation costs money; a cache hit must not consume
-      // the caller's generation budget.
-      if (!result.cached) req.chargeGeneration?.();
+      // Only a real (billed) model call costs money; neither a cache hit nor
+      // the zero-case short-circuit (both `cached: false`) may consume the
+      // caller's generation budget.
+      if (result.billed) req.chargeGeneration?.();
 
       res.json({
         celex,
@@ -682,9 +694,10 @@ function registerApiRoutes(app, deps) {
         model: DEFAULT_CASE_LAW_DIGEST_MODEL,
       });
 
-      // Only a real generation costs money; a cache hit must not consume
-      // the caller's generation budget.
-      if (!result.cached) req.chargeGeneration?.();
+      // Only a real (billed) model call costs money; neither a cache hit nor
+      // the zero-case short-circuit (both `cached: false`) may consume the
+      // caller's generation budget.
+      if (result.billed) req.chargeGeneration?.();
 
       res.json({
         celex,
