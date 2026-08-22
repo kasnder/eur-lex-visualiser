@@ -433,18 +433,44 @@ test('get_law_part recital returns text and soft-fails to no title without a key
 });
 
 test('get_law_part recital stays cached-only even when an OpenRouter key is configured', async () => {
+  // Asserting `title === null` alone does not prove anything: the pre-fix code
+  // called ensureRecitalTitles, watched the request fail, and soft-failed to
+  // null too. The property that matters is that /mcp -- which carries no
+  // generation budget or origin allowlist -- never makes the billed call in
+  // the first place, so stub fetch to *succeed* and assert it is never reached.
   const prevKey = process.env.OPENROUTER_API_KEY;
+  const originalFetch = global.fetch;
+  const fetched = [];
+  // A dedicated empty dir, not makeDeps' shared fixed path: this test drives a
+  // cache *miss* with a fetch stub that would succeed, so writing into the
+  // shared path would leave a generated title behind and break every later run
+  // on this machine.
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-cached-only-'));
   process.env.OPENROUTER_API_KEY = 'test-key-should-be-ignored';
+  global.fetch = async (url, options) => {
+    fetched.push(String(url));
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ 1: 'A generated title' }) }, finish_reason: 'stop' }],
+        model: 'test-model',
+        usage: { total_tokens: 1 },
+      }),
+    };
+  };
   try {
-    await withClient(makeDeps(), async (client) => {
+    await withClient(makeDeps({ FMX_DIR: cacheDir }), async (client) => {
       const body = parseResult(await client.callTool({ name: 'get_law_part', arguments: { celex: '32016R0679', part: 'recital', number: '1' } }));
       assert.equal(body.recital_number, '1');
-      assert.equal(body.title, null, 'the MCP path must never fall back to a live generation call on a cache miss');
       assert.match(body.text, /protection of natural persons/);
+      assert.deepEqual(fetched, [], 'the MCP path must never make a billed generation call on a cache miss');
+      assert.equal(body.title, null, 'a cache miss must return no title rather than generating one');
     });
   } finally {
+    global.fetch = originalFetch;
     if (prevKey !== undefined) process.env.OPENROUTER_API_KEY = prevKey;
     else delete process.env.OPENROUTER_API_KEY;
+    fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 });
 
