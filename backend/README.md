@@ -865,6 +865,7 @@ Current test coverage includes:
 | `PORT` | Port for the API server. |
 | `CACHE_DIR` | Directory for cached FMX/XML/ZIP downloads and derived artefacts. Defaults to `backend/law-cache` for the API. The CLI also respects legacy `FMX_DIR`. |
 | `STORAGE_LIMIT_MB` | Max size of the FMX download cache before eviction starts. Default `500`. |
+| `FMX_DOM_SHIM_RECYCLE` | Parses between replacements of the shared jsdom DOM-shim window used by Formex parsing. jsdom pins every selector-queried XML document to its window, so long-lived processes (API server, build workers) would otherwise retain each parsed act until exit; replacing the window releases them. `0` disables. Default `25`. |
 | `HTML_CACHE_LIMIT_MB` | Max size of the legacy-HTML fallback cache. Default `200`. |
 | `RATE_LIMIT_MAX` | Per-IP request cap for the 15-minute window. |
 | `GENERATION_LIMIT_MAX` | Per-IP cap on *billed* AI generations per window, applied to the four generation routes. Only cache misses are charged. Default `10`. |

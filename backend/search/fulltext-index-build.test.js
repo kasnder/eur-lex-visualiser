@@ -378,7 +378,7 @@ test("progress line reports the worker's isolate heap against its cap, the WAL s
     const progress = lines.filter((line) => /\d+\/\d+ acts/.test(line));
     assert.ok(progress.length > 0, "expected at least one progress line");
 
-    const match = /worker heap (\d+)\/(\d+) MB \(peak (\d+), \d+ recycled\), wal (\d+) MB/.exec(progress.at(-1));
+    const match = /worker heap (\d+)\/(\d+) MB \(peak (\d+)\), wal (\d+) MB/.exec(progress.at(-1));
     assert.ok(match, `progress line lacks heap/wal figures: ${progress.at(-1)}`);
 
     const [, heapUsed, cap, peak, wal] = match.map(Number);
@@ -408,70 +408,6 @@ test("progress line reports the worker's isolate heap against its cap, the WAL s
     const [, totalMb, kbps] = throughput.map(Number);
     assert.ok(Number.isInteger(totalMb) && totalMb >= 0, "cumulative MB should be a non-negative integer");
     assert.ok(kbps > 0, "parse throughput should be positive");
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("recycling pool workers preserves every act and reports the count", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-recycle-"));
-  const outputPath = path.join(dir, "fulltext.sqlite");
-  const first = await seedCorpusFile(dir, "fmx-v4-2009-32009L0004.xml.gz", "32009L0004", "xml");
-  const second = await seedCorpusFile(dir, "fmx-v6-2024-32024D0190.xml.gz", "32024D0190", "xml");
-  const lines = [];
-
-  try {
-    // batchSize 1 with recycleBatches 1 retires the worker between every act,
-    // which is the setting most likely to drop a shard if recycling raced the
-    // handoff. Both acts must still land.
-    await buildFulltextIndex({
-      outputPath,
-      files: [first, second],
-      universe: new Set(["32009L0004", "32024D0190"]),
-      batchSize: 1,
-      pool: 1,
-      recycleBatches: 1,
-      progress: true,
-      log: (line) => lines.push(String(line)),
-    });
-
-    const db = new (require("better-sqlite3"))(outputPath, { readonly: true });
-    const indexed = db.prepare("SELECT DISTINCT celex FROM units ORDER BY celex").all().map((row) => row.celex);
-    db.close();
-    assert.deepEqual(indexed, ["32009L0004", "32024D0190"], "recycling must not lose an act");
-
-    const progress = lines.filter((line) => /\d+\/\d+ acts/.test(line));
-    const recycled = /peak \d+, (\d+) recycled/.exec(progress.at(-1));
-    assert.ok(recycled, `progress line lacks the recycle count: ${progress.at(-1)}`);
-    assert.ok(Number(recycled[1]) >= 1, "at least one worker should have been retired");
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("recycleBatches 0 disables recycling", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fulltext-norecycle-"));
-  const outputPath = path.join(dir, "fulltext.sqlite");
-  const first = await seedCorpusFile(dir, "fmx-v4-2009-32009L0004.xml.gz", "32009L0004", "xml");
-  const second = await seedCorpusFile(dir, "fmx-v6-2024-32024D0190.xml.gz", "32024D0190", "xml");
-  const lines = [];
-
-  try {
-    await buildFulltextIndex({
-      outputPath,
-      files: [first, second],
-      universe: new Set(["32009L0004", "32024D0190"]),
-      batchSize: 1,
-      pool: 1,
-      recycleBatches: 0,
-      progress: true,
-      log: (line) => lines.push(String(line)),
-    });
-
-    const progress = lines.filter((line) => /\d+\/\d+ acts/.test(line));
-    const recycled = /peak \d+, (\d+) recycled/.exec(progress.at(-1));
-    assert.ok(recycled, `progress line lacks the recycle count: ${progress.at(-1)}`);
-    assert.equal(Number(recycled[1]), 0, "recycleBatches 0 must retire nothing mid-run");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
