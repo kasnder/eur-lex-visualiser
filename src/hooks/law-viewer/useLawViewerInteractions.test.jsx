@@ -198,10 +198,11 @@ describe("useLawViewerInteractions", () => {
       textarea.remove();
     });
 
-    it("yields navigation keys to the search modal when a dialog is open", async () => {
+    it("yields navigation keys to the search modal when a modal dialog is open", async () => {
       await render();
       const dialog = document.createElement("div");
       dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
       document.body.appendChild(dialog);
 
       pressKey({ key: "j" });
@@ -210,6 +211,21 @@ describe("useLawViewerInteractions", () => {
       pressKey({ key: "ArrowRight" });
 
       expect(onPrevNext).not.toHaveBeenCalled();
+      dialog.remove();
+    });
+
+    it("keeps navigation keys active when only a non-modal dialog such as the definition tooltip is open", async () => {
+      await render();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      document.body.appendChild(dialog);
+
+      pressKey({ key: "ArrowRight" });
+      expect(onPrevNext).toHaveBeenLastCalledWith("article", 2);
+
+      pressKey({ key: "ArrowLeft" });
+      expect(onPrevNext).toHaveBeenLastCalledWith("article", 0);
+
       dialog.remove();
     });
 

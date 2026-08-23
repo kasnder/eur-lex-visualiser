@@ -40,9 +40,10 @@ export function useLawViewerInteractions({
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA") return;
-      // Don't hijack navigation keys while a dialog is open on top of the
+      // Don't hijack navigation keys while a modal dialog is open on top of the
       // reader (mirrors isGlobalShortcutContext in LawViewerQuickNavigation).
-      if (typeof document !== "undefined" && document.querySelector('[role="dialog"]')) return;
+      // Non-modal dialogs such as the definition tooltip don't block reader keys.
+      if (typeof document !== "undefined" && document.querySelector('[role="dialog"][aria-modal="true"]')) return;
 
       const { currentList, index } = getCurrentEntryIndex(data, selected);
       if (!currentList.length) return;

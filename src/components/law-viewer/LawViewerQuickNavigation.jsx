@@ -7,13 +7,13 @@ import { parseJumpQuery } from "../../utils/law-viewer/jumpParser.js";
 const MotionDiv = motion.div;
 
 // Whether a keystroke should be treated as a global shortcut (nothing is being
-// typed, no modifier held, and no dialog is open on top of the reader).
+// typed, no modifier held, and no modal dialog is open on top of the reader).
 function isGlobalShortcutContext(event) {
   if (event.metaKey || event.ctrlKey || event.altKey) return false;
   const target = event.target;
   const tag = target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return false;
-  if (typeof document !== "undefined" && document.querySelector('[role="dialog"]')) return false;
+  if (typeof document !== "undefined" && document.querySelector('[role="dialog"][aria-modal="true"]')) return false;
   return true;
 }
 
