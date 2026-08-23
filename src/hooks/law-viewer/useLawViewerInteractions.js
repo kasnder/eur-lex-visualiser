@@ -5,6 +5,7 @@ import { parseOfficialReference } from "../../utils/officialReferences.js";
 import { buildImportedLawCandidate, getCanonicalLawRoute } from "../../utils/lawRouting.js";
 import { saveLawMeta } from "../../utils/library.js";
 import { FormexApiError, resolveOfficialReference } from "../../utils/formexApi.js";
+import { isModalDialogOpen } from "../../utils/law-viewer/modalDialog.js";
 
 function getCurrentEntryIndex(data, selected) {
   let currentList = [];
@@ -42,8 +43,9 @@ export function useLawViewerInteractions({
       if (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA") return;
       // Don't hijack navigation keys while a modal dialog is open on top of the
       // reader (mirrors isGlobalShortcutContext in LawViewerQuickNavigation).
-      // Non-modal dialogs such as the definition tooltip don't block reader keys.
-      if (typeof document !== "undefined" && document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // Non-modal dialogs such as the definition tooltip don't block reader
+      // keys, and neither does a modal that is hidden for the current breakpoint.
+      if (isModalDialogOpen()) return;
 
       const { currentList, index } = getCurrentEntryIndex(data, selected);
       if (!currentList.length) return;

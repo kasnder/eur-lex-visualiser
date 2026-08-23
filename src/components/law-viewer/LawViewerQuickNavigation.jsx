@@ -3,6 +3,7 @@ import { motion, useAnimationControls, useReducedMotion } from "framer-motion";
 import { CornerDownLeft } from "lucide-react";
 import { NavigationControls } from "../NavigationControls.jsx";
 import { parseJumpQuery } from "../../utils/law-viewer/jumpParser.js";
+import { isModalDialogOpen } from "../../utils/law-viewer/modalDialog.js";
 
 const MotionDiv = motion.div;
 
@@ -13,7 +14,7 @@ function isGlobalShortcutContext(event) {
   const target = event.target;
   const tag = target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return false;
-  if (typeof document !== "undefined" && document.querySelector('[role="dialog"][aria-modal="true"]')) return false;
+  if (isModalDialogOpen()) return false;
   return true;
 }
 
