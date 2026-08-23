@@ -1,13 +1,35 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DefinitionComparisonPanel } from "./DefinitionComparisonPanel.jsx";
+
+// The comparison panel lives in the sidebar (LawViewerContextRail) on wide
+// screens; below the xl breakpoint it becomes this bottom sheet instead. Keep
+// the sheet out of the DOM entirely on wide screens — a display:none dialog
+// with aria-modal="true" would still make the reader defer its arrow/j-k keys
+// to it (querySelector matches hidden elements).
+const SHEET_MEDIA_QUERY = "(max-width: 1279.98px)";
+
+function matchesSheetQuery() {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(SHEET_MEDIA_QUERY).matches
+    : false;
+}
 
 export function DefinitionComparisonSheet(props) {
   const sheetRef = useRef(null);
   const { term, onClose } = props;
+  const [isSheet, setIsSheet] = useState(matchesSheetQuery);
 
   useEffect(() => {
-    if (!term) return undefined;
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const query = window.matchMedia(SHEET_MEDIA_QUERY);
+    const handleChange = (event) => setIsSheet(event.matches);
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (!term || !isSheet) return undefined;
     const previousFocus = document.activeElement;
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -39,13 +61,13 @@ export function DefinitionComparisonSheet(props) {
       document.removeEventListener("keydown", handleKeyDown);
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
-  }, [onClose, term]);
+  }, [onClose, term, isSheet]);
 
-  if (!term || typeof document === "undefined") return null;
+  if (!term || !isSheet || typeof document === "undefined") return null;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[90] flex items-end bg-black/25 xl:hidden"
+      className="fixed inset-0 z-[90] flex items-end bg-black/25"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose?.();
       }}

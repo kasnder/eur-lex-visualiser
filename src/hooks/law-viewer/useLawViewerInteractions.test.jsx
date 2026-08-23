@@ -229,6 +229,23 @@ describe("useLawViewerInteractions", () => {
       dialog.remove();
     });
 
+    it("keeps navigation keys active when a modal dialog is hidden for the current breakpoint", async () => {
+      await render();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.style.display = "none";
+      document.body.appendChild(dialog);
+
+      pressKey({ key: "ArrowRight" });
+      expect(onPrevNext).toHaveBeenLastCalledWith("article", 2);
+
+      pressKey({ key: "ArrowLeft" });
+      expect(onPrevNext).toHaveBeenLastCalledWith("article", 0);
+
+      dialog.remove();
+    });
+
     it("navigates recitals with the same j/k and arrow keys", async () => {
       await render({ selected: { kind: "recital", id: "10" } });
 
