@@ -381,9 +381,15 @@ test("batched builder's default pool parses a real corpus through persistent wor
   assert.equal(artifact.stats.parsedLaws, 5);
   assert.equal(artifact.stats.parseFailures, 0);
   assert.ok(Number.isInteger(artifact.parserVersion), "real parser stamps its version on every shard");
-  // Three batches of two/two/one, each reported with the same wording as before.
-  assert.deepEqual(messages.map((message) => message.replace(/ laws.*/, "")), [
-    "[citation-graph] 2/5", "[citation-graph] 4/5", "[citation-graph] 5/5",
-  ]);
-  assert.match(messages[2], /last=32010L0005/);
+  // Three batches of two/two/one, pulled by two workers concurrently, so the
+  // cumulative "N/5" counts are logged in completion order, not batch order
+  // (e.g. 2/5 → 3/5 → 5/5 when the single-file batch lands between the two
+  // two-file ones). Assert the stable invariants: one message per batch, the
+  // completed-in-isolated-workers wording, strictly increasing counts that
+  // finish at 5/5, and each batch naming its trailing law.
+  assert.equal(messages.length, 3);
+  assert.ok(messages.every((message) => /^\[citation-graph\] \d+\/5 laws completed in isolated workers; last=32010L000[1-5]$/.test(message)));
+  const counts = messages.map((message) => Number(message.match(/^\[citation-graph\] (\d+)\/5/)[1]));
+  assert.deepEqual(counts, [...counts].sort((a, b) => a - b), "cumulative counts are reported in increasing order");
+  assert.equal(counts[counts.length - 1], 5, "progress finishes at 5/5");
 });
