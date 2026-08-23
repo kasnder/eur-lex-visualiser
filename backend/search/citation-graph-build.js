@@ -18,6 +18,11 @@ const DEFAULT_MAX_XML_BYTES = 1 * 1024 * 1024;
 const DEFAULT_MAX_HTML_BYTES = 4 * 1024 * 1024;
 const DEFAULT_PROGRESS_INTERVAL = 500;
 const DEFAULT_BATCH_SIZE = 100;
+// Persistent workers pulling batches from a queue, mirroring fulltext-index-build's
+// pool: parsing is CPU-bound, so a second worker roughly halves the wall clock on
+// the 4-vCPU CI runner, and keeping workers alive across batches saves the ~1 s
+// module+jsdom startup a spawn-per-batch design pays ~800 times over a full corpus.
+const DEFAULT_POOL_SIZE = 2;
 const DEFAULT_WORKER_HEAP_MB = 768;
 const DEFAULT_CORPUS_DIR = path.join(__dirname, "data", "laws");
 const DEFAULT_CITATION_GRAPH_PATH = process.env.CITATION_GRAPH_PATH || path.join(__dirname, "data", "citation-graph.json");
@@ -243,7 +248,7 @@ async function writeArtifactAtomic(outputPath, artifact, fsApi = fs) {
 function parseCliArgs(argv) {
   const options = {};
   const valueFlags = ["--corpusDir", "--htmlDir", "--out", "--limit", "--fromYear", "--toYear",
-    "--maxXmlBytes", "--maxHtmlBytes", "--batchSize", "--workerHeapMb"];
+    "--maxXmlBytes", "--maxHtmlBytes", "--batchSize", "--workerHeapMb", "--pool"];
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     // --noHtml is the one boolean: it restores the FMX-only graph (and reports the
@@ -260,7 +265,7 @@ function parseCliArgs(argv) {
     else {
       const number = Number.parseInt(value, 10);
       if (!Number.isInteger(number) || number < 0
-        || (["--limit", "--maxXmlBytes", "--maxHtmlBytes", "--batchSize", "--workerHeapMb"].includes(flag) && number === 0)) {
+        || (["--limit", "--maxXmlBytes", "--maxHtmlBytes", "--batchSize", "--workerHeapMb", "--pool"].includes(flag) && number === 0)) {
         throw new Error(`Invalid value for ${flag}: ${value}`);
       }
       if (flag === "--limit") options.limit = number;
@@ -274,6 +279,8 @@ function parseCliArgs(argv) {
       // split down to a single law, and land as worker_failure contributing no
       // edges — a silently incomplete graph. Raise it for a full-corpus build.
       if (flag === "--workerHeapMb") options.workerHeapMb = number;
+      // Persistent workers in the pool, same flag name as the fulltext builder.
+      if (flag === "--pool") options.poolSize = number;
     }
   }
   return options;
@@ -473,18 +480,22 @@ function assembleArtifact({ counters, failures, edges, parserVersions, htmlTreeS
   };
 }
 
+function spawnCitationGraphWorker(options = {}) {
+  return new Worker(path.join(__dirname, "citation-graph-worker.js"), {
+    workerData: {
+      maxXmlBytes: options.maxXmlBytes,
+      maxHtmlBytes: options.maxHtmlBytes,
+      searchCachePath: options.searchCachePath,
+      resolverIndex: options.resolverIndex,
+    },
+    resourceLimits: { maxOldGenerationSizeMb: options.workerHeapMb || DEFAULT_WORKER_HEAP_MB },
+  });
+}
+
+// One-shot runner kept for embedders that want a single batch in a fresh worker.
 function runCitationGraphWorker(files, options = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, "citation-graph-worker.js"), {
-      workerData: {
-        files,
-        maxXmlBytes: options.maxXmlBytes,
-        maxHtmlBytes: options.maxHtmlBytes,
-        searchCachePath: options.searchCachePath,
-        resolverIndex: options.resolverIndex,
-      },
-      resourceLimits: { maxOldGenerationSizeMb: options.workerHeapMb || DEFAULT_WORKER_HEAP_MB },
-    });
+    const worker = spawnCitationGraphWorker(options);
     let settled = false;
     // Once the worker has delivered its result (message or error), tear it down
     // explicitly so a future handle leak in worker code can't keep the thread —
@@ -501,6 +512,95 @@ function runCitationGraphWorker(files, options = {}) {
       if (!settled && code !== 0) reject(new Error(`Citation graph worker exited with code ${code}`));
       else if (!settled) reject(new Error("Citation graph worker exited without a result"));
     });
+    worker.postMessage(files);
+  });
+}
+
+// Resilient pool over a queue of batches: N persistent workers pull batches until
+// the queue drains. A batch that fails (worker crash — typically OOM on a giant
+// act — or an error reply) is split in half and re-queued; a size-1 batch that
+// still fails is recorded as a failure instead of retried forever. A crashed
+// worker is replaced so the pool stays at full strength; idle workers are
+// terminated as the queue drains so the build doesn't hold heap it no longer
+// needs before the parent's own merge phase.
+function runCitationGraphPool(batches, onShard, options = {}) {
+  const poolSize = Math.max(1, Math.min(options.poolSize || DEFAULT_POOL_SIZE, batches.length));
+  return new Promise((resolve) => {
+    const queue = batches.slice();
+    const inflight = new Map(); // worker -> batch
+    let settled = false;
+
+    function maybeDone() {
+      if (!settled && queue.length === 0 && inflight.size === 0) { settled = true; resolve(); }
+    }
+    // Same failure shape the sequential fallback records for a law that kills
+    // even a single-file batch. Only size-1 batches end here as failure shards:
+    // larger ones are split and re-queued first.
+    function failureShard(batch, error) {
+      onShard({
+        parserVersion: null,
+        stats: { corpusFiles: batch.length, parseFailures: batch.length },
+        failures: batch.map((file) => ({
+          celex: celexForCorpusFile(file), type: "worker_failure", error: String(error?.message || error),
+        })),
+        edges: [],
+      }, batch);
+    }
+    function handleBatchFailure(batch, error) {
+      if (batch.length > 1) {
+        const mid = Math.floor(batch.length / 2);
+        queue.unshift(batch.slice(mid), batch.slice(0, mid));
+      } else {
+        failureShard(batch, error);
+        maybeDone();
+      }
+    }
+    function assign(worker) {
+      if (queue.length === 0) {
+        inflight.delete(worker);
+        worker.terminate().catch(() => {});
+        maybeDone();
+        return;
+      }
+      const batch = queue.shift();
+      inflight.set(worker, batch);
+      worker.postMessage(batch);
+    }
+    function attach(worker) {
+      worker.on("message", (message) => {
+        const batch = inflight.get(worker);
+        inflight.delete(worker);
+        if (message?.ok) onShard(message.artifact, batch);
+        else handleBatchFailure(batch, new Error(message?.error || "Citation graph worker failed"));
+        assign(worker);
+      });
+      worker.on("error", (error) => handleWorkerLoss(inflight.get(worker), error));
+      worker.on("exit", (code) => {
+        if (inflight.has(worker)) {
+          handleWorkerLoss(inflight.get(worker), new Error(`worker exited with code ${code}`));
+        }
+      });
+    }
+    // A crashed worker loses its in-flight batch; split and re-queue it, record
+    // single-law losses, and spawn a replacement so the pool stays at full strength.
+    function handleWorkerLoss(batch, error) {
+      inflight.delete(workerForBatch(batch));
+      handleBatchFailure(batch, error);
+      const replacement = spawnCitationGraphWorker(options);
+      attach(replacement);
+      assign(replacement);
+      maybeDone();
+    }
+    function workerForBatch(batch) {
+      for (const [worker, inFlight] of inflight) if (inFlight === batch) return worker;
+      return null;
+    }
+    if (batches.length === 0) { resolve(); return; }
+    for (let i = 0; i < poolSize; i += 1) {
+      const worker = spawnCitationGraphWorker(options);
+      attach(worker);
+      assign(worker);
+    }
   });
 }
 
@@ -541,43 +641,65 @@ async function buildCitationGraphBatched(options = {}) {
   const maxXmlBytes = options.maxXmlBytes ?? DEFAULT_MAX_XML_BYTES;
   const maxHtmlBytes = options.maxHtmlBytes ?? DEFAULT_MAX_HTML_BYTES;
   const batchSize = options.batchSize || DEFAULT_BATCH_SIZE;
-  const workerRunner = options.workerRunner || runCitationGraphWorker;
+  const batches = [];
+  for (let index = 0; index < files.length; index += batchSize) {
+    batches.push(files.slice(index, index + batchSize));
+  }
   // Resolve the search cache once here, not once per worker.
   const resolverIndex = loadReferenceIndex(options);
   const shards = [];
   let processed = 0;
   const progressLog = options.progress ? (options.log || console.log) : null;
 
-  async function processBatch(batch) {
-    try {
-      const shard = await workerRunner(batch, {
-        maxXmlBytes, maxHtmlBytes, searchCachePath: options.searchCachePath,
-        resolverIndex, workerHeapMb: options.workerHeapMb,
-      });
-      shards.push(shard);
-      processed += batch.length;
-      if (progressLog) progressLog(`[citation-graph] ${processed}/${files.length} laws completed in isolated workers; last=${celexForCorpusFile(batch[batch.length - 1])}`);
-    } catch (error) {
-      if (batch.length > 1) {
-        const middle = Math.floor(batch.length / 2);
-        await processBatch(batch.slice(0, middle));
-        await processBatch(batch.slice(middle));
-        return;
-      }
-      const celex = celexForCorpusFile(batch[0]);
-      shards.push({
-        parserVersion: null,
-        stats: { corpusFiles: 1, parseFailures: 1 },
-        failures: [{ celex, type: "worker_failure", error: String(error?.message || error) }],
-        edges: [],
-      });
-      processed += 1;
-      if (progressLog) progressLog(`[citation-graph] ${processed}/${files.length} laws; skipped worker-failing law ${celex}`);
+  function shardSettled(shard, batch, error) {
+    shards.push(shard);
+    processed += shard.stats?.corpusFiles || batch.length;
+    if (!progressLog) return;
+    if (error == null) {
+      progressLog(`[citation-graph] ${processed}/${files.length} laws completed in isolated workers; last=${celexForCorpusFile(batch[batch.length - 1])}`);
+    } else {
+      progressLog(`[citation-graph] ${processed}/${files.length} laws; skipped worker-failing law ${shard.failures?.[0]?.celex || celexForCorpusFile(batch[0])}`);
     }
   }
 
-  for (let index = 0; index < files.length; index += batchSize) {
-    await processBatch(files.slice(index, index + batchSize));
+  if (options.workerRunner) {
+    // Injected per-batch runner (tests, embedders): the original sequential
+    // spawn-per-batch path with recursive failure isolation.
+    async function processBatch(batch) {
+      try {
+        const shard = await options.workerRunner(batch, {
+          maxXmlBytes, maxHtmlBytes, searchCachePath: options.searchCachePath,
+          resolverIndex, workerHeapMb: options.workerHeapMb,
+        });
+        shardSettled(shard, batch, null);
+      } catch (error) {
+        if (batch.length > 1) {
+          const middle = Math.floor(batch.length / 2);
+          await processBatch(batch.slice(0, middle));
+          await processBatch(batch.slice(middle));
+          return;
+        }
+        shardSettled({
+          parserVersion: null,
+          stats: { corpusFiles: 1, parseFailures: 1 },
+          failures: [{ celex: celexForCorpusFile(batch[0]), type: "worker_failure", error: String(error?.message || error) }],
+          edges: [],
+        }, batch, error);
+      }
+    }
+
+    for (const batch of batches) await processBatch(batch);
+  } else {
+    // Default: persistent workers pull batches until the queue drains (see
+    // runCitationGraphPool). Failure isolation matches the sequential path:
+    // split on error down to a single law, then record it as worker_failure.
+    await runCitationGraphPool(batches, (shard, batch) => {
+      shardSettled(shard, batch, shard.failures?.length ? new Error(shard.failures[0].error) : null);
+    }, {
+      poolSize: options.poolSize, maxXmlBytes, maxHtmlBytes,
+      searchCachePath: options.searchCachePath, resolverIndex,
+      workerHeapMb: options.workerHeapMb,
+    });
   }
   const caseData = options.caseLawData !== undefined ? options.caseLawData
     : await readCaseLawCache(options.caseLawCachePath, fsApi);
@@ -652,11 +774,13 @@ if (require.main === module) {
 }
 
 module.exports = { DEFAULT_BATCH_SIZE, DEFAULT_CITATION_GRAPH_PATH, DEFAULT_CORPUS_DIR, DEFAULT_MAX_XML_BYTES,
-  DEFAULT_MAX_HTML_BYTES, GRAPH_VERSION, buildCitationGraph, buildCitationGraphBatched, celexForCorpusFile,
+  DEFAULT_MAX_HTML_BYTES, DEFAULT_POOL_SIZE, GRAPH_VERSION, buildCitationGraph, buildCitationGraphBatched,
+  celexForCorpusFile,
   createReferenceResolver, loadReferenceIndex,
   countHtmlTreeSkipped, filterCorpusFiles, htmlCorpusDirFor, isHtmlCorpusFile,
   caseLawEdges, edgeKey, formatSummaryReport, legislationEdgesForLaw, listAllCorpusFiles, listCorpusFiles,
   listHtmlCorpusFiles, listTreeFiles,
-  mergeCitationGraphShards, parseCliArgs, rankedTargets, resolveExternalReference, runCitationGraphWorker,
+  mergeCitationGraphShards, parseCliArgs, rankedTargets, resolveExternalReference, runCitationGraphPool,
+  runCitationGraphWorker,
   sourceUnitTypeFor, stripCompleteUppercaseAnnexes,
   summarizeArtifact, writeArtifactAtomic };

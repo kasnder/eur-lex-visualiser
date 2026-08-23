@@ -15,6 +15,8 @@ test("CLI options and source unit types are normalized", () => {
   assert.deepEqual(parseCliArgs(["--noHtml", "--htmlDir", "/html", "--maxHtmlBytes", "2048", "--workerHeapMb", "4096"]), {
     includeHtml: false, htmlDir: "/html", maxHtmlBytes: 2048, workerHeapMb: 4096,
   });
+  assert.deepEqual(parseCliArgs(["--pool", "3"]), { poolSize: 3 });
+  assert.throws(() => parseCliArgs(["--pool", "0"]), /Invalid value/);
   assert.throws(() => parseCliArgs(["--limit", "0"]), /Invalid value/);
   assert.throws(() => parseCliArgs(["--maxXmlBytes", "0"]), /Invalid value/);
   assert.throws(() => parseCliArgs(["--maxHtmlBytes", "0"]), /Invalid value/);
@@ -345,4 +347,43 @@ test("createReferenceResolver resolves exactly like the cache it was exported fr
   assert.equal(resolver.getByCelex("32020R0002").title, null);
   assert.equal(resolver.getByCelex("39999R9999"), null);
   assert.equal(createReferenceResolver({ officialRef: {}, celexTitle: {} }).isReady(), false);
+});
+
+// The default path must run the real worker pool: persistent workers pulling
+// batches from a queue (this is what makes a full-corpus build ~2x faster than
+// spawn-per-batch and amortises jsdom startup). Runs actual worker threads over
+// a tiny gzipped FMX corpus — several batches across two workers.
+test("batched builder's default pool parses a real corpus through persistent workers", async () => {
+  const fixture = await fsp.readFile(path.join(__dirname, "..", "shared", "__fixtures__", "corpus", "fmx-v4-2009-32009L0004.xml.gz"));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "citation-pool-"));
+  const files = [];
+  for (let index = 0; index < 5; index += 1) {
+    const year = String(2010 + Math.floor(index / 4));
+    await fsp.mkdir(path.join(dir, year), { recursive: true });
+    const file = path.join(dir, year, `32010L000${index + 1}.xml.gz`);
+    await fsp.writeFile(file, fixture);
+    files.push(file);
+  }
+  const messages = [];
+  const artifact = await buildCitationGraphBatched({
+    files, batchSize: 2, outputPath: null, progress: true,
+    log: (message) => messages.push(message),
+    legalCache: {
+      isReady: () => true,
+      // The workers build their resolver from this index; createReferenceResolver
+      // reports ready only when officialRef is non-empty, so seed one entry.
+      exportReferenceIndex: () => ({ officialRef: { "directive|2009|4": "32009L0004" }, celexTitle: {} }),
+    },
+    caseLawData: null,
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+  });
+  assert.equal(artifact.stats.corpusFiles, 5);
+  assert.equal(artifact.stats.parsedLaws, 5);
+  assert.equal(artifact.stats.parseFailures, 0);
+  assert.ok(Number.isInteger(artifact.parserVersion), "real parser stamps its version on every shard");
+  // Three batches of two/two/one, each reported with the same wording as before.
+  assert.deepEqual(messages.map((message) => message.replace(/ laws.*/, "")), [
+    "[citation-graph] 2/5", "[citation-graph] 4/5", "[citation-graph] 5/5",
+  ]);
+  assert.match(messages[2], /last=32010L0005/);
 });
