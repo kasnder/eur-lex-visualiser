@@ -8,12 +8,15 @@ vi.mock("./formexApi.js", () => ({
   closeFormexDb: mocks.closeFormexDb,
 }));
 
-const { runOneTimeMigrationReset } = await import("./resetApp.js");
+const { runOneTimeMigrationReset, isMigrationCurrent } = await import("./resetApp.js");
 
 describe("application data reset", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    // clearAllMocks keeps prior implementations; give every test a resolving
+    // default so a leaked implementation from another test can't hang it.
+    mocks.closeFormexDb.mockResolvedValue(undefined);
     window.localStorage.clear();
   });
 
@@ -48,5 +51,28 @@ describe("application data reset", () => {
 
     expect(calls).toEqual(["close", "delete"]);
     expect(deleteDatabase).toHaveBeenCalledWith("formex-cache");
+  });
+
+  it("reports the migration as pending until the reset stamps its marker", async () => {
+    const deleteDatabase = vi.fn(() => {
+      const request = {};
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    });
+    vi.stubGlobal("indexedDB", { deleteDatabase });
+
+    expect(isMigrationCurrent()).toBe(false);
+    await runOneTimeMigrationReset();
+    expect(deleteDatabase).toHaveBeenCalledWith("formex-cache");
+    expect(isMigrationCurrent()).toBe(true);
+    expect(window.localStorage.getItem("legalviz-migration-version")).toBeTruthy();
+  });
+
+  it("treats an unreadable localStorage as needing the reset", async () => {
+    vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
+
+    expect(isMigrationCurrent()).toBe(false);
   });
 });

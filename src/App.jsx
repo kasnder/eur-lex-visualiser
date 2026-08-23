@@ -1,8 +1,10 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createBrowserRouter, RouterProvider, Outlet, ScrollRestoration, isRouteErrorResponse, useRouteError, Link, useParams } from "react-router-dom";
+import { Loader2 } from "lucide-react";
 import { Landing } from "./components/Landing.jsx";
 import { LawViewer } from "./components/LawViewer.jsx";
 import { ThemeProvider } from "./components/ThemeProvider.jsx";
+import { isMigrationCurrent, runOneTimeMigrationReset } from "./utils/resetApp.js";
 import { runOneTimeTopicsBackfill } from "./utils/topicsBackfill.js";
 import { I18nProvider } from "./i18n/I18nProvider.jsx";
 import { useI18n } from "./i18n/useI18n.js";
@@ -10,8 +12,9 @@ import { getLocaleHomePath, isSupportedUiLocale, normalizeUiLocale, SUPPORTED_UI
 
 function Layout() {
   useEffect(() => {
-    // The one-time migration reset now runs in main.jsx before the tree
-    // mounts, so it finishes before first paint and no reload is needed.
+    // The one-time migration reset runs behind App's boot gate before any
+    // route mounts, so it finishes without a reload and without wiping data
+    // under a live view.
     runOneTimeTopicsBackfill().catch(() => {});
   }, []);
 
@@ -128,7 +131,39 @@ const router = createBrowserRouter([
   basename: "/",
 });
 
+function BootSplash() {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">
+        <Loader2 size={28} className="animate-spin" />
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  // First-time visitors (and any browser missing the migration marker) must
+  // not see the prerendered SEO markup while the one-time reset wipes local
+  // data, and routes must not mount onto half-wiped storage. A synchronous
+  // marker check picks the boot phase before the first paint; the reset then
+  // runs behind a splash instead of blocking the mount.
+  const [booting, setBooting] = useState(() => !isMigrationCurrent());
+
+  useEffect(() => {
+    if (!booting) return undefined;
+    let active = true;
+    runOneTimeMigrationReset().finally(() => {
+      if (active) setBooting(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [booting]);
+
+  if (booting) {
+    return <BootSplash />;
+  }
+
   return (
     <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
       <RouterProvider router={router} />

@@ -85,18 +85,25 @@ async function clearLocalBrowserData() {
   // blocked by this very tab. Other tabs release theirs via the
   // versionchange handler installed in formexApi's openDb().
   await closeFormexDb();
-  await deleteIndexedDb(FORMEX_DB_NAME);
-  await clearBrowserCaches();
-  await unregisterServiceWorkers();
+  // Independent stores, wiped concurrently to keep the boot gate short.
+  await Promise.all([
+    deleteIndexedDb(FORMEX_DB_NAME),
+    clearBrowserCaches(),
+    unregisterServiceWorkers(),
+  ]);
+}
+
+export function isMigrationCurrent() {
+  try {
+    return window.localStorage.getItem(MIGRATION_VERSION_KEY) === CURRENT_MIGRATION_VERSION;
+  } catch {
+    return false;
+  }
 }
 
 export async function runOneTimeMigrationReset() {
-  try {
-    if (window.localStorage.getItem(MIGRATION_VERSION_KEY) === CURRENT_MIGRATION_VERSION) {
-      return false;
-    }
-  } catch {
-    // Keep going and attempt the reset.
+  if (isMigrationCurrent()) {
+    return false;
   }
 
   await clearLocalBrowserData();
