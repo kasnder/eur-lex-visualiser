@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Navaja",
     "tabImplementing": "Izvedbeni akti",
+    "tabNationalMeasures": "Nacionalni ukrepi",
+    "nationalMeasuresEmpty": "Uradna obvestila držav članic so lahko nepopolna.",
+    "nationalMeasuresTruncated": "Prikazanih je samo 200 najnovejših ukrepov.",
+    "nationalMeasureFallback": "Nacionalni ukrep",
     "tabAmendments": "Spremembe",
     "tabProcedure": "Postopek",
     "procedureLoading": "Nalaganje informacij o postopku…",

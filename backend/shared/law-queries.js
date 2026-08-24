@@ -1,5 +1,6 @@
 /**
- * Shared SPARQL-based queries for law metadata, amendments, and implementing acts.
+ * Shared SPARQL-based queries for law metadata, amendments, implementing acts,
+ * and national transposition measures.
  *
  * Used by both the API routes and the CLI to avoid duplicating queries
  * and result-shaping logic.
@@ -201,6 +202,93 @@ LIMIT 100`;
   }).filter((a) => a.celex);
 
   return { celex, acts };
+}
+
+const DIRECTIVE_CELEX = /^3\d{4}L\d{4}(?:\(\d+\))?$/i;
+const TRANSPOSITION_LIMIT = 200;
+
+/**
+ * List the national measures notified as implementing a directive.
+ *
+ * Sector-7 CELEX ids end in the Commission SG identifier used to identify a
+ * notification. CELLAR can expose the same notification through more than one
+ * binding (for example where optional metadata is multi-valued), so that
+ * suffix is also the stable deduplication key.
+ */
+async function fetchTransposition(celex, runSparqlQuery) {
+  if (!DIRECTIVE_CELEX.test(String(celex || ''))) {
+    return { celex, applicable: false, measures: [], truncated: false };
+  }
+
+  const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
+  const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+SELECT ?sgId
+  (SAMPLE(?rawMeasureCelex) AS ?measureCelex)
+  (SAMPLE(?rawCountry) AS ?country)
+  (SAMPLE(?rawTitle) AS ?title)
+  (MAX(?rawNotificationDate) AS ?notificationDate)
+  (SAMPLE(?rawNationalId) AS ?nationalId)
+  (SAMPLE(?rawNationalLink) AS ?nationalLink)
+  (SAMPLE(?rawEli) AS ?eli)
+WHERE {
+  ?work owl:sameAs <${celexUri}> .
+  ?measure cdm:measure_national_implementing_implements_resource_legal ?work ;
+           cdm:resource_legal_id_celex ?rawMeasureCelex .
+  FILTER(STRSTARTS(STR(?rawMeasureCelex), "7"))
+  BIND(REPLACE(STR(?rawMeasureCelex), "^.*_", "") AS ?sgId)
+  OPTIONAL { ?measure cdm:measure_national_implementing_implemented_by_country ?rawCountry }
+  OPTIONAL { ?measure cdm:work_title ?rawTitle }
+  OPTIONAL { ?measure cdm:measure_national_implementing_date_notification ?rawNotificationDate }
+  OPTIONAL { ?measure cdm:resource_legal_id_local ?rawNationalId }
+  OPTIONAL { ?measure cdm:measure_national_implementing_national_website_link ?rawNationalLink }
+  OPTIONAL { ?measure cdm:eli ?rawEli }
+}
+GROUP BY ?sgId
+ORDER BY DESC(?notificationDate)
+LIMIT ${TRANSPOSITION_LIMIT + 1}`;
+
+  const data = await runSparqlQuery(query);
+  const seen = new Set();
+  const measures = [];
+
+  for (const binding of data.results?.bindings || []) {
+    const rawCelex = String(binding.measureCelex?.value || '').trim();
+    // EUR-Lex also exposes display-only multi-directive ids such as
+    // `7*EST_202103476`; they still carry the same SG suffix and must not be
+    // discarded merely because the act-specific prefix is replaced by `*`.
+    const match = /^7(?:[A-Z0-9()]+|\*[A-Z]{3})_([A-Z0-9]+)$/i.exec(rawCelex);
+    if (!match) continue;
+
+    const sgId = match[1];
+    const dedupeKey = sgId.toUpperCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const rawCountry = binding.country?.value || null;
+    const country = rawCountry
+      ? decodeURIComponent(String(rawCountry).split('/').pop()).toUpperCase()
+      : null;
+
+    measures.push({
+      celex: rawCelex,
+      sgId,
+      country,
+      title: binding.title?.value || null,
+      notificationDate: binding.notificationDate?.value || null,
+      nationalId: binding.nationalId?.value || null,
+      nationalLink: binding.nationalLink?.value || null,
+      eli: binding.eli?.value || null,
+    });
+  }
+
+  return {
+    celex,
+    applicable: true,
+    measures: measures.slice(0, TRANSPOSITION_LIMIT),
+    truncated: measures.length > TRANSPOSITION_LIMIT,
+  };
 }
 
 const PROCEDURE_STAGE_ORDER = {
@@ -908,6 +996,7 @@ module.exports = {
   fetchAmendments,
   fetchConsolidatedVersions,
   fetchImplementing,
+  fetchTransposition,
   fetchLegislativeProcedure,
   fetchCaseLaw,
   parseCitationsToRefs,

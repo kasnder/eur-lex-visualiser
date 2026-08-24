@@ -7,9 +7,120 @@ const path = require("node:path");
 const {
   fetchCaseLaw,
   fetchConsolidatedVersions,
+  fetchTransposition,
   fetchLegislativeProcedure,
   parseCitationsToRefs,
 } = require("./law-queries");
+
+test('fetchTransposition queries national implementing measures and maps optional fields', async () => {
+  let query = '';
+  const payload = await fetchTransposition('32019L0633', async (value) => {
+    query = value;
+    return {
+      results: {
+        bindings: [
+          {
+            measureCelex: { value: '72019L0633POL_202006400' },
+            country: { value: 'http://publications.europa.eu/resource/authority/country/POL' },
+            title: { value: 'Ustawa o zmianie ustawy' },
+            notificationDate: { value: '2020-08-11' },
+            nationalId: { value: '2018/640' },
+            nationalLink: { value: 'https://example.pl/measure' },
+            eli: { value: 'https://eli.example.pl/measure' },
+          },
+          {
+            measureCelex: { value: '72019L0633FRA_202006401' },
+          },
+          {
+            measureCelex: { value: '7*EST_202103476' },
+            country: { value: 'http://publications.europa.eu/resource/authority/country/EST' },
+            title: { value: 'Mitut direktiivi rakendav meede' },
+          },
+          // Same Commission SG suffix: retain the newest binding only.
+          {
+            measureCelex: { value: '72019L0633BEL_202006400' },
+            title: { value: 'Duplicate notification' },
+          },
+          { measureCelex: { value: 'malformed' } },
+          {},
+        ],
+      },
+    };
+  });
+
+  assert.match(query, /measure_national_implementing_implements_resource_legal/);
+  assert.match(query, /measure_national_implementing_date_notification/);
+  assert.match(query, /measure_national_implementing_national_website_link/);
+  assert.match(query, /GROUP BY \?sgId/);
+  assert.match(query, /ORDER BY DESC\(\?notificationDate\)/);
+  assert.match(query, /LIMIT 201/);
+  assert.deepEqual(payload, {
+    celex: '32019L0633',
+    applicable: true,
+    measures: [
+      {
+        celex: '72019L0633POL_202006400',
+        sgId: '202006400',
+        country: 'POL',
+        title: 'Ustawa o zmianie ustawy',
+        notificationDate: '2020-08-11',
+        nationalId: '2018/640',
+        nationalLink: 'https://example.pl/measure',
+        eli: 'https://eli.example.pl/measure',
+      },
+      {
+        celex: '72019L0633FRA_202006401',
+        sgId: '202006401',
+        country: null,
+        title: null,
+        notificationDate: null,
+        nationalId: null,
+        nationalLink: null,
+        eli: null,
+      },
+      {
+        celex: '7*EST_202103476',
+        sgId: '202103476',
+        country: 'EST',
+        title: 'Mitut direktiivi rakendav meede',
+        notificationDate: null,
+        nationalId: null,
+        nationalLink: null,
+        eli: null,
+      },
+    ],
+    truncated: false,
+  });
+});
+
+test('fetchTransposition caps unique measures at 200 and exposes truncation', async () => {
+  const bindings = Array.from({ length: 201 }, (_, index) => ({
+    measureCelex: { value: `72019L0633POL_${String(index).padStart(9, '0')}` },
+    notificationDate: { value: `2020-01-${String((index % 28) + 1).padStart(2, '0')}` },
+  }));
+  const payload = await fetchTransposition('32019L0633', async () => ({ results: { bindings } }));
+
+  assert.equal(payload.measures.length, 200);
+  assert.equal(payload.truncated, true);
+  assert.equal(payload.measures[0].sgId, '000000000');
+  assert.equal(payload.measures[199].sgId, '000000199');
+});
+
+test('fetchTransposition skips CELLAR for non-directives', async () => {
+  let calls = 0;
+  const runSparqlQuery = async () => {
+    calls += 1;
+    return { results: { bindings: [] } };
+  };
+
+  assert.deepEqual(await fetchTransposition('32016R0679', runSparqlQuery), {
+    celex: '32016R0679', applicable: false, measures: [], truncated: false,
+  });
+  assert.deepEqual(await fetchTransposition('32022D0001', runSparqlQuery), {
+    celex: '32022D0001', applicable: false, measures: [], truncated: false,
+  });
+  assert.equal(calls, 0);
+});
 
 test("fetchCaseLaw reads precomputed details from the data store and never writes", async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "case-law-cache-"));

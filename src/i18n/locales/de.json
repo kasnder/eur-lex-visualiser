@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Zitiert",
     "tabImplementing": "Durchführungsrechtsakte",
+    "tabNationalMeasures": "Nationale Maßnahmen",
+    "nationalMeasuresEmpty": "Die Mitteilungen der Mitgliedstaaten können unvollständig sein.",
+    "nationalMeasuresTruncated": "Es werden nur die neuesten 200 Maßnahmen angezeigt.",
+    "nationalMeasureFallback": "Nationale Maßnahme",
     "tabAmendments": "Änderungen",
     "tabProcedure": "Verfahren",
     "procedureLoading": "Informationen zum Gesetzgebungsverfahren werden geladen…",

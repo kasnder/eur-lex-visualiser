@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Citira",
     "tabImplementing": "Provedbeni akti",
+    "tabNationalMeasures": "Nacionalne mjere",
+    "nationalMeasuresEmpty": "Obavijesti država članica mogu biti nepotpune.",
+    "nationalMeasuresTruncated": "Prikazuje se samo 200 najnovijih mjera.",
+    "nationalMeasureFallback": "Nacionalna mjera",
     "tabAmendments": "Izmjene",
     "tabProcedure": "Postupak",
     "procedureLoading": "Učitavanje informacija o postupku…",

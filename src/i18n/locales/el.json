@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Παραπέμπει σε",
     "tabImplementing": "Εκτελεστικές πράξεις",
+    "tabNationalMeasures": "Εθνικά μέτρα",
+    "nationalMeasuresEmpty": "Οι κοινοποιήσεις των κρατών μελών ενδέχεται να είναι ελλιπείς.",
+    "nationalMeasuresTruncated": "Εμφανίζονται μόνο τα 200 πιο πρόσφατα μέτρα.",
+    "nationalMeasureFallback": "Εθνικό μέτρο",
     "tabAmendments": "Τροποποιήσεις",
     "tabProcedure": "Διαδικασία",
     "procedureLoading": "Φόρτωση πληροφοριών διαδικασίας…",

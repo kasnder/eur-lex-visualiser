@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Luann",
     "tabImplementing": "Gníomhartha cur chun feidhme",
+    "tabNationalMeasures": "Bearta náisiúnta",
+    "nationalMeasuresEmpty": "D’fhéadfadh fógraí na mBallstát a bheith neamhiomlán.",
+    "nationalMeasuresTruncated": "Ní thaispeántar ach an 200 beart is déanaí.",
+    "nationalMeasureFallback": "Beart náisiúnta",
     "tabAmendments": "Leasuithe",
     "tabProcedure": "Nós imeachta",
     "procedureLoading": "Faisnéis faoin nós imeachta á luchtú…",

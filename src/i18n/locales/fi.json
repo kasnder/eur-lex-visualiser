@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Viittaa",
     "tabImplementing": "Täytäntöönpanosäädökset",
+    "tabNationalMeasures": "Kansalliset toimenpiteet",
+    "nationalMeasuresEmpty": "Jäsenvaltioiden ilmoitukset voivat olla puutteellisia.",
+    "nationalMeasuresTruncated": "Vain 200 uusinta toimenpidettä näytetään.",
+    "nationalMeasureFallback": "Kansallinen toimenpide",
     "tabAmendments": "Muutokset",
     "tabProcedure": "Menettely",
     "procedureLoading": "Lainsäädäntömenettelyn tietoja ladataan…",

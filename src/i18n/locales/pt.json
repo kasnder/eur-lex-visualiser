@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Cita",
     "tabImplementing": "Atos de execução",
+    "tabNationalMeasures": "Medidas nacionais",
+    "nationalMeasuresEmpty": "As notificações dos Estados-Membros podem estar incompletas.",
+    "nationalMeasuresTruncated": "São apresentadas apenas as 200 medidas mais recentes.",
+    "nationalMeasureFallback": "Medida nacional",
     "tabAmendments": "Alterações",
     "tabProcedure": "Procedimento",
     "procedureLoading": "A carregar informações sobre o procedimento…",

@@ -233,6 +233,7 @@ export function LawOverviewPage({
       <MetadataPanel
         amendments={meta.amendments}
         implementing={meta.implementing}
+        transposition={meta.transposition}
         procedure={meta.procedure}
         procedureLoaded={meta.procedureLoaded}
         procedureError={meta.procedureError}

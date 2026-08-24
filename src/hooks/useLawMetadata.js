@@ -3,6 +3,7 @@ import {
   fetchLawMetadata,
   fetchAmendments,
   fetchImplementingActs,
+  fetchTransposition,
   fetchLawCitedBy,
   fetchLegislativeProcedure,
 } from "../utils/formexApi.js";
@@ -10,11 +11,12 @@ import { earliestEntryIntoForce, todayIso } from "../utils/lawStatus.js";
 
 // Cellar's sentinel for "open-ended" (still in force).
 const IN_FORCE_SENTINEL = "9999-12-31";
+const DIRECTIVE_CELEX = /^3\d{4}L\d{4}(?:\(\d+\))?$/i;
 
 /**
  * Single, error-tolerant fetch of a law's EU metadata, amendment history,
- * implementing/delegated acts, legislative procedure and reverse citations,
- * keyed by CELEX. Shared by
+ * implementing/delegated acts, national transposition measures, legislative
+ * procedure and reverse citations, keyed by CELEX. Shared by
  * the overview header (status pill + dates) and the metadata cards so a law is
  * only fetched once.
  *
@@ -28,6 +30,8 @@ export function useLawMetadata(celex) {
   const [amendmentsLoaded, setAmendmentsLoaded] = useState(false);
   const [implementing, setImplementing] = useState(null);
   const [implementingLoaded, setImplementingLoaded] = useState(false);
+  const [transposition, setTransposition] = useState(null);
+  const [transpositionLoaded, setTranspositionLoaded] = useState(false);
   const [citedBy, setCitedBy] = useState(null);
   const [citedByLoaded, setCitedByLoaded] = useState(false);
   const [procedure, setProcedure] = useState(null);
@@ -41,6 +45,8 @@ export function useLawMetadata(celex) {
     setAmendmentsLoaded(false);
     setImplementing(null);
     setImplementingLoaded(false);
+    setTransposition(null);
+    setTranspositionLoaded(false);
     setCitedBy(null);
     setCitedByLoaded(false);
     setProcedure(null);
@@ -64,6 +70,19 @@ export function useLawMetadata(celex) {
       .then((result) => { if (!cancelled) setImplementing(result.acts || []); })
       .catch(() => { if (!cancelled) setImplementing([]); })
       .finally(() => { if (!cancelled) setImplementingLoaded(true); });
+
+    if (DIRECTIVE_CELEX.test(celex)) {
+      // Keep failures distinct from a successful empty result: null means the
+      // dataset is unavailable and causes the tab to be omitted.
+      fetchTransposition(celex)
+        .then((result) => {
+          if (!cancelled) setTransposition(result?.applicable ? result : null);
+        })
+        .catch(() => { if (!cancelled) setTransposition(null); })
+        .finally(() => { if (!cancelled) setTranspositionLoaded(true); });
+    } else {
+      setTranspositionLoaded(true);
+    }
 
     fetchLegislativeProcedure(celex)
       .then((result) => {
@@ -123,6 +142,8 @@ export function useLawMetadata(celex) {
     amendmentsLoaded,
     implementing,
     implementingLoaded,
+    transposition,
+    transpositionLoaded,
     procedure,
     procedureLoaded,
     procedureError,
