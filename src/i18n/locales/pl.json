@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Cytuje",
     "tabImplementing": "Akty wykonawcze",
+    "tabNationalMeasures": "Krajowe środki",
+    "nationalMeasuresEmpty": "Powiadomienia państw członkowskich mogą być niepełne.",
+    "nationalMeasuresTruncated": "Wyświetlanych jest tylko 200 najnowszych środków.",
+    "nationalMeasureFallback": "Krajowy środek",
     "tabAmendments": "Zmiany",
     "implDelActLabel": "Akt wykonawczy/delegowany",
     "relatedTabsLabel": "Powiązane dokumenty"

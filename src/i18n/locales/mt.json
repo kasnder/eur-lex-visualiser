@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Jiċċita",
     "tabImplementing": "Atti ta' implimentazzjoni",
+    "tabNationalMeasures": "Miżuri nazzjonali",
+    "nationalMeasuresEmpty": "In-notifiki tal-Istati Membri jistgħu ma jkunux kompluti.",
+    "nationalMeasuresTruncated": "Qed jintwerew biss l-aħħar 200 miżura.",
+    "nationalMeasureFallback": "Miżura nazzjonali",
     "tabAmendments": "Emendi",
     "implDelActLabel": "Att ta' implimentazzjoni/delegat",
     "relatedTabsLabel": "Dokumenti relatati"

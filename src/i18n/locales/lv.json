@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Citē",
     "tabImplementing": "Īstenošanas akti",
+    "tabNationalMeasures": "Valsts pasākumi",
+    "nationalMeasuresEmpty": "Dalībvalstu paziņojumi var būt nepilnīgi.",
+    "nationalMeasuresTruncated": "Tiek rādīti tikai 200 jaunākie pasākumi.",
+    "nationalMeasureFallback": "Valsts pasākums",
     "tabAmendments": "Grozījumi",
     "implDelActLabel": "Īstenošanas/deleģētais akts",
     "relatedTabsLabel": "Saistītie dokumenti"

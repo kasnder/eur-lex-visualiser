@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Hivatkozik",
     "tabImplementing": "Végrehajtási jogi aktusok",
+    "tabNationalMeasures": "Nemzeti intézkedések",
+    "nationalMeasuresEmpty": "A tagállami értesítések hiányosak lehetnek.",
+    "nationalMeasuresTruncated": "Csak a legutóbbi 200 intézkedés látható.",
+    "nationalMeasureFallback": "Nemzeti intézkedés",
     "tabAmendments": "Módosítások",
     "implDelActLabel": "Végrehajtási/felhatalmazáson alapuló jogi aktus",
     "relatedTabsLabel": "Kapcsolódó dokumentumok"

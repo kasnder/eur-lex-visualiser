@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Viitab",
     "tabImplementing": "Rakendusaktid",
+    "tabNationalMeasures": "Riiklikud meetmed",
+    "nationalMeasuresEmpty": "Liikmesriikide teated võivad olla mittetäielikud.",
+    "nationalMeasuresTruncated": "Kuvatakse ainult 200 uusimat meedet.",
+    "nationalMeasureFallback": "Riiklik meede",
     "tabAmendments": "Muudatused",
     "implDelActLabel": "Rakendus-/delegeeritud akt",
     "relatedTabsLabel": "Seotud dokumendid"

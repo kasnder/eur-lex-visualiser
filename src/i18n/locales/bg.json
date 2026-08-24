@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Цитира",
     "tabImplementing": "Актове за изпълнение",
+    "tabNationalMeasures": "Национални мерки",
+    "nationalMeasuresEmpty": "Уведомленията на държавите членки може да са непълни.",
+    "nationalMeasuresTruncated": "Показани са само последните 200 мерки.",
+    "nationalMeasureFallback": "Национална мярка",
     "tabAmendments": "Изменения",
     "implDelActLabel": "Акт за изпълнение/делегиран акт",
     "relatedTabsLabel": "Свързани документи"

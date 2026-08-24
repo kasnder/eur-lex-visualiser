@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Citerar",
     "tabImplementing": "Genomförandeakter",
+    "tabNationalMeasures": "Nationella åtgärder",
+    "nationalMeasuresEmpty": "Medlemsstaternas anmälningar kan vara ofullständiga.",
+    "nationalMeasuresTruncated": "Endast de 200 senaste åtgärderna visas.",
+    "nationalMeasureFallback": "Nationell åtgärd",
     "tabAmendments": "Ändringar",
     "implDelActLabel": "Genomförande-/delegerad akt",
     "relatedTabsLabel": "Relaterade dokument"

@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Cituje",
     "tabImplementing": "Vykonávacie akty",
+    "tabNationalMeasures": "Vnútroštátne opatrenia",
+    "nationalMeasuresEmpty": "Oznámenia členských štátov nemusia byť úplné.",
+    "nationalMeasuresTruncated": "Zobrazuje sa iba 200 najnovších opatrení.",
+    "nationalMeasureFallback": "Vnútroštátne opatrenie",
     "tabAmendments": "Zmeny",
     "implDelActLabel": "Vykonávací/delegovaný akt",
     "relatedTabsLabel": "Súvisiace dokumenty"

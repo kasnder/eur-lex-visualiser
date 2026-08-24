@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Cituje",
     "tabImplementing": "Prováděcí akty",
+    "tabNationalMeasures": "Vnitrostátní opatření",
+    "nationalMeasuresEmpty": "Oznámení členských států nemusí být úplná.",
+    "nationalMeasuresTruncated": "Zobrazeno je pouze nejnovějších 200 opatření.",
+    "nationalMeasureFallback": "Vnitrostátní opatření",
     "tabAmendments": "Změny",
     "implDelActLabel": "Prováděcí akt / akt v přenesené pravomoci",
     "relatedTabsLabel": "Související dokumenty"

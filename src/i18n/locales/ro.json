@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Citează",
     "tabImplementing": "Acte de punere în aplicare",
+    "tabNationalMeasures": "Măsuri naționale",
+    "nationalMeasuresEmpty": "Notificările statelor membre pot fi incomplete.",
+    "nationalMeasuresTruncated": "Sunt afișate numai cele mai recente 200 de măsuri.",
+    "nationalMeasureFallback": "Măsură națională",
     "tabAmendments": "Modificări",
     "implDelActLabel": "Act de punere în aplicare/delegat",
     "relatedTabsLabel": "Documente conexe"

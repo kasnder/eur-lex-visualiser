@@ -452,6 +452,10 @@
     "showLess": "Show less",
     "tabCites": "Cites",
     "tabImplementing": "Implementing acts",
+    "tabNationalMeasures": "National measures",
+    "nationalMeasuresEmpty": "Member State notifications may be incomplete.",
+    "nationalMeasuresTruncated": "Only the latest 200 measures are shown.",
+    "nationalMeasureFallback": "National measure",
     "tabAmendments": "Amendments",
     "implDelActLabel": "Implementing / delegated act",
     "relatedTabsLabel": "Related documents"

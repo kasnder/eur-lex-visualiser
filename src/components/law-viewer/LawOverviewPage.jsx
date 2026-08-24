@@ -233,6 +233,7 @@ export function LawOverviewPage({
       <MetadataPanel
         amendments={meta.amendments}
         implementing={meta.implementing}
+        transposition={meta.transposition}
         externalLawOverview={externalLawOverview}
         citedBy={meta.citedBy}
         centreLabel={currentLaw?.label || title}

@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Cituoja",
     "tabImplementing": "Įgyvendinimo aktai",
+    "tabNationalMeasures": "Nacionalinės priemonės",
+    "nationalMeasuresEmpty": "Valstybių narių pranešimai gali būti neišsamūs.",
+    "nationalMeasuresTruncated": "Rodoma tik 200 naujausių priemonių.",
+    "nationalMeasureFallback": "Nacionalinė priemonė",
     "tabAmendments": "Pakeitimai",
     "implDelActLabel": "Įgyvendinimo / deleguotasis aktas",
     "relatedTabsLabel": "Susiję dokumentai"

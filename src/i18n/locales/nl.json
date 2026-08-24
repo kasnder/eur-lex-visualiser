@@ -310,6 +310,10 @@
   "lawOverview": {
     "tabCites": "Citeert",
     "tabImplementing": "Uitvoeringshandelingen",
+    "tabNationalMeasures": "Nationale maatregelen",
+    "nationalMeasuresEmpty": "Kennisgevingen van lidstaten kunnen onvolledig zijn.",
+    "nationalMeasuresTruncated": "Alleen de 200 meest recente maatregelen worden getoond.",
+    "nationalMeasureFallback": "Nationale maatregel",
     "tabAmendments": "Wijzigingen",
     "implDelActLabel": "Uitvoerings-/gedelegeerde handeling",
     "relatedTabsLabel": "Gerelateerde documenten"

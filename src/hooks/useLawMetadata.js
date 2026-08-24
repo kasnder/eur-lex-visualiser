@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
-import { fetchLawMetadata, fetchAmendments, fetchImplementingActs, fetchLawCitedBy } from "../utils/formexApi.js";
+import { fetchLawMetadata, fetchAmendments, fetchImplementingActs, fetchTransposition, fetchLawCitedBy } from "../utils/formexApi.js";
 import { earliestEntryIntoForce, todayIso } from "../utils/lawStatus.js";
 
 // Cellar's sentinel for "open-ended" (still in force).
 const IN_FORCE_SENTINEL = "9999-12-31";
+const DIRECTIVE_CELEX = /^3\d{4}L\d{4}(?:\(\d+\))?$/i;
 
 /**
  * Single, error-tolerant fetch of a law's EU metadata, amendment history,
- * implementing/delegated acts and reverse citations, keyed by CELEX. Shared by
- * the overview header (status pill + dates) and the metadata cards so a law is
- * only fetched once.
+ * implementing/delegated acts, national transposition measures and reverse
+ * citations, keyed by CELEX. Shared by the overview header (status pill +
+ * dates) and the metadata cards so a law is only fetched once.
  *
  * All requests are best-effort: a failure resolves to an empty/absent value
  * rather than throwing, so the caller can simply omit whatever is missing.
@@ -21,6 +22,8 @@ export function useLawMetadata(celex) {
   const [amendmentsLoaded, setAmendmentsLoaded] = useState(false);
   const [implementing, setImplementing] = useState(null);
   const [implementingLoaded, setImplementingLoaded] = useState(false);
+  const [transposition, setTransposition] = useState(null);
+  const [transpositionLoaded, setTranspositionLoaded] = useState(false);
   const [citedBy, setCitedBy] = useState(null);
   const [citedByLoaded, setCitedByLoaded] = useState(false);
 
@@ -31,6 +34,8 @@ export function useLawMetadata(celex) {
     setAmendmentsLoaded(false);
     setImplementing(null);
     setImplementingLoaded(false);
+    setTransposition(null);
+    setTranspositionLoaded(false);
     setCitedBy(null);
     setCitedByLoaded(false);
     if (!celex) return;
@@ -51,6 +56,19 @@ export function useLawMetadata(celex) {
       .then((result) => { if (!cancelled) setImplementing(result.acts || []); })
       .catch(() => { if (!cancelled) setImplementing([]); })
       .finally(() => { if (!cancelled) setImplementingLoaded(true); });
+
+    if (DIRECTIVE_CELEX.test(celex)) {
+      // Keep failures distinct from a successful empty result: null means the
+      // dataset is unavailable and causes the tab to be omitted.
+      fetchTransposition(celex)
+        .then((result) => {
+          if (!cancelled) setTransposition(result?.applicable ? result : null);
+        })
+        .catch(() => { if (!cancelled) setTransposition(null); })
+        .finally(() => { if (!cancelled) setTranspositionLoaded(true); });
+    } else {
+      setTranspositionLoaded(true);
+    }
 
     // Reverse citations stay null (not empty) on failure so the overview can
     // hide the card entirely when the citation graph is unavailable.
@@ -95,6 +113,8 @@ export function useLawMetadata(celex) {
     amendmentsLoaded,
     implementing,
     implementingLoaded,
+    transposition,
+    transpositionLoaded,
     citedBy,
     citedByLoaded,
     status,
