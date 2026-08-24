@@ -315,6 +315,15 @@
     "nationalMeasuresTruncated": "Es werden nur die neuesten 200 Maßnahmen angezeigt.",
     "nationalMeasureFallback": "Nationale Maßnahme",
     "tabAmendments": "Änderungen",
+    "tabProcedure": "Verfahren",
+    "procedureLoading": "Informationen zum Gesetzgebungsverfahren werden geladen…",
+    "procedureEmpty": "Für diesen Rechtsakt sind keine Informationen zum Gesetzgebungsverfahren verfügbar.",
+    "procedureLoadError": "Die Informationen zum Verfahren konnten derzeit nicht geladen werden.",
+    "procedureView": "Verfahren auf EUR-Lex anzeigen",
+    "procedureProposal": "Vorschlag",
+    "procedureEuropeanParliament": "Europäisches Parlament",
+    "procedureCouncil": "Rat",
+    "procedureFinalAct": "Endgültiger Rechtsakt",
     "implDelActLabel": "Durchführungs-/delegierter Rechtsakt",
     "relatedTabsLabel": "Verwandte Dokumente"
   }

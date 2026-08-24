@@ -315,6 +315,15 @@
     "nationalMeasuresTruncated": "Endast de 200 senaste åtgärderna visas.",
     "nationalMeasureFallback": "Nationell åtgärd",
     "tabAmendments": "Ändringar",
+    "tabProcedure": "Förfarande",
+    "procedureLoading": "Läser in information om förfarandet…",
+    "procedureEmpty": "Det finns ingen information om lagstiftningsförfarandet för denna akt.",
+    "procedureLoadError": "Det gick inte att läsa in information om förfarandet just nu.",
+    "procedureView": "Visa förfarandet på EUR-Lex",
+    "procedureProposal": "Förslag",
+    "procedureEuropeanParliament": "Europaparlamentet",
+    "procedureCouncil": "Rådet",
+    "procedureFinalAct": "Slutakt",
     "implDelActLabel": "Genomförande-/delegerad akt",
     "relatedTabsLabel": "Relaterade dokument"
   }

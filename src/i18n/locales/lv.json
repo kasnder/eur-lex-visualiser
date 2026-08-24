@@ -315,6 +315,15 @@
     "nationalMeasuresTruncated": "Tiek rādīti tikai 200 jaunākie pasākumi.",
     "nationalMeasureFallback": "Valsts pasākums",
     "tabAmendments": "Grozījumi",
+    "tabProcedure": "Procedūra",
+    "procedureLoading": "Notiek procedūras informācijas ielāde…",
+    "procedureEmpty": "Par šo aktu nav pieejama likumdošanas procedūras informācija.",
+    "procedureLoadError": "Procedūras informāciju pašlaik neizdevās ielādēt.",
+    "procedureView": "Skatīt procedūru EUR-Lex",
+    "procedureProposal": "Priekšlikums",
+    "procedureEuropeanParliament": "Eiropas Parlaments",
+    "procedureCouncil": "Padome",
+    "procedureFinalAct": "Galīgais akts",
     "implDelActLabel": "Īstenošanas/deleģētais akts",
     "relatedTabsLabel": "Saistītie dokumenti"
   }

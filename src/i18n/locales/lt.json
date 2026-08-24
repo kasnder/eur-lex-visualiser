@@ -315,6 +315,15 @@
     "nationalMeasuresTruncated": "Rodoma tik 200 naujausių priemonių.",
     "nationalMeasureFallback": "Nacionalinė priemonė",
     "tabAmendments": "Pakeitimai",
+    "tabProcedure": "Procedūra",
+    "procedureLoading": "Kraunama procedūros informacija…",
+    "procedureEmpty": "Apie šio akto teisėkūros procedūrą informacijos nėra.",
+    "procedureLoadError": "Procedūros informacijos šiuo metu nepavyko įkelti.",
+    "procedureView": "Peržiūrėti procedūrą EUR-Lex",
+    "procedureProposal": "Pasiūlymas",
+    "procedureEuropeanParliament": "Europos Parlamentas",
+    "procedureCouncil": "Taryba",
+    "procedureFinalAct": "Galutinis aktas",
     "implDelActLabel": "Įgyvendinimo / deleguotasis aktas",
     "relatedTabsLabel": "Susiję dokumentai"
   }

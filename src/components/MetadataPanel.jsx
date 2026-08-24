@@ -127,9 +127,51 @@ function NationalMeasureRow({ measure, currentLang, locale, fallbackTitle }) {
   );
 }
 
+const PROCEDURE_STAGE_KEYS = {
+  proposal: "lawOverview.procedureProposal",
+  ep: "lawOverview.procedureEuropeanParliament",
+  council: "lawOverview.procedureCouncil",
+  final: "lawOverview.procedureFinalAct",
+};
+
+function ProcedureRow({ document, locale, t }) {
+  const title = document.title || document.celex;
+  const stage = PROCEDURE_STAGE_KEYS[document.stage]
+    ? t(PROCEDURE_STAGE_KEYS[document.stage])
+    : document.stage;
+  const dateLabel = formatMetaDate(document.date, locale);
+  const url = document.url || buildEurlexCelexUrl(document.celex, "EN");
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group flex w-full items-center gap-2 py-2 text-xs"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate leading-snug text-gray-700 dark:text-gray-300">{title}</span>
+        <span className="block truncate text-[11px] text-gray-400 dark:text-gray-500">
+          <span className="font-medium">{stage}</span>
+          {document.institution ? ` · ${document.institution}` : ""}
+          {dateLabel ? <span className="ml-2 tabular-nums">{dateLabel}</span> : null}
+        </span>
+      </span>
+      <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+        {document.celex}
+      </span>
+      <ExternalLink
+        size={11}
+        className="shrink-0 text-gray-300 transition group-hover:text-gray-500 dark:text-gray-600 dark:group-hover:text-gray-400"
+      />
+    </a>
+  );
+}
+
 /**
  * Overview metadata: reverse citations, outgoing citations ("Cites"),
- * implementing/delegated acts and amendment history, shown as a single
+ * implementing/delegated acts, amendment history and legislative procedure,
+ * shown as a single
  * full-width tabbed card. Consumes the shared useLawMetadata result (no
  * fetching of its own) plus the crossreference-derived linked-law overview.
  *
@@ -141,6 +183,9 @@ export function MetadataPanel({
   amendments,
   implementing,
   transposition = null,
+  procedure = null,
+  procedureLoaded = false,
+  procedureError = false,
   externalLawOverview = [],
   citedBy = null,
   centreLabel = "",
@@ -187,6 +232,24 @@ export function MetadataPanel({
   const transpositionFooter = transposition?.truncated ? (
     <div className="mt-2 border-t border-gray-100 pt-2 text-[11px] text-gray-400 dark:border-gray-800 dark:text-gray-500">
       {t("lawOverview.nationalMeasuresTruncated")}
+    </div>
+  ) : null;
+
+  const procedureDocuments = Array.isArray(procedure?.documents) ? procedure.documents : [];
+  const procedureRows = procedureDocuments.map((document) => (
+    <ProcedureRow key={document.celex} document={document} locale={locale} t={t} />
+  ));
+  const procedureFooter = procedure?.reference && procedure?.procedureUrl ? (
+    <div className="mt-2 border-t border-gray-100 pt-2 text-[11px] dark:border-gray-800">
+      <a
+        href={procedure.procedureUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-eu-blue hover:text-eu-blue-bright dark:text-eu-blue-bright"
+      >
+        <ExternalLink size={11} />
+        {t("lawOverview.procedureView")}: {procedure.reference}
+      </a>
     </div>
   ) : null;
 
@@ -252,6 +315,11 @@ export function MetadataPanel({
     tabs.push({ id: "nationalMeasures", label: t("lawOverview.tabNationalMeasures"), count: nationalMeasureRows.length });
   }
   tabs.push({ id: "amendments", label: t("lawOverview.tabAmendments"), count: amendmentRows.length });
+  tabs.push({
+    id: "procedure",
+    label: t("lawOverview.tabProcedure"),
+    count: procedureLoaded ? procedureDocuments.length : "…",
+  });
 
   // Default to "Cited by" when the graph is available, otherwise "Cites".
   // Falling back through `tabs.some(...)` keeps a user's manual choice sticky
@@ -270,6 +338,15 @@ export function MetadataPanel({
       footer: transpositionFooter,
     },
     amendments: { rows: amendmentRows, emptyText: t("lawOverview.amendmentsEmpty") },
+    procedure: {
+      rows: procedureError ? [] : procedureRows,
+      emptyText: procedureError
+        ? t("lawOverview.procedureLoadError")
+        : procedureLoaded
+          ? t("lawOverview.procedureEmpty")
+          : t("lawOverview.procedureLoading"),
+      footer: procedureError || !procedureLoaded ? null : procedureFooter,
+    },
   };
   const active = sections[effectiveTab] || sections.cites;
 

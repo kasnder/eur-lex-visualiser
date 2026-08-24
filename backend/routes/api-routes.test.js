@@ -576,6 +576,76 @@ test("GET /api/laws/:celex/case-law uses a short cache ttl", async () => {
   assert.ok(ttlMs >= 5 * 60 * 1000 - 1_000, `Expected short cache ttl, got ${ttlMs}ms`);
 });
 
+test("GET /api/laws/:celex/procedure returns and caches legislative procedure metadata", async () => {
+  const resolutionCache = new Map();
+  let sparqlCalls = 0;
+  const { app } = registerTestRoutes({
+    resolutionCache,
+    runSparqlQuery: async () => {
+      sparqlCalls += 1;
+      return {
+        results: {
+          bindings: [
+            {
+              documentCelex: { value: "52012PC0011" },
+              stage: { value: "proposal" },
+              procedureReference: { value: "2012/0011(COD)" },
+              date: { value: "2012-03-09" },
+              documentTitle: { value: "Commission proposal" },
+            },
+          ],
+        },
+      };
+    },
+  });
+  const handler = app.routes.get("/api/laws/:celex/procedure");
+
+  const first = createResponseRecorder();
+  await handler({ params: { celex: "32016R0679" }, query: {} }, first);
+  const second = createResponseRecorder();
+  await handler({ params: { celex: "32016R0679" }, query: {} }, second);
+
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  assert.deepEqual(second.payload, first.payload);
+  assert.equal(sparqlCalls, 1);
+  assert.ok(resolutionCache.has("procedure:32016R0679"));
+});
+
+test("GET /api/laws/:celex/procedure rejects invalid CELEX before Cellar", async () => {
+  let sparqlCalls = 0;
+  const { app } = registerTestRoutes({
+    validateCelex: () => false,
+    runSparqlQuery: async () => {
+      sparqlCalls += 1;
+      return { results: { bindings: [] } };
+    },
+  });
+  const handler = app.routes.get("/api/laws/:celex/procedure");
+  const res = createResponseRecorder();
+
+  await handler({ params: { celex: "not-a-celex" }, query: {} }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.payload, { error: "Invalid CELEX format" });
+  assert.equal(sparqlCalls, 0);
+});
+
+test("GET /api/laws/:celex/procedure preserves Cellar errors", async () => {
+  const { app } = registerTestRoutes({
+    runSparqlQuery: async () => {
+      throw new Error("Cellar unavailable");
+    },
+  });
+  const handler = app.routes.get("/api/laws/:celex/procedure");
+  const res = createResponseRecorder();
+
+  await handler({ params: { celex: "32016R0679" }, query: {} }, res);
+
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(res.payload, { error: "Failed to fetch legislative procedure" });
+});
+
 test("AI-backed static routes require their own OpenRouter key or the shared fallback on cache miss", async () => {
   await withOpenRouterEnv({ ARTICLE_QA_OPENROUTER_API_KEY: "qa-key" }, async () => {
     const { app } = registerTestRoutes();

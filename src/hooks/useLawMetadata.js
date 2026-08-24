@@ -1,5 +1,12 @@
 import { useState, useEffect } from "react";
-import { fetchLawMetadata, fetchAmendments, fetchImplementingActs, fetchTransposition, fetchLawCitedBy } from "../utils/formexApi.js";
+import {
+  fetchLawMetadata,
+  fetchAmendments,
+  fetchImplementingActs,
+  fetchTransposition,
+  fetchLawCitedBy,
+  fetchLegislativeProcedure,
+} from "../utils/formexApi.js";
 import { earliestEntryIntoForce, todayIso } from "../utils/lawStatus.js";
 
 // Cellar's sentinel for "open-ended" (still in force).
@@ -8,9 +15,10 @@ const DIRECTIVE_CELEX = /^3\d{4}L\d{4}(?:\(\d+\))?$/i;
 
 /**
  * Single, error-tolerant fetch of a law's EU metadata, amendment history,
- * implementing/delegated acts, national transposition measures and reverse
- * citations, keyed by CELEX. Shared by the overview header (status pill +
- * dates) and the metadata cards so a law is only fetched once.
+ * implementing/delegated acts, national transposition measures, legislative
+ * procedure and reverse citations, keyed by CELEX. Shared by
+ * the overview header (status pill + dates) and the metadata cards so a law is
+ * only fetched once.
  *
  * All requests are best-effort: a failure resolves to an empty/absent value
  * rather than throwing, so the caller can simply omit whatever is missing.
@@ -26,6 +34,9 @@ export function useLawMetadata(celex) {
   const [transpositionLoaded, setTranspositionLoaded] = useState(false);
   const [citedBy, setCitedBy] = useState(null);
   const [citedByLoaded, setCitedByLoaded] = useState(false);
+  const [procedure, setProcedure] = useState(null);
+  const [procedureLoaded, setProcedureLoaded] = useState(false);
+  const [procedureError, setProcedureError] = useState(false);
 
   useEffect(() => {
     setMetadata(null);
@@ -38,6 +49,9 @@ export function useLawMetadata(celex) {
     setTranspositionLoaded(false);
     setCitedBy(null);
     setCitedByLoaded(false);
+    setProcedure(null);
+    setProcedureLoaded(false);
+    setProcedureError(false);
     if (!celex) return;
 
     let cancelled = false;
@@ -69,6 +83,21 @@ export function useLawMetadata(celex) {
     } else {
       setTranspositionLoaded(true);
     }
+
+    fetchLegislativeProcedure(celex)
+      .then((result) => {
+        if (!cancelled) {
+          setProcedure(result);
+          setProcedureError(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProcedure(null);
+          setProcedureError(true);
+        }
+      })
+      .finally(() => { if (!cancelled) setProcedureLoaded(true); });
 
     // Reverse citations stay null (not empty) on failure so the overview can
     // hide the card entirely when the citation graph is unavailable.
@@ -115,6 +144,9 @@ export function useLawMetadata(celex) {
     implementingLoaded,
     transposition,
     transpositionLoaded,
+    procedure,
+    procedureLoaded,
+    procedureError,
     citedBy,
     citedByLoaded,
     status,

@@ -4,7 +4,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { fetchCaseLaw, fetchConsolidatedVersions, fetchTransposition, parseCitationsToRefs } = require("./law-queries");
+const {
+  fetchCaseLaw,
+  fetchConsolidatedVersions,
+  fetchTransposition,
+  fetchLegislativeProcedure,
+  parseCitationsToRefs,
+} = require("./law-queries");
 
 test('fetchTransposition queries national implementing measures and maps optional fields', async () => {
   let query = '';
@@ -358,4 +364,110 @@ test('fetchConsolidatedVersions matches a sector-2 international agreement', asy
   assert.deepEqual(payload.versions, [
     { celex: '01994A0103(01)-20160519', date: '2016-05-19' },
   ]);
+});
+
+test('fetchLegislativeProcedure maps the relation-scoped binding set', async () => {
+  let query = '';
+  const payload = await fetchLegislativeProcedure('32016R0679', async (value) => {
+    query = value;
+    return {
+      results: {
+        bindings: [
+          {
+            documentCelex: { value: '32016R0679' },
+            stage: { value: 'final' },
+            date: { value: '2016-05-04' },
+            procedureReference: { value: '2012/0011 (COD)' },
+          },
+          {
+            documentCelex: { value: '52012PC0011' },
+            stage: { value: 'proposal' },
+            institution: { value: 'European Commission' },
+            date: { value: '2012-03-09' },
+            documentTitle: { value: 'Commission proposal' },
+            procedureReference: { value: 'COD 2012/0011' },
+          },
+          {
+            documentCelex: { value: '52014AP0212' },
+            stage: { value: 'ep' },
+            institution: { value: 'European Parliament' },
+            date: { value: '2014-04-15' },
+            documentTitle: { value: 'Parliament position' },
+          },
+          {
+            documentCelex: { value: '52016AG0006(01)' },
+            stage: { value: 'council' },
+            institution: { value: 'Council of the European Union' },
+            date: { value: '2016-04-08' },
+            documentTitle: { value: 'Council position' },
+          },
+          // Multiple agents/expressions can create duplicate rows in Cellar.
+          {
+            documentCelex: { value: '52016AG0006(01)' },
+            stage: { value: 'council' },
+            institution: { value: 'Council of the European Union' },
+            date: { value: '2016-04-08' },
+            documentTitle: { value: 'Council position' },
+          },
+        ],
+      },
+    };
+  });
+
+  assert.match(query, /resource_legal_adopts_resource_legal/);
+  assert.match(query, /\?documentWork cdm:resource_legal_contains_ep_opinion_on_resource_legal \?proposalWork/);
+  assert.match(query, /\?documentWork cdm:resource_legal_influences_resource_legal \?proposalWork/);
+  assert.match(query, /authority\/corporate-body\/CONSIL/);
+  assert.match(query, /\?expression cdm:expression_belongs_to_work \?documentWork/);
+  assert.match(query, /authority\/language\/ENG/);
+  assert.doesNotMatch(query, /work_cites_work/);
+  assert.equal(payload.reference, '2012/0011(COD)');
+  assert.equal(payload.procedureUrl, 'https://eur-lex.europa.eu/procedure/EN/2012_11');
+  assert.deepEqual(payload.documents.map(({ celex, stage, institution, date, title }) => ({
+    celex, stage, institution, date, title,
+  })), [
+    {
+      celex: '52012PC0011',
+      stage: 'proposal',
+      institution: 'European Commission',
+      date: '2012-03-09',
+      title: 'Commission proposal',
+    },
+    {
+      celex: '52014AP0212',
+      stage: 'ep',
+      institution: 'European Parliament',
+      date: '2014-04-15',
+      title: 'Parliament position',
+    },
+    {
+      celex: '52016AG0006(01)',
+      stage: 'council',
+      institution: 'Council of the European Union',
+      date: '2016-04-08',
+      title: 'Council position',
+    },
+    {
+      celex: '32016R0679',
+      stage: 'final',
+      institution: 'European Parliament and Council',
+      date: '2016-05-04',
+      title: '32016R0679',
+    },
+  ]);
+  assert.equal(new Set(payload.documents.map((document) => document.celex)).size, 4);
+  assert.ok(payload.documents.every((document) => document.url.includes(`CELEX:${document.celex}`)));
+});
+
+test('fetchLegislativeProcedure returns confirmed absence without procedure documents', async () => {
+  const payload = await fetchLegislativeProcedure('32000L0031', async () => ({
+    results: { bindings: [] },
+  }));
+
+  assert.deepEqual(payload, {
+    celex: '32000L0031',
+    reference: null,
+    procedureUrl: null,
+    documents: [],
+  });
 });

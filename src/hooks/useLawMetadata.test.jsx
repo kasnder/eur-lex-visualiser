@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   fetchAmendments: vi.fn(),
   fetchImplementingActs: vi.fn(),
   fetchTransposition: vi.fn(),
+  fetchLegislativeProcedure: vi.fn(),
   fetchLawCitedBy: vi.fn(),
 }));
 
@@ -32,6 +33,12 @@ beforeEach(() => {
   api.fetchLawMetadata.mockResolvedValue(null);
   api.fetchAmendments.mockResolvedValue({ amendments: [] });
   api.fetchImplementingActs.mockResolvedValue({ acts: [] });
+  api.fetchLegislativeProcedure.mockResolvedValue({
+    celex: null,
+    reference: null,
+    procedureUrl: null,
+    documents: [],
+  });
   api.fetchLawCitedBy.mockResolvedValue(null);
 });
 

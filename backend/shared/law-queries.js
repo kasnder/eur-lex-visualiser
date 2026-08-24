@@ -291,6 +291,204 @@ LIMIT ${TRANSPOSITION_LIMIT + 1}`;
   };
 }
 
+const PROCEDURE_STAGE_ORDER = {
+  proposal: 0,
+  ep: 1,
+  council: 2,
+  final: 3,
+};
+
+const PROCEDURE_STAGE_INSTITUTIONS = {
+  proposal: 'European Commission',
+  ep: 'European Parliament',
+  council: 'Council of the European Union',
+  final: 'European Parliament and Council',
+};
+
+const PROCEDURE_AGENT_INSTITUTIONS = {
+  COM: 'European Commission',
+  EP: 'European Parliament',
+  CONSIL: 'Council of the European Union',
+};
+
+function bindingValue(binding, names) {
+  for (const name of names) {
+    const value = binding?.[name]?.value;
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return null;
+}
+
+function normalizeProcedureCelex(value) {
+  if (!value) return null;
+  const raw = decodeURIComponent(String(value).trim());
+  const uriMatch = raw.match(/\/celex\/([^/?#]+)$/i);
+  const prefixed = uriMatch ? uriMatch[1] : raw.replace(/^CELEX:/i, '');
+  return prefixed ? prefixed.toUpperCase() : null;
+}
+
+function extractCodProcedure(values) {
+  for (const value of values) {
+    if (!value) continue;
+    const text = String(value);
+    const match = text.match(/\bCOD\s*[/: -]?\s*(\d{4})\s*\/\s*(\d{1,4})\b/i)
+      || text.match(/\b(\d{4})\s*\/\s*(\d{1,4})\s*\(\s*COD\s*\)/i);
+    if (!match) continue;
+    const year = match[1];
+    const number = String(match[2]).padStart(4, '0');
+    return {
+      reference: `${year}/${number}(COD)`,
+      procedureUrl: `https://eur-lex.europa.eu/procedure/EN/${year}_${Number(number)}`,
+    };
+  }
+  return { reference: null, procedureUrl: null };
+}
+
+function normalizeProcedureInstitution(value, stage) {
+  if (PROCEDURE_STAGE_INSTITUTIONS[stage]) return PROCEDURE_STAGE_INSTITUTIONS[stage];
+  if (!value) return null;
+  const raw = decodeURIComponent(String(value).trim());
+  if (!/^https?:\/\//i.test(raw)) return raw;
+  const lastSegment = raw.split('/').filter(Boolean).pop();
+  return PROCEDURE_AGENT_INSTITUTIONS[lastSegment]
+    || PROCEDURE_STAGE_INSTITUTIONS[stage]
+    || (lastSegment ? lastSegment.replace(/[_-]+/g, ' ') : raw);
+}
+
+function chooseProcedureValue(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  return String(left).localeCompare(String(right)) <= 0 ? left : right;
+}
+
+/**
+ * Fetch the legislative procedure documents attached to an adopted act.
+ *
+ * The relation set is deliberately narrow: generic citation relations are
+ * not procedure evidence and would pull in unrelated documents.
+ */
+async function fetchLegislativeProcedure(celex, runSparqlQuery) {
+  const celexUri = `http://publications.europa.eu/resource/celex/${celex}`;
+  const query = `
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+SELECT DISTINCT
+  ?documentWork ?documentCelex ?documentSameAs ?stage ?documentDate
+  ?documentTitle ?agent ?procedureReference
+WHERE {
+  ?finalWork owl:sameAs <${celexUri}> .
+  ?finalWork cdm:resource_legal_adopts_resource_legal ?proposalWork .
+  OPTIONAL {
+    ?proposalWork cdm:resource_legal_information_miscellaneous ?procedureReference
+  }
+  {
+    ?finalWork cdm:resource_legal_adopts_resource_legal ?documentWork .
+    BIND("proposal" AS ?stage)
+  }
+  UNION {
+    ?documentWork owl:sameAs <${celexUri}> .
+    BIND("final" AS ?stage)
+  }
+  UNION {
+    ?documentWork cdm:resource_legal_contains_ep_opinion_on_resource_legal ?proposalWork .
+    BIND("ep" AS ?stage)
+  }
+  UNION {
+    ?documentWork cdm:resource_legal_influences_resource_legal ?proposalWork .
+    ?documentWork cdm:work_created_by_agent <http://publications.europa.eu/resource/authority/corporate-body/CONSIL> .
+    BIND("council" AS ?stage)
+  }
+  OPTIONAL { ?documentWork cdm:resource_legal_id_celex ?documentCelex }
+  OPTIONAL {
+    ?documentWork owl:sameAs ?documentSameAs
+    FILTER(STRSTARTS(STR(?documentSameAs), "http://publications.europa.eu/resource/celex/"))
+  }
+  OPTIONAL { ?documentWork cdm:work_date_document ?documentDate }
+  OPTIONAL {
+    ?expression cdm:expression_belongs_to_work ?documentWork ;
+      cdm:expression_uses_language <http://publications.europa.eu/resource/authority/language/ENG> ;
+      cdm:expression_title ?documentTitle .
+  }
+  OPTIONAL { ?documentWork cdm:work_created_by_agent ?agent }
+}
+LIMIT 1000`;
+
+  const data = await runSparqlQuery(query);
+  const bindings = data.results?.bindings || [];
+  const procedure = extractCodProcedure(bindings.map((binding) => bindingValue(binding, [
+    'procedureReference',
+    'procedureRef',
+    'procedure',
+    'reference',
+  ])));
+
+  if (!procedure.reference) {
+    return { celex, reference: null, procedureUrl: null, documents: [] };
+  }
+
+  const documentsByCelex = new Map();
+  for (const binding of bindings) {
+    const stage = bindingValue(binding, ['stage', 'kind']) || 'proposal';
+    const documentCelex = normalizeProcedureCelex(bindingValue(binding, [
+      'documentCelex',
+      'docCelex',
+      'celex',
+      'documentSameAs',
+      'documentWork',
+    ])) || (stage === 'final' ? normalizeProcedureCelex(celex) : null);
+    if (!documentCelex) continue;
+
+    const candidate = {
+      celex: documentCelex,
+      stage,
+      institution: normalizeProcedureInstitution(bindingValue(binding, [
+        'institution',
+        'institutionLabel',
+        'agent',
+      ]), stage),
+      date: bindingValue(binding, ['documentDate', 'date']),
+      title: bindingValue(binding, ['documentTitle', 'title']) || documentCelex,
+      url: `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:${documentCelex}`,
+    };
+
+    const existing = documentsByCelex.get(documentCelex);
+    if (!existing) {
+      documentsByCelex.set(documentCelex, candidate);
+      continue;
+    }
+
+    const existingRank = PROCEDURE_STAGE_ORDER[existing.stage] ?? Number.MAX_SAFE_INTEGER;
+    const candidateRank = PROCEDURE_STAGE_ORDER[candidate.stage] ?? Number.MAX_SAFE_INTEGER;
+    const preferredStage = candidateRank < existingRank
+      || (candidateRank === existingRank && candidate.stage.localeCompare(existing.stage) < 0)
+      ? candidate.stage
+      : existing.stage;
+    documentsByCelex.set(documentCelex, {
+      ...existing,
+      stage: preferredStage,
+      institution: chooseProcedureValue(existing.institution, candidate.institution),
+      date: chooseProcedureValue(existing.date, candidate.date),
+      title: chooseProcedureValue(existing.title === documentCelex ? null : existing.title, candidate.title) || documentCelex,
+    });
+  }
+
+  const documents = [...documentsByCelex.values()].sort((left, right) => {
+    if (left.date && right.date) {
+      const dateOrder = left.date.localeCompare(right.date);
+      if (dateOrder !== 0) return dateOrder;
+    } else if (left.date) {
+      return -1;
+    } else if (right.date) {
+      return 1;
+    }
+    return left.celex.localeCompare(right.celex);
+  });
+
+  return { celex, ...procedure, documents };
+}
+
 async function fetchCaseLaw(celex, runSparqlQuery, {
   cacheDir,
   dataStore,
@@ -799,6 +997,7 @@ module.exports = {
   fetchConsolidatedVersions,
   fetchImplementing,
   fetchTransposition,
+  fetchLegislativeProcedure,
   fetchCaseLaw,
   parseCitationsToRefs,
   parseCaseDetailsFromHtml,

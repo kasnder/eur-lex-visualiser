@@ -234,6 +234,9 @@ export function LawOverviewPage({
         amendments={meta.amendments}
         implementing={meta.implementing}
         transposition={meta.transposition}
+        procedure={meta.procedure}
+        procedureLoaded={meta.procedureLoaded}
+        procedureError={meta.procedureError}
         externalLawOverview={externalLawOverview}
         citedBy={meta.citedBy}
         centreLabel={currentLaw?.label || title}
