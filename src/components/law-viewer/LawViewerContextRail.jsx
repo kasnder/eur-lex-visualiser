@@ -139,7 +139,7 @@ export function LawViewerContextRail({
 
   if (definitionComparison?.term) {
     return (
-      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="max-h-[calc(100vh-6rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
         <DefinitionComparisonPanel
           {...definitionComparison}
           currentCelex={celex}

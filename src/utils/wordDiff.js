@@ -1,27 +1,29 @@
-// Word-level diff for comparing definition wordings side by side. Deliberately
-// dependency-free: definitions are 30-80 words, so an O(n*m) LCS over words is
-// more than fast enough and avoids pulling a diff library into the bundle.
+// Word-level diff for comparing definition wordings. Deliberately
+// dependency-free: definitions are normally short, so an O(n*m) LCS over
+// words is fast enough and avoids pulling a diff library into the bundle.
 
 const MAX_TOKENS = 400;
-const WORD_SPLIT = /(\s+)/;
-
-// Compare tokens case-insensitively, ignoring surrounding punctuation, so
-// "economy;" in one act matches "economy." in another.
-function normalizeWord(word) {
-  return String(word || "")
-    .toLocaleLowerCase()
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+// Keep comparison normalization aligned with the definition-index builder:
+// canonicalise equivalent Unicode quotes/dashes but preserve case and
+// punctuation because the backend treats those as wording differences.
+function normalizeToken(token) {
+  return String(token || "")
+    .trim()
+    .normalize("NFKC")
+    .replace(/[‘’‛`]/g, "'")
+    .replace(/[‐‑‒–—]/g, "-");
 }
 
 function tokenize(text) {
-  return String(text || "").split(WORD_SPLIT).filter(Boolean);
+  // Attach trailing whitespace to its word. This preserves the target's
+  // spacing while allowing removed words to render in their original place.
+  return String(text || "").match(/\S+\s*/gu) || [];
 }
 
 // Longest common subsequence over the normalized words of both texts.
-// Returns a Set of target token indexes that are part of the LCS.
-function lcsMatchedTargetIndexes(baseTokens, targetTokens) {
-  const base = baseTokens.map(normalizeWord);
-  const target = targetTokens.map(normalizeWord);
+function lcsTable(baseTokens, targetTokens) {
+  const base = baseTokens.map(normalizeToken);
+  const target = targetTokens.map(normalizeToken);
   const rows = base.length;
   const cols = target.length;
   const table = Array.from({ length: rows + 1 }, () => new Uint16Array(cols + 1));
@@ -34,58 +36,58 @@ function lcsMatchedTargetIndexes(baseTokens, targetTokens) {
     }
   }
 
-  const matched = new Set();
-  let row = 0;
-  let col = 0;
-  while (row < rows && col < cols) {
-    if (base[row] === target[col]) {
-      matched.add(col);
-      row += 1;
-      col += 1;
-    } else if (table[row + 1][col] >= table[row][col + 1]) {
-      row += 1;
-    } else {
-      col += 1;
-    }
-  }
-  return matched;
+  return { base, target, table };
 }
 
-// Diff `targetText` against `baseText`: returns the target split into segments
-// of adjacent tokens sharing a `changed` flag. Whitespace-only segments are
-// never marked changed, so highlights never wrap spaces.
-export function diffWords(baseText, targetText) {
-  const baseTokens = tokenize(baseText).filter((token) => /\S/.test(token));
-  const targetTokens = tokenize(targetText);
-  const wordCount = targetTokens.filter((token) => /\S/.test(token)).length;
+function appendSegment(segments, type, text) {
+  if (!text) return;
+  const last = segments[segments.length - 1];
+  if (last?.type === type) last.text += text;
+  else segments.push({ text, type, changed: type !== "unchanged" });
+}
 
-  const matched = baseTokens.length && wordCount && wordCount <= MAX_TOKENS && baseTokens.length <= MAX_TOKENS
-    ? lcsMatchedTargetIndexes(baseTokens, targetTokens)
-    : new Set();
+// Diff `targetText` against `baseText`. Returned segments contain unchanged
+// target text, additions from the target, and removals from the reference.
+export function diffWords(baseText, targetText) {
+  const baseValue = String(baseText || "");
+  const targetValue = String(targetText || "");
+  if (baseValue === targetValue) {
+    return targetValue ? [{ text: targetValue, type: "unchanged", changed: false }] : [];
+  }
+
+  const baseTokens = tokenize(baseValue);
+  const targetTokens = tokenize(targetText);
 
   const segments = [];
-  for (let index = 0; index < targetTokens.length; index++) {
-    const token = targetTokens[index];
-    const changed = /\S/.test(token) && !matched.has(index);
-    const last = segments[segments.length - 1];
-    if (last && last.changed === changed) last.text += token;
-    else segments.push({ text: token, changed });
+  if (baseTokens.length > MAX_TOKENS || targetTokens.length > MAX_TOKENS) {
+    appendSegment(segments, "removed", baseValue);
+    appendSegment(segments, "added", targetValue);
+    return segments;
   }
 
-  // A single space between two changed words belongs inside the highlight
-  // ("real economy" as one mark): mark such bridges changed, then merge.
-  for (let index = 1; index < segments.length - 1; index++) {
-    const segment = segments[index];
-    if (!segment.changed && !/\S/.test(segment.text) && segments[index - 1].changed && segments[index + 1].changed) {
-      segment.changed = true;
+  const { base, target, table } = lcsTable(baseTokens, targetTokens);
+  let baseIndex = 0;
+  let targetIndex = 0;
+  while (baseIndex < baseTokens.length && targetIndex < targetTokens.length) {
+    if (base[baseIndex] === target[targetIndex]) {
+      appendSegment(segments, "unchanged", targetTokens[targetIndex]);
+      baseIndex += 1;
+      targetIndex += 1;
+    } else if (table[baseIndex + 1][targetIndex] >= table[baseIndex][targetIndex + 1]) {
+      appendSegment(segments, "removed", baseTokens[baseIndex]);
+      baseIndex += 1;
+    } else {
+      appendSegment(segments, "added", targetTokens[targetIndex]);
+      targetIndex += 1;
     }
   }
-
-  const merged = [];
-  for (const segment of segments) {
-    const last = merged[merged.length - 1];
-    if (last && last.changed === segment.changed) last.text += segment.text;
-    else merged.push({ ...segment });
+  while (baseIndex < baseTokens.length) {
+    appendSegment(segments, "removed", baseTokens[baseIndex]);
+    baseIndex += 1;
   }
-  return merged;
+  while (targetIndex < targetTokens.length) {
+    appendSegment(segments, "added", targetTokens[targetIndex]);
+    targetIndex += 1;
+  }
+  return segments;
 }
