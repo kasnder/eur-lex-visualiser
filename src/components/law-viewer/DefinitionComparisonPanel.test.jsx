@@ -14,9 +14,13 @@ const messages = {
   "definitionComparison.differentWording": "Different wording",
   "definitionComparison.referenceWording": "Reference wording",
   "definitionComparison.wordingChip": "Wording {letter}",
+  "definitionComparison.compareAgainst": "Use Wording {letter} as reference",
+  "definitionComparison.lawCount": "{count} {lawWord}",
   "definitionComparison.importsChip": "Imports · {count}",
-  "definitionComparison.sameWordingAlso": "Identical wording · also in {count} other {lawWord}",
-  "definitionComparison.hideOtherLaws": "Hide other laws",
+  "definitionComparison.sameWordingAlso": "Same wording · {count} other {sourceWord}",
+  "definitionComparison.hideOtherSources": "Hide other sources",
+  "definitionComparison.source": "source",
+  "definitionComparison.sources": "sources",
   "definitionComparison.selectedSource": "Selected source",
   "definitionComparison.definitionsInActs": "Definitions in these acts",
   "definitionComparison.importedByReference": "Imported by reference",
@@ -47,7 +51,7 @@ function cardTitles() {
 }
 
 function findToggle() {
-  return [...container.querySelectorAll("button")].find((button) => button.textContent.includes("Identical wording"));
+  return [...container.querySelectorAll("button")].find((button) => button.textContent.includes("Same wording ·"));
 }
 
 function openSourceButtons() {
@@ -94,9 +98,10 @@ describe("DefinitionComparisonPanel", () => {
     expect(container.textContent).toContain("2 laws · 1 wording");
     expect(cardTitles()).toEqual(["NIS 2 Directive"]);
     expect(container.textContent).toContain("Current");
-    expect(findToggle().textContent).toContain("Identical wording · also in 1 other law");
+    expect(findToggle().textContent).toContain("Same wording · 1 other source");
     // A single wording with no imports needs no chips.
-    expect(container.textContent).not.toContain("Wording A");
+    expect(container.querySelector('button[aria-label="Use Wording A as reference"]')).toBeNull();
+    expect(container.textContent).toContain("Wording A");
 
     act(() => findToggle().click());
     expect(cardTitles()).toEqual(["NIS 2 Directive", "CER Directive"]);
@@ -105,6 +110,33 @@ describe("DefinitionComparisonPanel", () => {
     const sourceButtons = openSourceButtons();
     act(() => sourceButtons[sourceButtons.length - 1].click());
     expect(onOpenSource).toHaveBeenCalledWith("32022L2557", "3", null);
+  });
+
+  it("counts distinct laws in chips while describing duplicate articles as sources", () => {
+    act(() => {
+      root.render(
+        <DefinitionComparisonPanel
+          term="manufacturer"
+          currentCelex="31993L0042"
+          comparison={{
+            term: "manufacturer",
+            substantiveLawCount: 2,
+            wordingCount: 2,
+            occurrences: [
+              { occurrenceId: "same-1", celex: "31993L0042", sourceArticle: "1", definition: "the natural or legal person responsible for a product", definitionHash: "same", classification: "substantive", title: "Medical Devices Directive" },
+              { occurrenceId: "same-2", celex: "31993L0042", sourceArticle: "2", definition: "the natural or legal person responsible for a product", definitionHash: "same", classification: "substantive", title: "Medical Devices Directive" },
+              { occurrenceId: "other", celex: "32020R0001", sourceArticle: "3", definition: "the producer of a product", definitionHash: "other", classification: "substantive", title: "Other Regulation" },
+            ],
+          }}
+          onClose={() => {}}
+          t={t}
+        />
+      );
+    });
+
+    const chips = [...container.querySelectorAll('button[aria-label^="Use Wording"]')];
+    expect(chips.map((chip) => chip.textContent.replace(/\s+/g, ""))).toEqual(["WordingA·1law", "WordingB·1law"]);
+    expect(findToggle().textContent).toContain("Same wording · 1 other source");
   });
 
   it("separates imported definitions and identifies the selected source", () => {
@@ -194,8 +226,9 @@ describe("DefinitionComparisonPanel", () => {
       );
     });
 
-    const chips = [...container.querySelectorAll("button")].filter((button) => button.textContent.includes("Wording "));
-    expect(chips.map((chip) => chip.textContent.replace(/\s+/g, ""))).toEqual(["WordingA·1", "WordingB·1"]);
+    const chips = [...container.querySelectorAll('button[aria-label^="Use Wording"]')];
+    expect(chips.map((chip) => chip.textContent.replace(/\s+/g, ""))).toEqual(["WordingA·1law", "WordingB·1law"]);
+    expect(chips.map((chip) => chip.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
 
     const baselineCard = container.querySelector('[data-definition-source="32016R0679:4:2"]');
     expect(baselineCard.textContent).toContain("Selected source");
@@ -203,12 +236,18 @@ describe("DefinitionComparisonPanel", () => {
 
     const otherCard = container.querySelector('[data-definition-source="32022R2065:3"]');
     expect(otherCard.textContent).toContain("Different wording");
-    const marks = [...otherCard.querySelectorAll("mark")].map((mark) => mark.textContent);
+    const marks = [...otherCard.querySelectorAll("mark")].map((mark) => mark.textContent.trim());
     expect(marks.join(" ")).toBe("a");
     expect(baselineCard.querySelectorAll("mark")).toHaveLength(0);
+
+    act(() => chips[1].click());
+    expect(chips.map((chip) => chip.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
+    expect([...baselineCard.querySelectorAll("del")].map((node) => node.textContent.trim())).toEqual(["a"]);
+    expect(otherCard.querySelectorAll("mark, del")).toHaveLength(0);
+    expect(container.querySelector('[data-wording-group="dsa"]').textContent).toContain("Reference wording");
   });
 
-  it("diffes every non-baseline wording against the selected source", () => {
+  it("diffs every non-baseline wording against the selected source", () => {
     act(() => {
       root.render(
         <DefinitionComparisonPanel
@@ -232,7 +271,7 @@ describe("DefinitionComparisonPanel", () => {
     });
 
     const twoCard = container.querySelector('[data-definition-source="3200002:2"]');
-    expect([...twoCard.querySelectorAll("mark")].map((mark) => mark.textContent).join(" ")).toBe("supplies");
+    expect([...twoCard.querySelectorAll("mark")].map((mark) => mark.textContent.trim()).join(" ")).toBe("supplies");
     // Identical wording in a separate hash group still renders plain: the diff
     // finds no changed words.
     const threeCard = container.querySelector('[data-definition-source="3200003:2"]');

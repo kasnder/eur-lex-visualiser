@@ -30,6 +30,10 @@ function isSubstantive(occurrence) {
   return classification === "substantive" || classification === "hybrid";
 }
 
+function uniqueLawCount(occurrences) {
+  return new Set(occurrences.map((entry) => String(entry.celex || "").toUpperCase()).filter(Boolean)).size;
+}
+
 function groupSubstantiveOccurrences(comparison, currentCelex, selectedSource) {
   const byHash = new Map();
   for (const occurrence of getOccurrences(comparison).filter(isSubstantive)) {
@@ -49,6 +53,7 @@ function groupSubstantiveOccurrences(comparison, currentCelex, selectedSource) {
     .map(([hash, occurrences]) => ({
       hash,
       occurrences: [...occurrences].sort((left, right) => priority(right) - priority(left)),
+      lawCount: uniqueLawCount(occurrences),
     }))
     .sort((left, right) => Math.max(...right.occurrences.map(priority)) - Math.max(...left.occurrences.map(priority)));
 }
@@ -87,18 +92,29 @@ function findBaseline(groups, currentCelex, selectedSource) {
 function DiffText({ baseText, targetText }) {
   return (
     <>
-      {diffWords(baseText, targetText).map((segment, index) => (
-        segment.changed ? (
-          <mark
-            key={index}
-            className="rounded-sm bg-amber-100 px-0.5 text-inherit dark:bg-amber-800/60"
-          >
-            {segment.text}
-          </mark>
-        ) : (
-          <span key={index}>{segment.text}</span>
-        )
-      ))}
+      {diffWords(baseText, targetText).map((segment, index) => {
+        if (segment.type === "removed") {
+          return (
+            <del
+              key={index}
+              className="rounded-sm bg-red-100 px-0.5 text-red-800 decoration-red-500 dark:bg-red-900/40 dark:text-red-200 dark:decoration-red-400"
+            >
+              {segment.text}
+            </del>
+          );
+        }
+        if (segment.type === "added") {
+          return (
+            <mark
+              key={index}
+              className="rounded-sm bg-amber-100 px-0.5 text-inherit dark:bg-amber-800/60"
+            >
+              {segment.text}
+            </mark>
+          );
+        }
+        return <span key={index}>{segment.text}</span>;
+      })}
     </>
   );
 }
@@ -172,12 +188,12 @@ function DefinitionOccurrence({
 // the remaining same-wording acts stay one click away.
 function WordingGroup({
   group,
+  letter,
   isBaseline,
   baselineDefinition,
   currentCelex,
   selectedSource,
   onOpenSource,
-  registerGroupRef,
   t,
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -185,9 +201,17 @@ function WordingGroup({
 
   return (
     <div
-      ref={(el) => registerGroupRef(group.hash, el)}
       data-wording-group={group.hash}
     >
+      <div className="flex items-center justify-between gap-2 px-1 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+        <span>{t("definitionComparison.wordingChip", { letter })}</span>
+        <span className="font-medium normal-case tracking-normal text-gray-400 dark:text-gray-500">
+          {isBaseline ? t("definitionComparison.referenceWording") : t("definitionComparison.lawCount", {
+            count: group.lawCount,
+            lawWord: group.lawCount === 1 ? t("search.law") : t("search.laws"),
+          })}
+        </span>
+      </div>
       <DefinitionOccurrence
         occurrence={representative}
         currentCelex={currentCelex}
@@ -208,10 +232,12 @@ function WordingGroup({
             className="ml-3.5 inline-flex items-center gap-1 py-1 text-[11px] font-medium text-gray-500 transition hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
           >
             {expanded
-              ? t("definitionComparison.hideOtherLaws")
+              ? t("definitionComparison.hideOtherSources")
               : t("definitionComparison.sameWordingAlso", {
                 count: others.length,
-                lawWord: others.length === 1 ? t("search.law") : t("search.laws"),
+                sourceWord: others.length === 1
+                  ? t("definitionComparison.source")
+                  : t("definitionComparison.sources"),
               })}
             <ChevronDown
               size={12}
@@ -252,6 +278,8 @@ export function DefinitionComparisonPanel({
   compact = false,
   t,
 }) {
+  const [baselineSelection, setBaselineSelection] = useState({ comparisonKey: "", hash: "" });
+  const importsRef = useRef(null);
   const allOccurrences = getOccurrences(comparison);
   const groups = groupSubstantiveOccurrences(comparison, currentCelex, selectedSource);
   const imports = allOccurrences.filter(isImported);
@@ -263,15 +291,14 @@ export function DefinitionComparisonPanel({
   const wordingCount = comparison?.wordingCount ?? groups.length;
   const importCount = comparison?.importCount ?? imports.length;
 
-  const baseline = findBaseline(groups, currentCelex, selectedSource);
-  const groupRefs = useRef(new Map());
-  const registerGroupRef = (key, el) => {
-    if (el) groupRefs.current.set(key, el);
-    else groupRefs.current.delete(key);
-  };
-  const scrollToGroup = (key) => {
-    groupRefs.current.get(key)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
+  const defaultBaseline = findBaseline(groups, currentCelex, selectedSource);
+  const comparisonKey = comparison?.normalizedTerm || comparison?.term || term;
+  const selectedBaselineGroup = baselineSelection.comparisonKey === comparisonKey
+    ? groups.find((group) => group.hash === baselineSelection.hash)
+    : null;
+  const baseline = selectedBaselineGroup
+    ? { hash: selectedBaselineGroup.hash, definition: selectedBaselineGroup.occurrences[0]?.definition || "" }
+    : defaultBaseline;
 
   return (
     <div>
@@ -316,12 +343,14 @@ export function DefinitionComparisonPanel({
       ) : (
         <div className={compact ? "max-h-[55vh] overflow-y-auto pt-1" : "pt-1"}>
           {!loading && !error && (groups.length > 1 || imports.length > 0) ? (
-            <div className="flex flex-wrap gap-1.5 px-1 pb-1 pt-2.5">
+            <div className="sticky top-0 z-10 flex flex-wrap gap-1.5 border-b border-gray-100 bg-white px-1 pb-2 pt-2.5 dark:border-gray-800 dark:bg-gray-900">
               {groups.map((group, index) => (
                 <button
                   key={group.hash}
                   type="button"
-                  onClick={() => scrollToGroup(group.hash)}
+                  aria-pressed={group.hash === baseline.hash}
+                  aria-label={t("definitionComparison.compareAgainst", { letter: String.fromCharCode(65 + index) })}
+                  onClick={() => setBaselineSelection({ comparisonKey, hash: group.hash })}
                   className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition ${
                     group.hash === baseline.hash
                       ? "border-eu-gold bg-eu-gold-soft/40 text-eu-gold-deep dark:border-eu-gold-bright dark:bg-eu-gold-soft-dark/30 dark:text-eu-gold-bright"
@@ -329,13 +358,18 @@ export function DefinitionComparisonPanel({
                   }`}
                 >
                   {t("definitionComparison.wordingChip", { letter: String.fromCharCode(65 + index) })}
-                  <span className="text-gray-400 dark:text-gray-500">· {group.occurrences.length}</span>
+                  <span className="text-gray-400 dark:text-gray-500">
+                    · {t("definitionComparison.lawCount", {
+                      count: group.lawCount,
+                      lawWord: group.lawCount === 1 ? t("search.law") : t("search.laws"),
+                    })}
+                  </span>
                 </button>
               ))}
               {imports.length > 0 ? (
                 <button
                   type="button"
-                  onClick={() => scrollToGroup("imports")}
+                  onClick={() => importsRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })}
                   className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10.5px] font-medium text-violet-700 transition hover:border-violet-300 dark:border-violet-800 dark:bg-violet-900/40 dark:text-violet-300"
                 >
                   {t("definitionComparison.importsChip", { count: imports.length })}
@@ -348,16 +382,16 @@ export function DefinitionComparisonPanel({
               <h4 id="definition-comparison-substantive" className="px-1 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                 {t("definitionComparison.definitionsInActs")}
               </h4>
-              {groups.map((group) => (
+              {groups.map((group, index) => (
                 <WordingGroup
                   key={group.hash}
                   group={group}
+                  letter={String.fromCharCode(65 + index)}
                   isBaseline={group.hash === baseline.hash}
                   baselineDefinition={baseline.definition}
                   currentCelex={currentCelex}
                   selectedSource={selectedSource}
                   onOpenSource={onOpenSource}
-                  registerGroupRef={registerGroupRef}
                   t={t}
                 />
               ))}
@@ -366,7 +400,7 @@ export function DefinitionComparisonPanel({
           {imports.length > 0 ? (
             <section
               aria-labelledby="definition-comparison-imports"
-              ref={(el) => registerGroupRef("imports", el)}
+              ref={importsRef}
               data-wording-group="imports"
             >
               <h4 id="definition-comparison-imports" className="border-t border-gray-100 px-1 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:border-gray-800 dark:text-gray-500">
