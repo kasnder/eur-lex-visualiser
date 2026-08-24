@@ -311,6 +311,15 @@
     "tabCites": "Citerer",
     "tabImplementing": "Gennemførelsesretsakter",
     "tabAmendments": "Ændringer",
+    "tabProcedure": "Procedure",
+    "procedureLoading": "Indlæser oplysninger om proceduren…",
+    "procedureEmpty": "Der er ingen oplysninger om den lovgivningsmæssige procedure for denne retsakt.",
+    "procedureLoadError": "Procedureoplysningerne kunne ikke indlæses lige nu.",
+    "procedureView": "Se proceduren på EUR-Lex",
+    "procedureProposal": "Forslag",
+    "procedureEuropeanParliament": "Europa-Parlamentet",
+    "procedureCouncil": "Rådet",
+    "procedureFinalAct": "Endelig retsakt",
     "implDelActLabel": "Gennemførelses-/delegeret retsakt",
     "relatedTabsLabel": "Relaterede dokumenter"
   }

@@ -311,6 +311,15 @@
     "tabCites": "Цитира",
     "tabImplementing": "Актове за изпълнение",
     "tabAmendments": "Изменения",
+    "tabProcedure": "Процедура",
+    "procedureLoading": "Зареждане на информацията за процедурата…",
+    "procedureEmpty": "Няма налична информация за законодателната процедура за този акт.",
+    "procedureLoadError": "Информацията за процедурата не може да бъде заредена в момента.",
+    "procedureView": "Преглед на процедурата в EUR-Lex",
+    "procedureProposal": "Предложение",
+    "procedureEuropeanParliament": "Европейски парламент",
+    "procedureCouncil": "Съвет",
+    "procedureFinalAct": "Окончателен акт",
     "implDelActLabel": "Акт за изпълнение/делегиран акт",
     "relatedTabsLabel": "Свързани документи"
   }

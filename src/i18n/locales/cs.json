@@ -311,6 +311,15 @@
     "tabCites": "Cituje",
     "tabImplementing": "Prováděcí akty",
     "tabAmendments": "Změny",
+    "tabProcedure": "Postup",
+    "procedureLoading": "Načítání informací o legislativním postupu…",
+    "procedureEmpty": "Informace o legislativním postupu pro tento akt nejsou k dispozici.",
+    "procedureLoadError": "Informace o postupu se nyní nepodařilo načíst.",
+    "procedureView": "Zobrazit postup v EUR-Lex",
+    "procedureProposal": "Návrh",
+    "procedureEuropeanParliament": "Evropský parlament",
+    "procedureCouncil": "Rada",
+    "procedureFinalAct": "Konečný akt",
     "implDelActLabel": "Prováděcí akt / akt v přenesené pravomoci",
     "relatedTabsLabel": "Související dokumenty"
   }

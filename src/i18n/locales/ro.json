@@ -311,6 +311,15 @@
     "tabCites": "Citează",
     "tabImplementing": "Acte de punere în aplicare",
     "tabAmendments": "Modificări",
+    "tabProcedure": "Procedură",
+    "procedureLoading": "Se încarcă informațiile despre procedură…",
+    "procedureEmpty": "Nu sunt disponibile informații despre procedura legislativă pentru acest act.",
+    "procedureLoadError": "Informațiile despre procedură nu au putut fi încărcate acum.",
+    "procedureView": "Vezi procedura pe EUR-Lex",
+    "procedureProposal": "Propunere",
+    "procedureEuropeanParliament": "Parlamentul European",
+    "procedureCouncil": "Consiliu",
+    "procedureFinalAct": "Act final",
     "implDelActLabel": "Act de punere în aplicare/delegat",
     "relatedTabsLabel": "Documente conexe"
   }

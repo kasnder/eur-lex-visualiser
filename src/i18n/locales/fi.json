@@ -311,6 +311,15 @@
     "tabCites": "Viittaa",
     "tabImplementing": "Täytäntöönpanosäädökset",
     "tabAmendments": "Muutokset",
+    "tabProcedure": "Menettely",
+    "procedureLoading": "Lainsäädäntömenettelyn tietoja ladataan…",
+    "procedureEmpty": "Tästä säädöksestä ei ole saatavilla lainsäädäntömenettelyä koskevia tietoja.",
+    "procedureLoadError": "Menettelytietoja ei voitu ladata juuri nyt.",
+    "procedureView": "Näytä menettely EUR-Lexissä",
+    "procedureProposal": "Ehdotus",
+    "procedureEuropeanParliament": "Euroopan parlamentti",
+    "procedureCouncil": "Neuvosto",
+    "procedureFinalAct": "Lopullinen säädös",
     "implDelActLabel": "Täytäntöönpano-/delegoitu säädös",
     "relatedTabsLabel": "Liittyvät asiakirjat"
   }
