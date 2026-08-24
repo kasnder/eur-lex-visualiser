@@ -311,6 +311,15 @@
     "tabCites": "Cytuje",
     "tabImplementing": "Akty wykonawcze",
     "tabAmendments": "Zmiany",
+    "tabProcedure": "Procedura",
+    "procedureLoading": "Ładowanie informacji o procedurze…",
+    "procedureEmpty": "Brak informacji o procedurze ustawodawczej dla tego aktu.",
+    "procedureLoadError": "Nie można teraz załadować informacji o procedurze.",
+    "procedureView": "Zobacz procedurę w EUR-Lex",
+    "procedureProposal": "Wniosek",
+    "procedureEuropeanParliament": "Parlament Europejski",
+    "procedureCouncil": "Rada",
+    "procedureFinalAct": "Akt końcowy",
     "implDelActLabel": "Akt wykonawczy/delegowany",
     "relatedTabsLabel": "Powiązane dokumenty"
   }

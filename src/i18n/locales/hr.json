@@ -311,6 +311,15 @@
     "tabCites": "Citira",
     "tabImplementing": "Provedbeni akti",
     "tabAmendments": "Izmjene",
+    "tabProcedure": "Postupak",
+    "procedureLoading": "Učitavanje informacija o postupku…",
+    "procedureEmpty": "Informacije o zakonodavnom postupku za ovaj akt nisu dostupne.",
+    "procedureLoadError": "Informacije o postupku trenutačno se ne mogu učitati.",
+    "procedureView": "Pogledaj postupak na EUR-Lexu",
+    "procedureProposal": "Prijedlog",
+    "procedureEuropeanParliament": "Europski parlament",
+    "procedureCouncil": "Vijeće",
+    "procedureFinalAct": "Završni akt",
     "implDelActLabel": "Provedbeni/delegirani akt",
     "relatedTabsLabel": "Povezani dokumenti"
   }

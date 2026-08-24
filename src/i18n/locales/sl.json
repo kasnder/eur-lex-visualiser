@@ -311,6 +311,15 @@
     "tabCites": "Navaja",
     "tabImplementing": "Izvedbeni akti",
     "tabAmendments": "Spremembe",
+    "tabProcedure": "Postopek",
+    "procedureLoading": "Nalaganje informacij o postopku…",
+    "procedureEmpty": "Informacije o zakonodajnem postopku za ta akt niso na voljo.",
+    "procedureLoadError": "Informacij o postopku trenutno ni mogoče naložiti.",
+    "procedureView": "Prikaži postopek na EUR-Lexu",
+    "procedureProposal": "Predlog",
+    "procedureEuropeanParliament": "Evropski parlament",
+    "procedureCouncil": "Svet",
+    "procedureFinalAct": "Končni akt",
     "implDelActLabel": "Izvedbeni/delegirani akt",
     "relatedTabsLabel": "Povezani dokumenti"
   }

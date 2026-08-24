@@ -967,6 +967,14 @@ export async function fetchLawMetadata(celex) {
   }));
 }
 
+export async function fetchLegislativeProcedure(celex) {
+  return getInFlightRequest(`procedure:${celex}`, () => fetchJsonWithCache({
+    cacheKey: `${celex}_procedure`,
+    url: `${API_BASE}/api/laws/${encodeURIComponent(celex)}/procedure`,
+    errorLabel: "Legislative procedure fetch failed",
+  }));
+}
+
 export async function fetchCaseLaw(celex) {
   return getInFlightRequest(`case-law:${celex}`, () => fetchJsonWithCache({
     cacheKey: `${celex}_case_law`,

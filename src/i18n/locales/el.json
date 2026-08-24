@@ -311,6 +311,15 @@
     "tabCites": "Παραπέμπει σε",
     "tabImplementing": "Εκτελεστικές πράξεις",
     "tabAmendments": "Τροποποιήσεις",
+    "tabProcedure": "Διαδικασία",
+    "procedureLoading": "Φόρτωση πληροφοριών διαδικασίας…",
+    "procedureEmpty": "Δεν υπάρχουν διαθέσιμες πληροφορίες νομοθετικής διαδικασίας για την πράξη αυτή.",
+    "procedureLoadError": "Οι πληροφορίες διαδικασίας δεν ήταν δυνατό να φορτωθούν τώρα.",
+    "procedureView": "Προβολή της διαδικασίας στο EUR-Lex",
+    "procedureProposal": "Πρόταση",
+    "procedureEuropeanParliament": "Ευρωπαϊκό Κοινοβούλιο",
+    "procedureCouncil": "Συμβούλιο",
+    "procedureFinalAct": "Τελική πράξη",
     "implDelActLabel": "Εκτελεστική/κατ' εξουσιοδότηση πράξη",
     "relatedTabsLabel": "Σχετικά έγγραφα"
   }

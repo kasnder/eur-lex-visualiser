@@ -1,5 +1,11 @@
 import { useState, useEffect } from "react";
-import { fetchLawMetadata, fetchAmendments, fetchImplementingActs, fetchLawCitedBy } from "../utils/formexApi.js";
+import {
+  fetchLawMetadata,
+  fetchAmendments,
+  fetchImplementingActs,
+  fetchLawCitedBy,
+  fetchLegislativeProcedure,
+} from "../utils/formexApi.js";
 import { earliestEntryIntoForce, todayIso } from "../utils/lawStatus.js";
 
 // Cellar's sentinel for "open-ended" (still in force).
@@ -7,7 +13,8 @@ const IN_FORCE_SENTINEL = "9999-12-31";
 
 /**
  * Single, error-tolerant fetch of a law's EU metadata, amendment history,
- * implementing/delegated acts and reverse citations, keyed by CELEX. Shared by
+ * implementing/delegated acts, legislative procedure and reverse citations,
+ * keyed by CELEX. Shared by
  * the overview header (status pill + dates) and the metadata cards so a law is
  * only fetched once.
  *
@@ -23,6 +30,9 @@ export function useLawMetadata(celex) {
   const [implementingLoaded, setImplementingLoaded] = useState(false);
   const [citedBy, setCitedBy] = useState(null);
   const [citedByLoaded, setCitedByLoaded] = useState(false);
+  const [procedure, setProcedure] = useState(null);
+  const [procedureLoaded, setProcedureLoaded] = useState(false);
+  const [procedureError, setProcedureError] = useState(false);
 
   useEffect(() => {
     setMetadata(null);
@@ -33,6 +43,9 @@ export function useLawMetadata(celex) {
     setImplementingLoaded(false);
     setCitedBy(null);
     setCitedByLoaded(false);
+    setProcedure(null);
+    setProcedureLoaded(false);
+    setProcedureError(false);
     if (!celex) return;
 
     let cancelled = false;
@@ -51,6 +64,21 @@ export function useLawMetadata(celex) {
       .then((result) => { if (!cancelled) setImplementing(result.acts || []); })
       .catch(() => { if (!cancelled) setImplementing([]); })
       .finally(() => { if (!cancelled) setImplementingLoaded(true); });
+
+    fetchLegislativeProcedure(celex)
+      .then((result) => {
+        if (!cancelled) {
+          setProcedure(result);
+          setProcedureError(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProcedure(null);
+          setProcedureError(true);
+        }
+      })
+      .finally(() => { if (!cancelled) setProcedureLoaded(true); });
 
     // Reverse citations stay null (not empty) on failure so the overview can
     // hide the card entirely when the citation graph is unavailable.
@@ -95,6 +123,9 @@ export function useLawMetadata(celex) {
     amendmentsLoaded,
     implementing,
     implementingLoaded,
+    procedure,
+    procedureLoaded,
+    procedureError,
     citedBy,
     citedByLoaded,
     status,

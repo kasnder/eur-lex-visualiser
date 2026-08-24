@@ -311,6 +311,15 @@
     "tabCites": "Hivatkozik",
     "tabImplementing": "Végrehajtási jogi aktusok",
     "tabAmendments": "Módosítások",
+    "tabProcedure": "Eljárás",
+    "procedureLoading": "Az eljárási információk betöltése…",
+    "procedureEmpty": "Ehhez a jogi aktushoz nem áll rendelkezésre jogalkotási eljárási információ.",
+    "procedureLoadError": "Az eljárási információk jelenleg nem tölthetők be.",
+    "procedureView": "Eljárás megtekintése az EUR-Lexen",
+    "procedureProposal": "Javaslat",
+    "procedureEuropeanParliament": "Európai Parlament",
+    "procedureCouncil": "Tanács",
+    "procedureFinalAct": "Végleges jogi aktus",
     "implDelActLabel": "Végrehajtási/felhatalmazáson alapuló jogi aktus",
     "relatedTabsLabel": "Kapcsolódó dokumentumok"
   }

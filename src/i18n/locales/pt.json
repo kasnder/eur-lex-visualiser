@@ -311,6 +311,15 @@
     "tabCites": "Cita",
     "tabImplementing": "Atos de execução",
     "tabAmendments": "Alterações",
+    "tabProcedure": "Procedimento",
+    "procedureLoading": "A carregar informações sobre o procedimento…",
+    "procedureEmpty": "Não existem informações disponíveis sobre o procedimento legislativo deste ato.",
+    "procedureLoadError": "Não foi possível carregar as informações sobre o procedimento.",
+    "procedureView": "Ver o procedimento no EUR-Lex",
+    "procedureProposal": "Proposta",
+    "procedureEuropeanParliament": "Parlamento Europeu",
+    "procedureCouncil": "Conselho",
+    "procedureFinalAct": "Ato final",
     "implDelActLabel": "Ato de execução/delegado",
     "relatedTabsLabel": "Documentos relacionados"
   }
